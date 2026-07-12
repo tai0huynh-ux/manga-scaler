@@ -44,6 +44,7 @@ class UpscaleResponse(BaseModel):
     """Result returned after the image is cached and ready for display."""
 
     image_url: HttpUrl = Field(alias="imageUrl", description="Image URL to use in the page.")
+    original_image_url: HttpUrl | None = Field(default=None, alias="originalImageUrl")
     cache_key: str = Field(alias="cacheKey", description="SHA256 digest for cached image bytes.")
     cache_hit: bool = Field(alias="cacheHit", description="Whether the file was already cached.")
     content_type: str = Field(alias="contentType", description="Downloaded image MIME type.")
@@ -62,6 +63,7 @@ class UpscaleResponse(BaseModel):
     timings: dict[str, float] = Field(default_factory=dict, description="Stage timings in milliseconds.")
     memory: dict[str, int] = Field(default_factory=dict, description="Memory usage in bytes.")
     queue: dict[str, int] = Field(default_factory=dict, description="Queue state snapshot.")
+    quality: dict[str, float] = Field(default_factory=dict, description="Objective comparison with bicubic upscale.")
 
     @field_serializer("image_url")
     def serialize_image_url(self, value: HttpUrl) -> str:

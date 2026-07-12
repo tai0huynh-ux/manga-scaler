@@ -10,6 +10,9 @@ class PopupController {
     this.enhanceLevel = this.document.getElementById("enhanceLevel");
     this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
     this.modeDescription = this.document.getElementById("modeDescription");
+    this.previewOriginal = this.document.getElementById("previewOriginal");
+    this.qualitySummary = this.document.getElementById("qualitySummary");
+    this.qualityDetails = this.document.getElementById("qualityDetails");
     this.processedCount = this.document.getElementById("processedCount");
     this.cacheHitCount = this.document.getElementById("cacheHitCount");
     this.errorCount = this.document.getElementById("errorCount");
@@ -25,6 +28,9 @@ class PopupController {
     this.modeSelect.addEventListener("change", () => this.saveEnhancementSettings());
     this.enhanceLevel.addEventListener("input", () => this.renderEnhancementSettings());
     this.enhanceLevel.addEventListener("change", () => this.saveEnhancementSettings());
+    this.previewOriginal.addEventListener("change", () => {
+      chrome.runtime.sendMessage({ type: "SET_PREVIEW_ORIGINAL", enabled: this.previewOriginal.checked });
+    });
     this.refresh();
   }
 
@@ -60,6 +66,11 @@ class PopupController {
     this.waitingCount.textContent = String(stats.waiting ?? 0);
     this.averageLatency.textContent = `${stats.averageLatencyMs ?? 0} ms`;
     this.cacheHitRatio.textContent = `${Math.round((stats.cacheHitRatio ?? 0) * 100)}%`;
+    const quality = stats.lastQuality;
+    if (quality) {
+      this.qualitySummary.textContent = `${quality.changedPixelPercent}% pixels changed`;
+      this.qualityDetails.textContent = `Sharpness ×${quality.sharpnessGain} · ${stats.lastDetectedMode || "unknown"} mode`;
+    }
   }
 
   async setEnabled(enabled) {

@@ -95,6 +95,17 @@ class Renderer {
     }
   }
 
+  setPreviewOriginal(enabled) {
+    document.querySelectorAll("img[data-ai-manga-original-src]").forEach((image) => {
+      const enhancedUrl = this.activeObjectUrls.get(image);
+      if (enabled) {
+        image.src = image.dataset.aiMangaOriginalSrc;
+      } else if (enhancedUrl) {
+        image.src = enhancedUrl;
+      }
+    });
+  }
+
   preserveResponsiveAttributes(image, metadata) {
     image.dataset.aiMangaOriginalSrc = metadata.src || "";
     image.dataset.aiMangaOriginalSrcset = metadata.srcset || "";
@@ -437,6 +448,10 @@ chrome.runtime.onMessage.addListener((message) => {
 
   if (message.type === "UPSCALE_FAILED") {
     viewportProvider.fail(message.imageId);
+  }
+
+  if (message.type === "SET_PREVIEW_ORIGINAL") {
+    renderer.setPreviewOriginal(Boolean(message.enabled));
   }
 });
 

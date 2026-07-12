@@ -146,6 +146,38 @@ select {
   line-height: 1.45;
 }
 
+.preview-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: #344454;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.quality-panel {
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #eaf5f8;
+}
+
+.quality-panel strong,
+.quality-panel small {
+  display: block;
+}
+
+.quality-panel strong {
+  color: #174f67;
+  font-size: 14px;
+}
+
+.quality-panel small {
+  margin-top: 4px;
+  color: #4b6673;
+}
+
 .stat {
   min-height: 74px;
   padding: 12px;

@@ -9,6 +9,8 @@ const DEFAULT_STATE = Object.freeze({
   cacheHits: 0,
   cacheMisses: 0,
   totalLatencyMs: 0,
+  lastQuality: null,
+  lastDetectedMode: null,
 });
 
 /**
@@ -24,13 +26,15 @@ class StatisticsTracker {
     await this.storageArea.set({ ...DEFAULT_STATE, ...current });
   }
 
-  async recordSuccess({ latencyMs, cacheHit }) {
+  async recordSuccess({ latencyMs, cacheHit, quality = null, detectedMode = null }) {
     const current = await this.storageArea.get(DEFAULT_STATE);
     await this.storageArea.set({
       processed: Number(current.processed ?? 0) + 1,
       cacheHits: Number(current.cacheHits ?? 0) + (cacheHit ? 1 : 0),
       cacheMisses: Number(current.cacheMisses ?? 0) + (cacheHit ? 0 : 1),
       totalLatencyMs: Number(current.totalLatencyMs ?? 0) + latencyMs,
+      lastQuality: quality || current.lastQuality || null,
+      lastDetectedMode: detectedMode || current.lastDetectedMode || null,
     });
   }
 
@@ -61,6 +65,8 @@ class StatisticsTracker {
       waiting: queueSnapshot.waiting,
       averageLatencyMs: processed > 0 ? Math.round(Number(current.totalLatencyMs ?? 0) / processed) : 0,
       cacheHitRatio: cacheTotal > 0 ? cacheHits / cacheTotal : 0,
+      lastQuality: current.lastQuality || null,
+      lastDetectedMode: current.lastDetectedMode || null,
     };
   }
 }
@@ -123,6 +129,7 @@ class IndexedDBCacheProvider {
       contentType: record.contentType,
       cacheKey: record.cacheKey,
       detectedMode: record.detectedMode,
+      quality: record.quality,
     };
   }
 
@@ -135,6 +142,7 @@ class IndexedDBCacheProvider {
       contentType: value.contentType,
       cacheKey: value.cacheKey,
       detectedMode: value.detectedMode,
+      quality: value.quality,
       byteLength: value.buffer.byteLength,
       lastAccessedAt: Date.now(),
     });
@@ -289,6 +297,7 @@ class BackendUpscaleProvider {
         cacheKey: metadata.cacheKey,
         backendCacheHit: Boolean(metadata.cacheHit),
         detectedMode: metadata.detectedMode,
+        quality: metadata.quality,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -468,6 +477,8 @@ class QueueScheduler {
         await this.statisticsTracker.recordSuccess({
           latencyMs: performance.now() - startedAt,
           cacheHit: true,
+          quality: cached.quality,
+          detectedMode: cached.detectedMode,
         });
         this.sendComplete(job, cached, true);
         return;
@@ -490,6 +501,8 @@ class QueueScheduler {
       await this.statisticsTracker.recordSuccess({
         latencyMs: performance.now() - startedAt,
         cacheHit: false,
+        quality: result.quality,
+        detectedMode: result.detectedMode,
       });
       this.sendComplete(job, result, false);
     } catch (error) {
@@ -619,6 +632,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const mode = AI_MANGA_UPSCALER_CONFIG.enhancement.modes.includes(message.mode) ? message.mode : "auto";
     const enhanceLevel = Math.min(Math.max(Number(message.enhanceLevel) || 0, 0), 1);
     chrome.storage.local.set({ mode, enhanceLevel }).then(() => sendResponse({ mode, enhanceLevel }));
+    return true;
+  }
+
+  if (message.type === "SET_PREVIEW_ORIGINAL") {
+    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: "SET_PREVIEW_ORIGINAL",
+          enabled: Boolean(message.enabled),
+        });
+      }
+      sendResponse({ enabled: Boolean(message.enabled) });
+    });
     return true;
   }
 

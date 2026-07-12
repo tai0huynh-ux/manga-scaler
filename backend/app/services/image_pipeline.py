@@ -46,6 +46,15 @@ class ImagePipeline:
         """Encode an RGB image to WebP bytes."""
         return await asyncio.to_thread(self._encode_webp_sync, image)
 
+    async def encode_png(self, image: Image.Image) -> bytes:
+        """Encode a lossless verification copy of the browser input."""
+        return await asyncio.to_thread(self._encode_png_sync, image)
+
+    def _encode_png_sync(self, image: Image.Image) -> bytes:
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return output.getvalue()
+
     async def enhance(self, image: Image.Image, level: float) -> Image.Image:
         """Apply configurable, bounded post-processing at the requested strength."""
         return await asyncio.to_thread(self._enhance_sync, image, level)

@@ -33,6 +33,16 @@
         </div>
         <input id="enhanceLevel" type="range" min="0" max="100" step="5" value="35">
         <p id="modeDescription" class="mode-description"></p>
+        <label class="preview-control">
+          <input id="previewOriginal" type="checkbox">
+          <span>Preview original images</span>
+        </label>
+      </section>
+
+      <section class="quality-panel" aria-label="Last image quality comparison">
+        <span class="stat-label">Last verified result</span>
+        <strong id="qualitySummary">No comparison yet</strong>
+        <small id="qualityDetails"></small>
       </section>
 
       <section class="stats-grid" aria-label="Extension statistics">

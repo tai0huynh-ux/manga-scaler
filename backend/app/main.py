@@ -15,6 +15,7 @@ from app.services.downloader import ImageDownloader
 from app.services.gpu_provider import GpuProviderSelector
 from app.services.image_pipeline import ImagePipeline
 from app.services.image_classifier import ImageTypeClassifier
+from app.services.quality import QualityAnalyzer
 from app.services.model_manager import ModelManager
 from app.services.statistics import AppRuntime
 from app.services.upscaler import UpscalerService
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model_manager=model_manager,
         pipeline=pipeline,
         classifier=classifier,
+        quality_analyzer=QualityAnalyzer(),
     )
     await app.state.upscaler_service.start()
     yield

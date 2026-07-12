@@ -12,6 +12,7 @@ from app.services.image_classifier import ClassificationResult, ImageTypeClassif
 from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
 from app.services.statistics import MemorySampler, StageTimings
+from app.services.quality import QualityAnalyzer
 from app.utils.hashing import sha256_bytes
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class UpscalerService:
         model_manager: ModelManager,
         pipeline: ImagePipeline,
         classifier: ImageTypeClassifier,
+        quality_analyzer: QualityAnalyzer,
     ) -> None:
         self.settings = settings
         self.cache = cache
@@ -35,6 +37,7 @@ class UpscalerService:
         self.model_manager = model_manager
         self.pipeline = pipeline
         self.classifier = classifier
+        self.quality_analyzer = quality_analyzer
         self.memory_sampler = MemorySampler()
         self.queue = InferenceQueue(
             max_size=settings.inference.queue_max_size,
@@ -88,6 +91,8 @@ class UpscalerService:
         decode_started = time.perf_counter()
         image = await self.pipeline.decode(image_content)
         timings.set("decode", decode_started)
+        original_png = await self.pipeline.encode_png(image)
+        original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
 
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
@@ -104,6 +109,7 @@ class UpscalerService:
         final_path = self.settings.cache_dir / f"{output_key}.webp"
         if final_path.exists():
             cached = await self.pipeline.decode(final_path.read_bytes())
+            quality = self.quality_analyzer.analyze(image, cached)
             timings.total_since(total_started)
             return self._response(
                 output=EncodedImage(
@@ -124,6 +130,8 @@ class UpscalerService:
                 classification=classification,
                 tile_size=tile_size,
                 enhance_level=enhance_level,
+                original_path=original_path,
+                quality=quality,
             )
 
         inference_started = time.perf_counter()
@@ -154,6 +162,7 @@ class UpscalerService:
             gpu_time_ms=output.gpu_time_ms,
         )
         output_path, cache_hit = await self.cache.save_named(output_key, output_artifact.content, ".webp")
+        quality = self.quality_analyzer.analyze(image, enhanced_image)
         timings.total_since(total_started)
 
         LOGGER.info(
@@ -180,6 +189,8 @@ class UpscalerService:
             classification=classification,
             tile_size=tile_size,
             enhance_level=enhance_level,
+            original_path=original_path,
+            quality=quality,
         )
 
     def _response(
@@ -196,12 +207,17 @@ class UpscalerService:
         classification: ClassificationResult,
         tile_size: int,
         enhance_level: float,
+        original_path,
+        quality: dict[str, float],
     ) -> UpscaleResponse:
         """Build an API response compatible with the existing extension."""
         filename = self.cache.public_filename(output_path)
         image_url = f"{self.settings.app.public_base_url}/cache/images/{filename}"
+        original_filename = self.cache.public_filename(original_path)
+        original_image_url = f"{self.settings.app.public_base_url}/cache/images/{original_filename}"
         return UpscaleResponse(
             imageUrl=image_url,
+            originalImageUrl=original_image_url,
             cacheKey=cache_key,
             cacheHit=cache_hit,
             contentType=output.content_type,
@@ -220,6 +236,7 @@ class UpscalerService:
             timings=timings,
             memory=self.memory_sampler.snapshot(),
             queue=self.queue.snapshot(),
+            quality=quality,
         )
 
     def _resolve_mode(self, requested_mode: str, image) -> ClassificationResult:
