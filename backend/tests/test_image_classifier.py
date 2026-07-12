@@ -14,6 +14,7 @@ def classifier() -> ImageTypeClassifier:
             grayscaleThreshold=0.055,
             mangaGrayscaleRatio=0.9,
             artworkPaletteRatio=0.12,
+            artworkTallAspectRatio=1.4,
             artworkSaturation=0.2,
         )
     )
@@ -41,3 +42,11 @@ def test_complex_natural_color_distribution_is_photo() -> None:
     result = classifier().classify(Image.fromarray(pixels))
     assert result.mode == "photo"
     assert result.metrics["paletteRatio"] > 0.12
+
+
+def test_tall_colored_webtoon_is_artwork() -> None:
+    rng = np.random.default_rng(7)
+    pixels = rng.integers(20, 236, (256, 96, 3), dtype=np.uint8)
+    result = classifier().classify(Image.fromarray(pixels))
+    assert result.mode == "artwork"
+    assert result.metrics["aspectRatio"] >= 1.4

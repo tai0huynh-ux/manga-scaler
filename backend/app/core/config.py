@@ -113,6 +113,7 @@ class AutoDetectionConfig(BaseModel):
     grayscale_threshold: float = Field(alias="grayscaleThreshold", ge=0.0, le=1.0)
     manga_grayscale_ratio: float = Field(alias="mangaGrayscaleRatio", ge=0.0, le=1.0)
     artwork_palette_ratio: float = Field(alias="artworkPaletteRatio", ge=0.0, le=1.0)
+    artwork_tall_aspect_ratio: float = Field(alias="artworkTallAspectRatio", ge=1.0, le=10.0)
     artwork_saturation: float = Field(alias="artworkSaturation", ge=0.0, le=1.0)
 
 

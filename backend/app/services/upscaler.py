@@ -1,5 +1,6 @@
 """AI upscaling orchestration service backed by ONNX Runtime."""
 
+import json
 import logging
 import time
 
@@ -100,8 +101,10 @@ class UpscalerService:
         image = await self.pipeline.decode(image_content)
         self._ensure_active(job)
         timings.set("decode", decode_started)
-        original_png = await self.pipeline.encode_png(image)
-        original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
+        original_path = self.settings.cache_dir / f"{source_key}-original.png"
+        if not original_path.exists():
+            original_png = await self.pipeline.encode_png(image)
+            original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
 
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
@@ -117,13 +120,40 @@ class UpscalerService:
         )
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
+        quality_path = self.settings.cache_dir / f"{output_key}-quality.json"
         if final_path.exists():
-            cached = await self.pipeline.decode(final_path.read_bytes())
-            quality = self.quality_analyzer.analyze(image, cached)
+            cached_bytes = final_path.read_bytes()
+            cached = await self.pipeline.decode(cached_bytes)
+            quality_loaded = False
+            if quality_path.exists():
+                try:
+                    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+                    quality_loaded = True
+                except (OSError, json.JSONDecodeError):
+                    quality = self.quality_analyzer.analyze(image, cached)
+            else:
+                quality = self.quality_analyzer.analyze(image, cached)
+            if not quality_loaded:
+                await self.cache.save_named(
+                    f"{output_key}-quality",
+                    json.dumps(quality, separators=(",", ":")).encode("utf-8"),
+                    ".json",
+                )
             timings.total_since(total_started)
+            LOGGER.info(
+                "Upscaled image",
+                extra={
+                    "_image_url": job.image_url,
+                    "_model": model.name,
+                    "_provider": model.provider,
+                    "_cache_key": output_key,
+                    "_cache_hit": True,
+                    "_timings": timings.values,
+                },
+            )
             return self._response(
                 output=EncodedImage(
-                    content=final_path.read_bytes(),
+                    content=cached_bytes,
                     content_type="image/webp",
                     width=cached.width,
                     height=cached.height,
@@ -177,6 +207,11 @@ class UpscalerService:
         )
         output_path, cache_hit = await self.cache.save_named(output_key, output_artifact.content, ".webp")
         quality = self.quality_analyzer.analyze(image, enhanced_image)
+        await self.cache.save_named(
+            f"{output_key}-quality",
+            json.dumps(quality, separators=(",", ":")).encode("utf-8"),
+            ".json",
+        )
         timings.total_since(total_started)
 
         LOGGER.info(

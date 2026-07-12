@@ -22,6 +22,7 @@ class ImageTypeClassifier:
         self.config = config
 
     def classify(self, image: Image.Image) -> ClassificationResult:
+        aspect_ratio = max(image.height / max(image.width, 1), image.width / max(image.height, 1))
         sample = image.copy()
         sample.thumbnail((self.config.sample_size, self.config.sample_size), Image.Resampling.BILINEAR)
         pixels = np.asarray(sample.convert("RGB"), dtype=np.float32) / 255.0
@@ -42,12 +43,13 @@ class ImageTypeClassifier:
             "saturation": round(saturation, 4),
             "edgeDensity": round(edge_density, 4),
             "paletteRatio": round(palette_ratio, 4),
+            "aspectRatio": round(aspect_ratio, 4),
         }
 
         if grayscale_ratio >= self.config.manga_grayscale_ratio:
             confidence = 0.5 + 0.5 * grayscale_ratio
             return ClassificationResult("manga", round(confidence, 4), metrics)
-        if palette_ratio <= self.config.artwork_palette_ratio:
+        if palette_ratio <= self.config.artwork_palette_ratio or aspect_ratio >= self.config.artwork_tall_aspect_ratio:
             palette_score = max(0.0, 1 - palette_ratio / max(self.config.artwork_palette_ratio, 0.001))
             saturation_score = min(saturation / max(self.config.artwork_saturation, 0.001), 1.0)
             return ClassificationResult("artwork", round(0.5 + 0.25 * max(palette_score, saturation_score), 4), metrics)

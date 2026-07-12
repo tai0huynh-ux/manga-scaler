@@ -623,7 +623,8 @@ class QueueScheduler {
   async process(job) {
     const startedAt = performance.now();
     try {
-      const cacheIdentity = `${job.imageUrl}|${job.mode}|${job.enhanceLevel}`;
+      const cacheUrl = this.normalizeCacheUrl(job.imageUrl);
+      const cacheIdentity = `${cacheUrl}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (job.abortController.signal.aborted) {
         return;
@@ -720,6 +721,28 @@ class QueueScheduler {
         imageId: job.imageId,
         message: error instanceof Error ? error.message : "Unknown upscale error",
       });
+    }
+  }
+
+  normalizeCacheUrl(imageUrl) {
+    try {
+      const parsed = new URL(imageUrl);
+      // CDN signatures and cache-busting query values frequently change while
+      // still identifying the same browser-visible image.
+      const volatileParameters = new Set([
+        "_", "cb", "cache", "cachebust", "cachebuster", "expires", "exp",
+        "key", "policy", "signature", "sig", "token", "ts", "timestamp", "v",
+      ]);
+      for (const name of [...parsed.searchParams.keys()]) {
+        if (volatileParameters.has(name.toLowerCase()) || name.toLowerCase().startsWith("x-amz-")) {
+          parsed.searchParams.delete(name);
+        }
+      }
+      parsed.hash = "";
+      parsed.searchParams.sort();
+      return parsed.toString();
+    } catch {
+      return String(imageUrl).split("#", 1)[0];
     }
   }
 

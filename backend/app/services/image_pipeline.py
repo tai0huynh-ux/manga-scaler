@@ -73,11 +73,18 @@ class ImagePipeline:
         level = min(max(level, 0.0), 1.0)
         if level == 0:
             return image
-        result = ImageEnhance.Sharpness(image).enhance(1 + (self.enhancement.sharpness - 1) * level)
-        result = ImageEnhance.Contrast(result).enhance(1 + (self.enhancement.contrast - 1) * level)
-        result = ImageEnhance.Color(result).enhance(1 + (self.enhancement.color - 1) * level)
+        result = image
+        sharpness = 1 + (self.enhancement.sharpness - 1) * level
+        contrast = 1 + (self.enhancement.contrast - 1) * level
+        color = 1 + (self.enhancement.color - 1) * level
+        if abs(sharpness - 1) >= 0.01:
+            result = ImageEnhance.Sharpness(result).enhance(sharpness)
+        if abs(contrast - 1) >= 0.01:
+            result = ImageEnhance.Contrast(result).enhance(contrast)
+        if abs(color - 1) >= 0.01:
+            result = ImageEnhance.Color(result).enhance(color)
         denoise_mix = self.enhancement.denoise * level
-        if denoise_mix > 0:
+        if denoise_mix >= 0.04:
             result = Image.blend(result, result.filter(ImageFilter.MedianFilter(size=3)), denoise_mix)
         return result
 

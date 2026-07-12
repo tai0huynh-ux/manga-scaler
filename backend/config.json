@@ -75,15 +75,16 @@
     "sampleSize": 256,
     "grayscaleThreshold": 0.055,
     "mangaGrayscaleRatio": 0.9,
-    "artworkPaletteRatio": 0.12,
+    "artworkPaletteRatio": 0.16,
+    "artworkTallAspectRatio": 1.4,
     "artworkSaturation": 0.2
   },
   "encoding": {
     "format": "WEBP",
     "maxOutputDimension": 16383,
-    "quality": 95,
+    "quality": 90,
     "lossless": false,
-    "method": 6
+    "method": 4
   },
   "logging": {
     "level": "INFO",
