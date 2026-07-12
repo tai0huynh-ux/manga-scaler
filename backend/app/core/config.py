@@ -37,6 +37,9 @@ class ModelConfig(BaseModel):
 
     file: str
     scale: int
+    url: str | None = None
+    sha256: str | None = None
+    auto_download: bool = Field(default=False, alias="autoDownload")
 
 
 class InferenceConfig(BaseModel):
@@ -84,6 +87,16 @@ class EncodingConfig(BaseModel):
     method: int
 
 
+class EnhancementConfig(BaseModel):
+    """Adjustable post-processing applied after neural inference."""
+
+    default_level: float = Field(alias="defaultLevel", ge=0.0, le=1.0)
+    sharpness: float = Field(ge=0.0, le=3.0)
+    contrast: float = Field(ge=0.0, le=3.0)
+    color: float = Field(ge=0.0, le=3.0)
+    denoise: float = Field(ge=0.0, le=1.0)
+
+
 class LoggingConfig(BaseModel):
     """Structured rotating log settings."""
 
@@ -100,6 +113,7 @@ class Settings(BaseModel):
     paths: PathsConfig
     download: DownloadConfig
     inference: InferenceConfig
+    enhancement: EnhancementConfig
     encoding: EncodingConfig
     logging: LoggingConfig
     root_dir: Path = Field(exclude=True)

@@ -72,7 +72,22 @@ Invoke-RestMethod `
 
 The health response includes the active provider/model, GPU diagnostics, queue and cache state, and uptime. The `/upscale` response retains its Phase 1 fields and adds model, provider, scale, output dimensions, per-stage timings, memory, and queue statistics.
 
-Place compatible NCHW RGB float32 ONNX models in `backend/models/` before sending inference requests. Required configured filenames are `anime_x2.onnx`, `anime_x4.onnx`, and `general_x4.onnx`. The service starts without model files so `/health` remains available, while inference returns HTTP 503 until the requested model is installed.
+Compatible models use float32 RGB NCHW input and output. Configured filenames are `anime_x2.onnx`, `anime_x4.onnx`, and `general_x4.onnx`; only the selected model must be installed. The service starts without model files so `/health` remains available, while an unavailable requested model returns HTTP 503.
+
+`anime_x4` is configured for automatic download on first use. The download is written atomically and accepted only when its SHA-256 matches `config.json`. Other model entries are optional local slots and return HTTP 503 until you provide compatible ONNX files.
+
+Control post-processing per request with `enhanceLevel` from `0.0` to `1.0`. `0` preserves the neural output, the default is `0.35`, and `1` applies the full sharpness, contrast, color, and denoise values from the `enhancement` section of `backend/config.json`:
+
+```json
+{
+  "imageUrl": "https://example.com/page.jpg",
+  "model": "anime_x4",
+  "tileSize": 256,
+  "enhanceLevel": 0.35
+}
+```
+
+For manga line art, start around `0.2–0.4`. Higher sharpness can make screentones and JPEG artifacts harsher; increase `denoise` cautiously when the source is compressed.
 
 ## Configuration
 

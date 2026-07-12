@@ -1,10 +1,14 @@
 """Singleton ONNX Runtime model manager with hot reload support."""
 
 import logging
+import hashlib
+import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
+from urllib.request import Request, urlopen
+from uuid import uuid4
 
 import numpy as np
 import onnxruntime as ort
@@ -27,6 +31,7 @@ class LoadedModel:
     output_name: str
     mtime: float
     provider: str
+    run_lock: threading.Lock
 
 
 class ModelManager:
@@ -108,12 +113,15 @@ class ModelManager:
         descriptor = self.config.models[model_name]
         path = self._model_path(descriptor)
         if not path.exists():
-            raise FileNotFoundError(f"Model file not found: {path}")
+            self._download_model(descriptor, path)
+        self._verify_checksum(descriptor, path)
 
         provider = self.provider_selector.current().provider
         session_options = ort.SessionOptions()
-        session_options.enable_mem_pattern = True
+        is_directml = provider == "DmlExecutionProvider"
+        session_options.enable_mem_pattern = not is_directml
         session_options.enable_cpu_mem_arena = True
+        session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         session = ort.InferenceSession(
@@ -132,6 +140,7 @@ class ModelManager:
             output_name=output_name,
             mtime=path.stat().st_mtime,
             provider=provider,
+            run_lock=threading.Lock(),
         )
         self.loaded[model_name] = loaded
         LOGGER.info("Loaded ONNX model", extra={"_model": model_name, "_path": str(path), "_provider": provider})
@@ -152,7 +161,8 @@ class ModelManager:
             for index, dimension in enumerate(input_shape)
         )
         sample = np.zeros(shape, dtype=np.float32)
-        model.session.run([model.output_name], {model.input_name: sample})
+        with model.run_lock:
+            model.session.run([model.output_name], {model.input_name: sample})
         LOGGER.info("Completed model warmup", extra={"_model": model.name})
 
     def status(self) -> dict[str, object]:
@@ -161,12 +171,43 @@ class ModelManager:
             "activeModel": self.active_model_name,
             "loadedModels": sorted(self.loaded),
             "availableModels": sorted(self.config.models),
+            "installedModels": sorted(
+                name for name, descriptor in self.config.models.items() if self._model_path(descriptor).exists()
+            ),
             "provider": self.provider_selector.current().provider,
         }
 
     def _model_path(self, descriptor: ModelConfig) -> Path:
         """Resolve a model file path from a descriptor."""
         return (self.models_dir / descriptor.file).resolve()
+
+    def _download_model(self, descriptor: ModelConfig, path: Path) -> None:
+        """Download an explicitly configured model using an atomic publish."""
+        if not descriptor.auto_download or not descriptor.url:
+            raise FileNotFoundError(f"Model file not found and auto-download is unavailable: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.download")
+        LOGGER.info("Downloading ONNX model", extra={"_url": descriptor.url, "_path": str(path)})
+        try:
+            request = Request(descriptor.url, headers={"User-Agent": "AI-Manga-Upscaler/0.2"})
+            with urlopen(request, timeout=120) as response, temporary.open("wb") as output:
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+            self._verify_checksum(descriptor, temporary)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _verify_checksum(self, descriptor: ModelConfig, path: Path) -> None:
+        """Reject incomplete or replaced model artifacts."""
+        if not descriptor.sha256:
+            return
+        digest = hashlib.sha256()
+        with path.open("rb") as model_file:
+            while chunk := model_file.read(1024 * 1024):
+                digest.update(chunk)
+        if digest.hexdigest().lower() != descriptor.sha256.lower():
+            raise ValueError(f"Model checksum mismatch: {path}")
 
     def _is_stale(self, model: LoadedModel) -> bool:
         """Return whether the model file has changed since loading."""

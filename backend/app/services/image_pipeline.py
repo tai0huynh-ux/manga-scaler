@@ -6,9 +6,9 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
-from app.core.config import EncodingConfig
+from app.core.config import EncodingConfig, EnhancementConfig
 from app.services.model_manager import LoadedModel
 
 
@@ -34,8 +34,9 @@ class InferenceImage:
 class ImagePipeline:
     """Decodes, tiles, runs inference, merges tiles, and encodes WebP."""
 
-    def __init__(self, encoding: EncodingConfig) -> None:
+    def __init__(self, encoding: EncodingConfig, enhancement: EnhancementConfig) -> None:
         self.encoding = encoding
+        self.enhancement = enhancement
 
     async def decode(self, image_bytes: bytes) -> Image.Image:
         """Decode image bytes and convert to RGB."""
@@ -44,6 +45,22 @@ class ImagePipeline:
     async def encode_webp(self, image: Image.Image) -> bytes:
         """Encode an RGB image to WebP bytes."""
         return await asyncio.to_thread(self._encode_webp_sync, image)
+
+    async def enhance(self, image: Image.Image, level: float) -> Image.Image:
+        """Apply configurable, bounded post-processing at the requested strength."""
+        return await asyncio.to_thread(self._enhance_sync, image, level)
+
+    def _enhance_sync(self, image: Image.Image, level: float) -> Image.Image:
+        level = min(max(level, 0.0), 1.0)
+        if level == 0:
+            return image
+        result = ImageEnhance.Sharpness(image).enhance(1 + (self.enhancement.sharpness - 1) * level)
+        result = ImageEnhance.Contrast(result).enhance(1 + (self.enhancement.contrast - 1) * level)
+        result = ImageEnhance.Color(result).enhance(1 + (self.enhancement.color - 1) * level)
+        denoise_mix = self.enhancement.denoise * level
+        if denoise_mix > 0:
+            result = Image.blend(result, result.filter(ImageFilter.MedianFilter(size=3)), denoise_mix)
+        return result
 
     async def infer_tiled(
         self,
@@ -109,7 +126,8 @@ class ImagePipeline:
             batch = np.transpose(batch, (0, 3, 1, 2)).astype(np.float32)
 
             gpu_started = time.perf_counter()
-            prediction = model.session.run([model.output_name], {model.input_name: batch})[0]
+            with model.run_lock:
+                prediction = model.session.run([model.output_name], {model.input_name: batch})[0]
             gpu_time_ms += (time.perf_counter() - gpu_started) * 1000
 
             prediction = np.transpose(prediction, (0, 2, 3, 1))

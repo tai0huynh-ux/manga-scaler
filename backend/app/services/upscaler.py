@@ -54,9 +54,10 @@ class UpscalerService:
         image_url: str,
         model_name: str | None = None,
         tile_size: int | None = None,
+        enhance_level: float | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
-        result = await self.queue.submit(str(image_url), model_name, tile_size)
+        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level)
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
         return result
@@ -73,7 +74,9 @@ class UpscalerService:
         source_key = sha256_bytes(downloaded.content)
         model = self.model_manager.get_model(job.model_name)
         tile_size = self._resolve_tile_size(job.tile_size)
-        output_key = f"{source_key}-{model.name}-x{model.scale}-t{tile_size}-webp"
+        enhance_level = self.settings.enhancement.default_level if job.enhance_level is None else job.enhance_level
+        enhancement_key = round(enhance_level, 3)
+        output_key = f"{source_key}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}-webp"
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
         if final_path.exists():
@@ -111,14 +114,18 @@ class UpscalerService:
         timings.set("inference", inference_started)
         timings.values["gpu"] = output.gpu_time_ms
 
+        enhance_started = time.perf_counter()
+        enhanced_image = await self.pipeline.enhance(output.image, enhance_level)
+        timings.set("enhance", enhance_started)
+
         encode_started = time.perf_counter()
-        encoded = await self.pipeline.encode_webp(output.image)
+        encoded = await self.pipeline.encode_webp(enhanced_image)
         timings.set("encode", encode_started)
         output_artifact = EncodedImage(
             content=encoded,
             content_type="image/webp",
-            width=output.image.width,
-            height=output.image.height,
+            width=enhanced_image.width,
+            height=enhanced_image.height,
             gpu_time_ms=output.gpu_time_ms,
         )
         output_path, cache_hit = await self.cache.save_named(output_key, output_artifact.content, ".webp")

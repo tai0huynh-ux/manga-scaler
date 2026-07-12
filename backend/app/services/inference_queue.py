@@ -15,6 +15,7 @@ class InferenceJob:
     image_url: str
     model_name: str | None
     tile_size: int | None
+    enhance_level: float | None
     future: asyncio.Future
     created_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
 
@@ -56,11 +57,19 @@ class InferenceQueue:
             worker.cancel()
         await asyncio.gather(*self.workers, return_exceptions=True)
 
-    async def submit(self, image_url: str, model_name: str | None, tile_size: int | None) -> object:
+    async def submit(
+        self, image_url: str, model_name: str | None, tile_size: int | None, enhance_level: float | None = None
+    ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        job = InferenceJob(image_url=image_url, model_name=model_name, tile_size=tile_size, future=future)
+        job = InferenceJob(
+            image_url=image_url,
+            model_name=model_name,
+            tile_size=tile_size,
+            enhance_level=enhance_level,
+            future=future,
+        )
         await self.queue.put(job)
         self.accepted += 1
         return await future

@@ -25,6 +25,7 @@
     "provider": "auto",
     "runtime": "onnxruntime",
     "defaultModel": "anime_x4",
-    "tileSize": 512
+    "tileSize": 256,
+    "enhanceLevel": 0.35
   }
 }

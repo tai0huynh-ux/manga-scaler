@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         config=settings.inference,
         provider_selector=provider_selector,
     )
-    pipeline = ImagePipeline(settings.encoding)
+    pipeline = ImagePipeline(settings.encoding, settings.enhancement)
 
     app.state.runtime = AppRuntime()
     app.state.settings = settings

@@ -8,3 +8,5 @@ cache/
 dist/
 *.log
 backend/logs/
+backend/models/*.onnx
+backend/models/*.download

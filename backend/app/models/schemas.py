@@ -23,6 +23,13 @@ class UpscaleRequest(BaseModel):
     image_url: HttpUrl = Field(alias="imageUrl", description="Absolute source image URL.")
     model: str | None = Field(default=None, description="Optional model override.")
     tile_size: int | None = Field(default=None, alias="tileSize", description="Optional tile size override.")
+    enhance_level: float | None = Field(
+        default=None,
+        alias="enhanceLevel",
+        ge=0.0,
+        le=1.0,
+        description="Post-processing strength from 0 (off) to 1 (configured maximum).",
+    )
 
 
 class UpscaleResponse(BaseModel):
@@ -60,4 +67,5 @@ class ModelStatusResponse(BaseModel):
     active_model: str = Field(alias="activeModel")
     loaded_models: list[str] = Field(alias="loadedModels")
     available_models: list[str] = Field(alias="availableModels")
+    installed_models: list[str] = Field(alias="installedModels")
     provider: str | None
