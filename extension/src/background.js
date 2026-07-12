@@ -118,6 +118,55 @@ class StatisticsTracker {
   }
 }
 
+class PageImageRegistry {
+  constructor() {
+    this.pages = new Map();
+    this.domainRules = new Map();
+    this.nextDomainRuleId = 100000;
+  }
+
+  page(tabId) {
+    if (!this.pages.has(tabId)) this.pages.set(tabId, new Map());
+    return this.pages.get(tabId);
+  }
+
+  async seen(tabId, image) {
+    const page = this.page(tabId);
+    page.set(image.imageId, { ...page.get(image.imageId), ...image, status: page.get(image.imageId)?.status || "seen" });
+    await this.ensureDomainAccess(image.imageUrl, image.pageUrl);
+  }
+
+  update(tabId, imageId, patch) {
+    const page = this.page(tabId);
+    page.set(imageId, { ...page.get(imageId), imageId, ...patch });
+  }
+
+  list(tabId) {
+    return [...(this.pages.get(tabId)?.values() || [])];
+  }
+
+  remove(tabId) {
+    this.pages.delete(tabId);
+  }
+
+  async ensureDomainAccess(imageUrl, pageUrl) {
+    if (!imageUrl || !pageUrl) return;
+    const hostname = new URL(imageUrl).hostname;
+    const key = `${hostname}|${new URL(pageUrl).origin}`;
+    if (this.domainRules.has(key)) return;
+    const ruleId = this.nextDomainRuleId++;
+    await chrome.declarativeNetRequest.updateSessionRules({
+      addRules: [{
+        id: ruleId,
+        priority: 1,
+        action: { type: "modifyHeaders", requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }] },
+        condition: { urlFilter: `||${hostname}^`, resourceTypes: ["image", "xmlhttprequest", "other"] },
+      }],
+    }).catch(() => {});
+    this.domainRules.set(key, ruleId);
+  }
+}
+
 /**
  * Provides a bounded in-memory LRU cache for hot image blobs.
  */
@@ -465,6 +514,7 @@ class QueueScheduler {
       queuedAt: existing?.queuedAt ?? performance.now(),
       viewportDistance: Number.isFinite(job.viewportDistance) ? job.viewportDistance : Number.MAX_SAFE_INTEGER,
     });
+    pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting" });
     this.drain();
   }
 
@@ -507,6 +557,7 @@ class QueueScheduler {
       this.pending.delete(job.imageId);
       const abortController = new AbortController();
       this.active.set(job.imageId, { ...job, abortController, startedAt: performance.now() });
+      pageImageRegistry.update(job.tabId, job.imageId, { status: "processing" });
       this.process({ ...job, abortController }).finally(() => {
         this.active.delete(job.imageId);
         this.drain();
@@ -547,6 +598,13 @@ class QueueScheduler {
           },
         });
         this.sendComplete(job, cached, true);
+        pageImageRegistry.update(job.tabId, job.imageId, {
+          status: "cache",
+          cacheHit: true,
+          originalImageUrl: cached.originalImageUrl || job.imageUrl,
+          enhancedImageUrl: cached.enhancedImageUrl,
+          quality: cached.quality,
+        });
         return;
       }
 
@@ -579,6 +637,13 @@ class QueueScheduler {
         },
       });
       this.sendComplete(job, result, false);
+      pageImageRegistry.update(job.tabId, job.imageId, {
+        status: "fixed",
+        cacheHit: false,
+        originalImageUrl: result.originalImageUrl || job.imageUrl,
+        enhancedImageUrl: result.enhancedImageUrl,
+        quality: result.quality,
+      });
     } catch (error) {
       if (job.abortController.signal.aborted) {
         return;
@@ -593,6 +658,10 @@ class QueueScheduler {
       }
 
       await this.statisticsTracker.recordError(job.tabId);
+      pageImageRegistry.update(job.tabId, job.imageId, {
+        status: "error",
+        error: error instanceof Error ? error.message : "Unknown upscale error",
+      });
       chrome.tabs.sendMessage(job.tabId, {
         type: "UPSCALE_FAILED",
         imageId: job.imageId,
@@ -628,6 +697,7 @@ class QueueScheduler {
 }
 
 const statisticsTracker = new StatisticsTracker(chrome.storage.local);
+const pageImageRegistry = new PageImageRegistry();
 let lastContentTabId = null;
 const cacheProvider = new CompositeCacheProvider(
   new MemoryCacheProvider(AI_MANGA_UPSCALER_CONFIG.cache.memoryMaxEntries),
@@ -660,7 +730,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "IMAGE_SEEN") {
     if (sender.tab?.id) {
       lastContentTabId = sender.tab.id;
-      statisticsTracker.recordSeen(sender.tab.id).then(() => sendResponse({ recorded: true }));
+      Promise.all([
+        statisticsTracker.recordSeen(sender.tab.id),
+        pageImageRegistry.seen(sender.tab.id, {
+          imageId: message.imageId,
+          imageUrl: message.imageUrl,
+          pageUrl: sender.tab.url,
+          width: message.width,
+          height: message.height,
+        }),
+      ]).then(() => sendResponse({ recorded: true }));
       return true;
     }
     return false;
@@ -709,6 +788,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GET_PAGE_IMAGES") {
+    sendResponse({ tabId: lastContentTabId, images: pageImageRegistry.list(lastContentTabId) });
+    return false;
+  }
+
   if (message.type === "SET_ENABLED") {
     chrome.storage.local.set({ enabled: Boolean(message.enabled) }).then(() => {
       sendResponse({ enabled: Boolean(message.enabled) });
@@ -739,6 +823,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => statisticsTracker.removeTab(tabId));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  statisticsTracker.removeTab(tabId);
+  pageImageRegistry.remove(tabId);
+});
 
 statisticsTracker.ensureDefaults();

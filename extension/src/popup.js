@@ -34,6 +34,7 @@ class PopupController {
     });
     this.openDashboard.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }));
     this.refresh();
+    this.refreshTimer = setInterval(() => this.refreshStats(), 2000);
   }
 
   async refresh() {

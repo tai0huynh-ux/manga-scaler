@@ -13,10 +13,7 @@
         <label>Mode<select id="mode"><option value="auto">Auto</option><option value="manga">Manga</option><option value="artwork">Anime / Artwork</option><option value="photo">Photo</option></select></label>
         <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"></label>
       </section>
-      <section class="comparison">
-        <figure class="card"><figcaption>Original</figcaption><img id="original" alt="Original browser image"><p id="originalEmpty">Process an image to create a comparison.</p></figure>
-        <figure class="card"><figcaption>AI enhanced</figcaption><img id="enhanced" alt="AI enhanced image"><p id="enhancedEmpty">No enhanced image yet.</p></figure>
-      </section>
+      <section class="card image-section"><div class="section-heading"><h2>Images on current page</h2><span id="imageCount">0 images</span></div><div id="imageList" class="image-list"></div></section>
       <section class="card"><h2>Quality</h2><div id="quality" class="metrics"></div></section>
       <section class="card"><h2>Image counters</h2><div id="scopes" class="scope-cards"></div></section>
     </main>

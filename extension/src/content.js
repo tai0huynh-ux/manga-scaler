@@ -254,8 +254,17 @@ class ViewportImageProvider {
     image.dataset.aiMangaUpscalerObserved = "true";
     const reportSeen = () => {
       if (image.dataset.aiEnhancerSeen !== "true" && this.imageProvider.canProcess(image)) {
+        const imageId = image.dataset.aiEnhancerImageId || `ai-image-${Date.now()}-${this.sequence++}`;
+        image.dataset.aiEnhancerImageId = imageId;
         image.dataset.aiEnhancerSeen = "true";
-        chrome.runtime.sendMessage({ type: "IMAGE_SEEN" });
+        const metadata = this.imageProvider.read(image);
+        chrome.runtime.sendMessage({
+          type: "IMAGE_SEEN",
+          imageId,
+          imageUrl: metadata.imageUrl,
+          width: metadata.width,
+          height: metadata.height,
+        });
       }
     };
     reportSeen();
@@ -292,7 +301,8 @@ class ViewportImageProvider {
     }
 
     const existing = this.findByImage(image);
-    const imageId = existing?.imageId || `ai-manga-image-${Date.now()}-${this.sequence++}`;
+    const imageId = existing?.imageId || image.dataset.aiEnhancerImageId || `ai-image-${Date.now()}-${this.sequence++}`;
+    image.dataset.aiEnhancerImageId = imageId;
     processedImageUrls.add(metadata.imageUrl);
     trackedImages.set(imageId, {
       imageId,

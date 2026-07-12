@@ -1,37 +1,72 @@
 const labels = { currentPage: "Current page", openPages: "All open tabs", lifetime: "All time" };
 
 async function refresh() {
-  const stats = await chrome.runtime.sendMessage({ type: "GET_STATS" });
+  const [stats, page] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "GET_STATS" }),
+    chrome.runtime.sendMessage({ type: "GET_PAGE_IMAGES" }),
+  ]);
   document.getElementById("mode").value = stats.mode || "auto";
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
   document.getElementById("status").textContent = stats.processing ? `${stats.processing} processing` : "Ready";
-  let comparison = stats.lastComparison;
-  if (!comparison?.originalImageUrl) {
-    comparison = await fetchLatestComparison();
-  }
-  renderComparison(comparison);
-  renderQuality(comparison?.quality || stats.lastQuality);
+  const images = page?.images || [];
+  renderImages(images);
+  renderQuality([...images].reverse().find((item) => item.quality)?.quality || stats.lastQuality);
   renderScopes(stats.scopes || {});
 }
 
-async function fetchLatestComparison() {
-  try {
-    const response = await fetch("http://127.0.0.1:8765/comparisons/latest");
-    return response.ok ? await response.json() : null;
-  } catch {
-    return null;
+function renderImages(images) {
+  const list = document.getElementById("imageList");
+  document.getElementById("imageCount").textContent = `${images.length} images`;
+  list.replaceChildren();
+  if (!images.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No eligible images have been detected on the content tab yet.";
+    list.appendChild(empty);
+    return;
   }
+  images.forEach((item, index) => {
+    const row = document.createElement("article");
+    row.className = "image-row";
+    const ai = document.createElement("figure");
+    const original = document.createElement("figure");
+    const aiCaption = document.createElement("figcaption");
+    aiCaption.textContent = `AI result #${index + 1} `;
+    const state = document.createElement("span");
+    state.className = `state state-${item.status}`;
+    state.textContent = item.status;
+    aiCaption.appendChild(state);
+    ai.appendChild(aiCaption);
+    const originalCaption = document.createElement("figcaption");
+    originalCaption.textContent = `Original #${index + 1}`;
+    original.appendChild(originalCaption);
+
+    if (item.enhancedImageUrl) {
+      ai.appendChild(createImage(item.enhancedImageUrl, `AI enhanced image ${index + 1}`));
+    } else {
+      const pending = document.createElement("div");
+      pending.className = "pending";
+      const spinner = document.createElement("span");
+      spinner.className = "spinner";
+      const title = document.createElement("strong");
+      title.textContent = item.status === "error" ? "Processing failed" : "Waiting for AI";
+      const detail = document.createElement("small");
+      detail.textContent = item.error || "The original remains visible until enhancement finishes.";
+      pending.append(spinner, title, detail);
+      ai.appendChild(pending);
+    }
+    original.appendChild(createImage(item.originalImageUrl || item.imageUrl, `Original image ${index + 1}`));
+    row.append(ai, original);
+    list.appendChild(row);
+  });
 }
 
-function renderComparison(comparison) {
-  if (!comparison?.originalImageUrl || !comparison?.enhancedImageUrl) return;
-  const original = document.getElementById("original");
-  const enhanced = document.getElementById("enhanced");
-  original.src = comparison.originalImageUrl;
-  enhanced.src = comparison.enhancedImageUrl;
-  document.getElementById("originalEmpty").hidden = true;
-  document.getElementById("enhancedEmpty").hidden = true;
+function createImage(source, alt) {
+  const image = document.createElement("img");
+  image.loading = "lazy";
+  image.src = source;
+  image.alt = alt;
+  return image;
 }
 
 function renderQuality(quality) {
@@ -40,7 +75,7 @@ function renderQuality(quality) {
   const entries = [
     ["Changed pixels", `${quality.changedPixelPercent}%`],
     ["Mean pixel difference", `${quality.pixelDifferencePercent}%`],
-    ["Sharpness gain", `×${quality.sharpnessGain}`],
+    ["Sharpness gain", `x${quality.sharpnessGain}`],
     ["Original contrast", quality.originalContrast],
     ["Enhanced contrast", quality.enhancedContrast],
   ];
