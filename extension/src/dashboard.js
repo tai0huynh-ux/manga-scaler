@@ -102,10 +102,42 @@ function renderImages(images) {
       ai.appendChild(pending);
     }
     original.appendChild(createImage(item.originalImageUrl || item.imageUrl, `Original image ${index + 1}`));
-    original.appendChild(createOpenButton(item.originalImageUrl || item.imageUrl, "Open original image"));
+    const actions = document.createElement("div");
+    actions.className = "image-actions";
+    actions.append(
+      createOpenButton(item.originalImageUrl || item.imageUrl, "Open original image"),
+      createBlockButton(item.imageUrl || item.originalImageUrl),
+    );
+    original.appendChild(actions);
     row.append(ai, original);
     list.appendChild(row);
   });
+}
+
+function createBlockButton(source) {
+  const button = document.createElement("button");
+  button.className = "block-image";
+  button.type = "button";
+  button.textContent = "Block AI";
+  button.title = "Do not upscale this image again";
+  button.addEventListener("click", async () => {
+    const rule = normalizeImageUrl(source);
+    const stored = await chrome.storage.local.get({ blacklistRules: [] });
+    await chrome.storage.local.set({ blacklistRules: [...new Set([...(stored.blacklistRules || []), rule])] });
+    button.disabled = true;
+    button.textContent = "Blocked";
+    refresh();
+  });
+  return button;
+}
+
+function normalizeImageUrl(source) {
+  try {
+    const url = new URL(source);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return source;
+  }
 }
 
 function createOpenButton(source, text) {

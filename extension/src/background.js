@@ -911,7 +911,6 @@ async function ensureContentScripts() {
           delete image.dataset.aiMangaUpscalerObserved;
           delete image.dataset.aiEnhancerSeen;
         });
-        document.querySelectorAll(".ai-enhancer-blacklist-button").forEach((button) => button.remove());
       },
     });
     await chrome.scripting.executeScript({
