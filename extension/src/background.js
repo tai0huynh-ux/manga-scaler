@@ -251,6 +251,7 @@ class BackendUpscaleProvider {
   constructor(baseUrl, requestTimeoutMs) {
     this.baseUrl = baseUrl;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.nextHeaderRuleId = 1000;
   }
 
   async upscale(imageUrl, options, abortSignal) {
@@ -295,22 +296,59 @@ class BackendUpscaleProvider {
   }
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
-    const response = await fetch(imageUrl, {
-      method: "GET",
-      cache: "force-cache",
-      credentials: "include",
-      referrer: pageUrl || undefined,
-      referrerPolicy: "unsafe-url",
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Browser could not read displayed image (${response.status})`);
+    const ruleId = this.nextHeaderRuleId++;
+    try {
+      if (pageUrl) {
+        await chrome.declarativeNetRequest.updateSessionRules({
+          removeRuleIds: [ruleId],
+          addRules: [{
+            id: ruleId,
+            priority: 1,
+            action: {
+              type: "modifyHeaders",
+              requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }],
+            },
+            condition: {
+              regexFilter: `^${this.escapeRegex(imageUrl)}$`,
+              resourceTypes: ["xmlhttprequest", "other"],
+            },
+          }],
+        });
+      }
+      const response = await fetch(imageUrl, {
+        method: "GET",
+        cache: "force-cache",
+        credentials: "include",
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Browser could not read displayed image (${response.status})`);
+      }
+      const buffer = await response.arrayBuffer();
+      if (!this.isImageBuffer(buffer)) {
+        throw new Error("Website returned HTML or non-image data instead of the displayed image");
+      }
+      return this.arrayBufferToBase64(buffer);
+    } finally {
+      if (pageUrl) {
+        await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }).catch(() => {});
+      }
     }
-    const buffer = await response.arrayBuffer();
-    if (!buffer.byteLength) {
-      throw new Error("Browser returned an empty displayed image");
-    }
-    return this.arrayBufferToBase64(buffer);
+  }
+
+  escapeRegex(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  isImageBuffer(buffer) {
+    const bytes = new Uint8Array(buffer);
+    return (
+      (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) ||
+      (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) ||
+      (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) ||
+      (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) ||
+      (bytes.length > 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70)
+    );
   }
 
   arrayBufferToBase64(buffer) {

@@ -25,3 +25,18 @@ def test_upscale_rejects_invalid_browser_image_data() -> None:
         )
     assert response.status_code == 400
     assert "valid base64" in response.json()["detail"]
+
+
+def test_upscale_rejects_base64_encoded_html() -> None:
+    import base64
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/upscale",
+            json={
+                "imageUrl": "https://example.com/protected.jpg",
+                "imageData": base64.b64encode(b"<html>blocked</html>").decode(),
+            },
+        )
+    assert response.status_code == 400
+    assert "not a supported image" in response.json()["detail"]

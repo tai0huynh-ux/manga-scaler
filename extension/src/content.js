@@ -305,6 +305,9 @@ class ViewportImageProvider {
         return null;
       }
       const buffer = await response.arrayBuffer();
+      if (!this.isImageBuffer(buffer)) {
+        return null;
+      }
       const bytes = new Uint8Array(buffer);
       const chunkSize = 0x8000;
       let binary = "";
@@ -315,6 +318,17 @@ class ViewportImageProvider {
     } catch {
       return null;
     }
+  }
+
+  isImageBuffer(buffer) {
+    const bytes = new Uint8Array(buffer);
+    return (
+      (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) ||
+      (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) ||
+      (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) ||
+      (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) ||
+      (bytes.length > 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70)
+    );
   }
 
   refreshPriorities() {

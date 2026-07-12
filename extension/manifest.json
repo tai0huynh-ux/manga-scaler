@@ -23,5 +23,5 @@
     "http://*/*",
     "https://*/*"
   ],
-  "permissions": ["storage", "tabs"]
+  "permissions": ["storage", "tabs", "declarativeNetRequestWithHostAccess"]
 }

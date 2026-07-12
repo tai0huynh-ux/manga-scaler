@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, UnidentifiedImageError
 
 from app.core.config import EncodingConfig, EnhancementConfig
 from app.services.model_manager import LoadedModel
@@ -83,9 +83,12 @@ class ImagePipeline:
 
     def _decode_sync(self, image_bytes: bytes) -> Image.Image:
         """Decode image bytes using Pillow and normalize to RGB."""
-        with Image.open(io.BytesIO(image_bytes)) as image:
-            image.load()
-            return image.convert("RGB")
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                image.load()
+                return image.convert("RGB")
+        except (UnidentifiedImageError, OSError) as exc:
+            raise ValueError("Browser-supplied data is not a supported image.") from exc
 
     def _encode_webp_sync(self, image: Image.Image) -> bytes:
         """Encode an image using configured WebP settings."""
