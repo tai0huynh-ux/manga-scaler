@@ -79,6 +79,19 @@
     "artworkTallAspectRatio": 1.4,
     "artworkSaturation": 0.2
   },
+  "textProcessing": {
+    "enabled": false,
+    "darkThreshold": 86,
+    "lightThreshold": 205,
+    "backgroundRadius": 19,
+    "maskPadding": 2,
+    "minRegionArea": 18,
+    "maxRegionAreaRatio": 0.08,
+    "maxRegions": 250,
+    "ocrLanguages": "eng+vie",
+    "targetLanguage": "vi",
+    "renderTranslatedText": true
+  },
   "encoding": {
     "format": "WEBP",
     "maxOutputDimension": 16383,

@@ -17,6 +17,7 @@ class PopupController {
       "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
       "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
       "imageSlicingEnabled", "imageSliceMaxHeight", "performanceBoost",
+      "textCleanupEnabled", "textTranslateEnabled", "textSourceLanguage", "textTargetLanguage",
     ];
     this.limitTogglePairs = {
       maxOutputWidthEnabled: "maxOutputWidth",
@@ -158,6 +159,10 @@ class PopupController {
       imageSlicingEnabled: checked("imageSlicingEnabled"),
       imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),
       performanceBoost: this.document.getElementById("performanceBoost").checked,
+      textCleanupEnabled: checked("textCleanupEnabled"),
+      textTranslateEnabled: checked("textTranslateEnabled"),
+      textSourceLanguage: value("textSourceLanguage"),
+      textTargetLanguage: value("textTargetLanguage"),
     });
   }
 

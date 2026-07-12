@@ -18,6 +18,7 @@ from app.services.image_classifier import ImageTypeClassifier
 from app.services.quality import QualityAnalyzer
 from app.services.model_manager import ModelManager
 from app.services.statistics import AppRuntime
+from app.services.text_processor import TextProcessor
 from app.services.upscaler import UpscalerService
 
 
@@ -45,8 +46,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pipeline = ImagePipeline(settings.encoding, settings.enhancement)
     classifier = ImageTypeClassifier(settings.auto_detection)
     quality_analyzer = QualityAnalyzer()
+    text_processor = TextProcessor(settings.text_processing)
     app.state.pipeline = pipeline
     app.state.quality_analyzer = quality_analyzer
+    app.state.text_processor = text_processor
 
     app.state.runtime = AppRuntime()
     app.state.settings = settings
@@ -61,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pipeline=pipeline,
         classifier=classifier,
         quality_analyzer=quality_analyzer,
+        text_processor=text_processor,
     )
     await app.state.upscaler_service.start()
     yield

@@ -6,6 +6,7 @@ const imageSettingIds = [
   "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
   "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
   "imageSlicingEnabled", "imageSliceMaxHeight", "performanceBoost",
+  "textCleanupEnabled", "textTranslateEnabled", "textSourceLanguage", "textTargetLanguage",
 ];
 const limitTogglePairs = {
   maxOutputWidthEnabled: "maxOutputWidth",
@@ -204,6 +205,8 @@ async function saveImageSettings() {
     outputQuality: Number(value("outputQuality")), performanceBoost: document.getElementById("performanceBoost").checked,
     imageSlicingEnabled: checked("imageSlicingEnabled"), imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),
     preprocessingConcurrency: Number(value("preprocessingConcurrency")), upscaleConcurrency: Number(value("upscaleConcurrency")),
+    textCleanupEnabled: checked("textCleanupEnabled"), textTranslateEnabled: checked("textTranslateEnabled"),
+    textSourceLanguage: value("textSourceLanguage"), textTargetLanguage: value("textTargetLanguage"),
   });
 }
 

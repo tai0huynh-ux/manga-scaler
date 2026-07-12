@@ -27,6 +27,10 @@
         <label><span>Slice long images</span><input id="imageSlicingEnabled" type="checkbox"></label>
         <label>Maximum raw slice height<input id="imageSliceMaxHeight" type="number" min="512" max="8192" step="128"></label>
         <label><span>Performance boost</span><input id="performanceBoost" type="checkbox"></label>
+        <label><span>Clean old text before upscale</span><input id="textCleanupEnabled" type="checkbox"></label>
+        <label><span>Translate detected text when OCR is available</span><input id="textTranslateEnabled" type="checkbox"></label>
+        <label>Source text<select id="textSourceLanguage"><option value="auto">Auto detect</option><option value="en">English</option><option value="vi">Vietnamese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+        <label>Target text<select id="textTargetLanguage"><option value="vi">Vietnamese</option><option value="en">English</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
       </section>
       <section class="card image-section"><div class="section-heading"><h2>Images on current page</h2><span id="imageCount">0 images</span></div><div id="imageList" class="image-list"></div></section>
       <section class="card"><h2>Quality</h2><div id="quality" class="metrics"></div></section>

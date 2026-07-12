@@ -14,6 +14,7 @@ from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
 from app.services.statistics import MemorySampler, StageTimings
 from app.services.quality import QualityAnalyzer
+from app.services.text_processor import TextProcessingOptions, TextProcessor
 from app.utils.hashing import sha256_bytes
 
 LOGGER = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class UpscalerService:
         pipeline: ImagePipeline,
         classifier: ImageTypeClassifier,
         quality_analyzer: QualityAnalyzer,
+        text_processor: TextProcessor,
     ) -> None:
         self.settings = settings
         self.cache = cache
@@ -39,6 +41,7 @@ class UpscalerService:
         self.pipeline = pipeline
         self.classifier = classifier
         self.quality_analyzer = quality_analyzer
+        self.text_processor = text_processor
         self.memory_sampler = MemorySampler()
         self.queue = InferenceQueue(
             max_size=settings.inference.queue_max_size,
@@ -68,11 +71,12 @@ class UpscalerService:
         max_output_width: int | None = None,
         max_output_height: int | None = None,
         output_quality: int | None = None,
+        text_processing: TextProcessingOptions | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
         result = await self.queue.submit(
             str(image_url), model_name, tile_size, enhance_level, mode, image_bytes, client_job_id,
-            max_output_width, max_output_height, output_quality
+            max_output_width, max_output_height, output_quality, text_processing
         )
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
@@ -110,6 +114,16 @@ class UpscalerService:
             original_png = await self.pipeline.encode_png(image)
             original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
 
+        text_options = TextProcessingOptions.from_payload(getattr(job, "text_processing", None))
+        text_metadata: dict[str, object] = {}
+        if text_options.enabled:
+            text_started = time.perf_counter()
+            text_result = await self.text_processor.process(image, text_options)
+            self._ensure_active(job)
+            image = text_result.image
+            text_metadata = text_result.metadata()
+            timings.set("text", text_started)
+
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
         model = self.model_manager.get_model(job.model_name or profile.model)
@@ -126,7 +140,7 @@ class UpscalerService:
         output_height = job.max_output_height or self.settings.encoding.max_output_dimension
         output_key = (
             f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}"
-            f"-w{output_width}-h{output_height}-q{output_quality}-webp"
+            f"-w{output_width}-h{output_height}-q{output_quality}-text{self._text_key(text_options)}-webp"
         )
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
@@ -182,6 +196,7 @@ class UpscalerService:
                 enhance_level=enhance_level,
                 original_path=original_path,
                 quality=quality,
+                text_processing=text_metadata,
             )
 
         inference_started = time.perf_counter()
@@ -250,6 +265,7 @@ class UpscalerService:
             enhance_level=enhance_level,
             original_path=original_path,
             quality=quality,
+            text_processing=text_metadata,
         )
 
     def _response(
@@ -268,6 +284,7 @@ class UpscalerService:
         enhance_level: float,
         original_path,
         quality: dict[str, float],
+        text_processing: dict[str, object] | None = None,
     ) -> UpscaleResponse:
         """Build an API response compatible with the existing extension."""
         filename = self.cache.public_filename(output_path)
@@ -296,6 +313,7 @@ class UpscalerService:
             memory=self.memory_sampler.snapshot(),
             queue=self.queue.snapshot(),
             quality=quality,
+            textProcessing=text_processing or {},
         )
 
     def _resolve_mode(self, requested_mode: str, image) -> ClassificationResult:
@@ -316,3 +334,11 @@ class UpscalerService:
             allowed = ", ".join(str(size) for size in self.settings.inference.allowed_tile_sizes)
             raise ValueError(f"tileSize must be one of: {allowed}.")
         return tile_size
+
+    def _text_key(self, options: TextProcessingOptions) -> str:
+        if not options.enabled:
+            return "off"
+        cleanup = "c1" if options.cleanup else "c0"
+        translate = "t1" if options.translate else "t0"
+        render = "r1" if options.render_text else "r0"
+        return f"on-{cleanup}-{translate}-{render}-{options.source_language}-{options.target_language}"

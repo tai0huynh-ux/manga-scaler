@@ -14,6 +14,7 @@ class HealthResponse(BaseModel):
     gpu: dict[str, Any] = Field(default_factory=dict, description="GPU/provider diagnostics.")
     queue: dict[str, Any] = Field(default_factory=dict, description="Inference queue state.")
     cache: dict[str, Any] = Field(default_factory=dict, description="Cache diagnostics.")
+    text: dict[str, Any] = Field(default_factory=dict, description="Text cleanup/OCR/translation diagnostics.")
     uptime: float | None = Field(default=None, description="Backend uptime in seconds.")
 
 
@@ -42,6 +43,7 @@ class UpscaleRequest(BaseModel):
     max_output_width: int | None = Field(default=None, alias="maxOutputWidth", ge=256, le=16383)
     max_output_height: int | None = Field(default=None, alias="maxOutputHeight", ge=256, le=16383)
     output_quality: int | None = Field(default=None, alias="outputQuality", ge=50, le=100)
+    text_processing: "TextProcessingOptionsRequest | None" = Field(default=None, alias="textProcessing")
 
 
 class UpscaleResponse(BaseModel):
@@ -68,6 +70,7 @@ class UpscaleResponse(BaseModel):
     memory: dict[str, int] = Field(default_factory=dict, description="Memory usage in bytes.")
     queue: dict[str, int] = Field(default_factory=dict, description="Queue state snapshot.")
     quality: dict[str, float] = Field(default_factory=dict, description="Objective comparison with bicubic upscale.")
+    text_processing: dict[str, Any] = Field(default_factory=dict, alias="textProcessing")
 
     @field_serializer("image_url")
     def serialize_image_url(self, value: HttpUrl) -> str:
@@ -79,6 +82,35 @@ class SwitchModelRequest(BaseModel):
     """Request body used to switch the active ONNX model."""
 
     model: str
+
+
+class TextProcessingOptionsRequest(BaseModel):
+    """Optional text cleanup and translation options."""
+
+    enabled: bool = False
+    cleanup: bool = True
+    translate: bool = False
+    source_language: str = Field(default="auto", alias="sourceLanguage")
+    target_language: str = Field(default="vi", alias="targetLanguage")
+    render_text: bool = Field(default=True, alias="renderText")
+
+
+class TextProcessRequest(BaseModel):
+    """Standalone text processing request for diagnostics and dashboard tooling."""
+
+    image_data: str = Field(alias="imageData", description="Base64-encoded image bytes.")
+    options: TextProcessingOptionsRequest = Field(default_factory=TextProcessingOptionsRequest)
+
+
+class TextProcessResponse(BaseModel):
+    """Standalone text processing result."""
+
+    image_url: HttpUrl = Field(alias="imageUrl")
+    cache_key: str = Field(alias="cacheKey")
+    content_type: str = Field(default="image/png", alias="contentType")
+    width: int
+    height: int
+    text_processing: dict[str, Any] = Field(alias="textProcessing")
 
 
 class ModelStatusResponse(BaseModel):

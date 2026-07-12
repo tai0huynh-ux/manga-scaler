@@ -40,4 +40,10 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     defaultLevel: 0.35,
     modes: ["auto", "manga", "artwork", "photo"],
   },
+  text: {
+    cleanupEnabled: false,
+    translateEnabled: false,
+    sourceLanguage: "auto",
+    targetLanguage: "vi",
+  },
 });

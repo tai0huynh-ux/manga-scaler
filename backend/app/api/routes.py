@@ -5,9 +5,19 @@ import binascii
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.models.schemas import HealthResponse, ModelStatusResponse, SwitchModelRequest, UpscaleRequest, UpscaleResponse
+from app.models.schemas import (
+    HealthResponse,
+    ModelStatusResponse,
+    SwitchModelRequest,
+    TextProcessRequest,
+    TextProcessResponse,
+    UpscaleRequest,
+    UpscaleResponse,
+)
 from app.services.model_manager import ModelManager
+from app.services.text_processor import TextProcessingOptions
 from app.services.upscaler import UpscalerService
+from app.utils.hashing import sha256_bytes
 
 router = APIRouter()
 
@@ -65,8 +75,42 @@ async def health(request: Request) -> HealthResponse:
             "directory": str(cache_dir),
             "files": len([path for path in cache_dir.iterdir() if path.is_file()]),
         },
+        text=request.app.state.text_processor.capabilities(),
         uptime=request.app.state.runtime.uptime(),
     )
+
+
+@router.get("/text/capabilities")
+async def text_capabilities(request: Request) -> dict[str, object]:
+    """Return local text cleanup, OCR, and translation capability diagnostics."""
+    return request.app.state.text_processor.capabilities()
+
+
+@router.post("/text/process", response_model=TextProcessResponse)
+async def process_text(payload: TextProcessRequest, request: Request) -> TextProcessResponse:
+    """Run text cleanup/translation preparation without neural upscaling."""
+    try:
+        image_bytes = base64.b64decode(payload.image_data, validate=True)
+        image = await request.app.state.pipeline.decode(image_bytes)
+        result = await request.app.state.text_processor.process(
+            image,
+            TextProcessingOptions.from_payload(payload.options),
+        )
+        encoded = await request.app.state.pipeline.encode_png(result.image)
+        cache_key = f"{sha256_bytes(image_bytes)}-text"
+        output_path, _ = await request.app.state.cache.save_named(cache_key, encoded, ".png")
+        filename = request.app.state.cache.public_filename(output_path)
+        image_url = f"{request.app.state.settings.app.public_base_url}/cache/images/{filename}"
+        return TextProcessResponse(
+            imageUrl=image_url,
+            cacheKey=cache_key,
+            contentType="image/png",
+            width=result.image.width,
+            height=result.image.height,
+            textProcessing=result.metadata(),
+        )
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/upscale", response_model=UpscaleResponse)
@@ -93,6 +137,7 @@ async def upscale(
             max_output_width=payload.max_output_width,
             max_output_height=payload.max_output_height,
             output_quality=payload.output_quality,
+            text_processing=TextProcessingOptions.from_payload(payload.text_processing),
         )
     except FileNotFoundError as exc:
         raise HTTPException(

@@ -24,6 +24,10 @@ const DEFAULT_STATE = Object.freeze({
   resolutionPreset: "fhd",
   screenOrientation: "auto",
   performanceBoost: true,
+  textCleanupEnabled: AI_MANGA_UPSCALER_CONFIG.text.cleanupEnabled,
+  textTranslateEnabled: AI_MANGA_UPSCALER_CONFIG.text.translateEnabled,
+  textSourceLanguage: AI_MANGA_UPSCALER_CONFIG.text.sourceLanguage,
+  textTargetLanguage: AI_MANGA_UPSCALER_CONFIG.text.targetLanguage,
   preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
   upscaleConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests,
   seen: 0,
@@ -127,6 +131,10 @@ class StatisticsTracker {
       resolutionPreset: current.resolutionPreset || "fhd",
       screenOrientation: current.screenOrientation || "auto",
       performanceBoost: Boolean(current.performanceBoost),
+      textCleanupEnabled: Boolean(current.textCleanupEnabled),
+      textTranslateEnabled: Boolean(current.textTranslateEnabled),
+      textSourceLanguage: current.textSourceLanguage || AI_MANGA_UPSCALER_CONFIG.text.sourceLanguage,
+      textTargetLanguage: current.textTargetLanguage || AI_MANGA_UPSCALER_CONFIG.text.targetLanguage,
       preprocessingConcurrency: Number(current.preprocessingConcurrency),
       upscaleConcurrency: Number(current.upscaleConcurrency),
       processed,
@@ -458,6 +466,7 @@ class BackendUpscaleProvider {
           maxOutputHeight: options.maxOutputHeight,
           outputQuality: options.outputQuality,
           tileSize: options.tileSize,
+          textProcessing: options.textProcessing,
         }),
         signal,
       });
@@ -749,7 +758,10 @@ class QueueScheduler {
     try {
       const cacheUrl = this.normalizeCacheUrl(job.imageUrl);
       const cacheVariant = job.cacheVariant || "full";
-      const cacheIdentity = `${cacheUrl}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}`;
+      const textVariant = job.textProcessing?.enabled
+        ? `text:${job.textProcessing.cleanup ? "c1" : "c0"}:${job.textProcessing.translate ? "tr1" : "tr0"}:${job.textProcessing.sourceLanguage || "auto"}>${job.textProcessing.targetLanguage || "vi"}`
+        : "text:off";
+      const cacheIdentity = `${cacheUrl}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (job.abortController.signal.aborted) {
         return;
@@ -793,6 +805,7 @@ class QueueScheduler {
           maxOutputHeight: job.maxOutputHeight,
           outputQuality: job.outputQuality,
           tileSize: job.tileSize,
+          textProcessing: job.textProcessing,
         },
         job.abortController.signal,
       );
@@ -1128,6 +1141,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         maxOutputWidth: outputLimits.width,
         maxOutputHeight: outputLimits.height,
         outputQuality: Number(settings.outputQuality),
+        textProcessing: {
+          enabled: Boolean(settings.textCleanupEnabled || settings.textTranslateEnabled),
+          cleanup: Boolean(settings.textCleanupEnabled || settings.textTranslateEnabled),
+          translate: Boolean(settings.textTranslateEnabled),
+          sourceLanguage: settings.textSourceLanguage || AI_MANGA_UPSCALER_CONFIG.text.sourceLanguage,
+          targetLanguage: settings.textTargetLanguage || AI_MANGA_UPSCALER_CONFIG.text.targetLanguage,
+          renderText: true,
+        },
         tileSize: settings.performanceBoost && Math.max(
           Number(message.displayMetrics?.sourceWidth) || 0,
           Number(message.displayMetrics?.sourceHeight) || 0,
@@ -1222,6 +1243,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       performanceBoost: Boolean(message.performanceBoost),
       preprocessingConcurrency: clamp(message.preprocessingConcurrency, 1, 12, AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency),
       upscaleConcurrency: clamp(message.upscaleConcurrency, 1, 2, AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests),
+      textCleanupEnabled: Boolean(message.textCleanupEnabled),
+      textTranslateEnabled: Boolean(message.textTranslateEnabled),
+      textSourceLanguage: String(message.textSourceLanguage || AI_MANGA_UPSCALER_CONFIG.text.sourceLanguage).slice(0, 16),
+      textTargetLanguage: String(message.textTargetLanguage || AI_MANGA_UPSCALER_CONFIG.text.targetLanguage).slice(0, 16),
     };
     limits.maxInputWidth = Math.max(limits.maxInputWidth, limits.minInputWidth);
     limits.maxInputHeight = Math.max(limits.maxInputHeight, limits.minInputHeight);

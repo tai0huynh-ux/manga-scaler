@@ -58,6 +58,12 @@
         <label class="control-label" for="imageSliceMaxHeight">Maximum raw slice height</label>
         <input id="imageSliceMaxHeight" type="number" min="512" max="8192" step="128">
         <label class="preview-control"><input id="performanceBoost" type="checkbox"><span>Performance boost (larger GPU tiles)</span></label>
+        <label class="preview-control"><input id="textCleanupEnabled" type="checkbox"><span>Clean old text before upscale</span></label>
+        <label class="preview-control"><input id="textTranslateEnabled" type="checkbox"><span>Translate detected text when OCR is available</span></label>
+        <div id="textLanguagePanel" class="compact-grid">
+          <label>Source text<select id="textSourceLanguage"><option value="auto">Auto detect</option><option value="en">English</option><option value="vi">Vietnamese</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+          <label>Target text<select id="textTargetLanguage"><option value="vi">Vietnamese</option><option value="en">English</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+        </div>
         <p id="modeDescription" class="mode-description"></p>
         <label class="preview-control">
           <input id="previewOriginal" type="checkbox">

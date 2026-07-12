@@ -117,6 +117,22 @@ class AutoDetectionConfig(BaseModel):
     artwork_saturation: float = Field(alias="artworkSaturation", ge=0.0, le=1.0)
 
 
+class TextProcessingConfig(BaseModel):
+    """Local text cleanup/OCR/translation settings."""
+
+    enabled: bool = False
+    dark_threshold: int = Field(default=86, alias="darkThreshold", ge=0, le=255)
+    light_threshold: int = Field(default=205, alias="lightThreshold", ge=0, le=255)
+    background_radius: int = Field(default=19, alias="backgroundRadius", ge=3, le=99)
+    mask_padding: int = Field(default=2, alias="maskPadding", ge=0, le=32)
+    min_region_area: int = Field(default=18, alias="minRegionArea", ge=1, le=100000)
+    max_region_area_ratio: float = Field(default=0.08, alias="maxRegionAreaRatio", ge=0.001, le=0.5)
+    max_regions: int = Field(default=250, alias="maxRegions", ge=1, le=2000)
+    ocr_languages: str = Field(default="eng+vie", alias="ocrLanguages")
+    target_language: str = Field(default="vi", alias="targetLanguage")
+    render_translated_text: bool = Field(default=True, alias="renderTranslatedText")
+
+
 class LoggingConfig(BaseModel):
     """Structured rotating log settings."""
 
@@ -136,6 +152,7 @@ class Settings(BaseModel):
     enhancement: EnhancementConfig
     modes: dict[str, ModeConfig]
     auto_detection: AutoDetectionConfig = Field(alias="autoDetection")
+    text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig, alias="textProcessing")
     encoding: EncodingConfig
     logging: LoggingConfig
     root_dir: Path = Field(exclude=True)
