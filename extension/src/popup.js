@@ -10,7 +10,21 @@ class PopupController {
     this.enhanceLevel = this.document.getElementById("enhanceLevel");
     this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
     this.processingTimeout = this.document.getElementById("processingTimeout");
-    this.imageSettingIds = ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost"];
+    this.imageSettingIds = [
+      "sizingMode", "resolutionPreset", "screenOrientation",
+      "maxOutputWidthEnabled", "maxOutputHeightEnabled", "maxOutputWidth", "maxOutputHeight",
+      "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
+      "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
+      "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost",
+    ];
+    this.limitTogglePairs = {
+      maxOutputWidthEnabled: "maxOutputWidth",
+      maxOutputHeightEnabled: "maxOutputHeight",
+      minInputWidthEnabled: "minInputWidth",
+      minInputHeightEnabled: "minInputHeight",
+      maxInputWidthEnabled: "maxInputWidth",
+      maxInputHeightEnabled: "maxInputHeight",
+    };
     this.modeDescription = this.document.getElementById("modeDescription");
     this.previewOriginal = this.document.getElementById("previewOriginal");
     this.qualitySummary = this.document.getElementById("qualitySummary");
@@ -122,6 +136,7 @@ class PopupController {
 
   async saveImageSettings() {
     const value = (id) => this.document.getElementById(id).value;
+    const checked = (id) => this.document.getElementById(id).checked;
     this.renderSizeSettings();
     await chrome.runtime.sendMessage({
       type: "SET_IMAGE_LIMITS",
@@ -130,6 +145,12 @@ class PopupController {
       maxOutputWidth: Number(value("maxOutputWidth")), maxOutputHeight: Number(value("maxOutputHeight")),
       minInputWidth: Number(value("minInputWidth")), minInputHeight: Number(value("minInputHeight")),
       maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
+      maxOutputWidthEnabled: checked("maxOutputWidthEnabled"),
+      maxOutputHeightEnabled: checked("maxOutputHeightEnabled"),
+      minInputWidthEnabled: checked("minInputWidthEnabled"),
+      minInputHeightEnabled: checked("minInputHeightEnabled"),
+      maxInputWidthEnabled: checked("maxInputWidthEnabled"),
+      maxInputHeightEnabled: checked("maxInputHeightEnabled"),
       outputQuality: Number(value("outputQuality")),
       preprocessingConcurrency: Number(value("preprocessingConcurrency")),
       upscaleConcurrency: Number(value("upscaleConcurrency")),
@@ -142,6 +163,9 @@ class PopupController {
     this.document.getElementById("autoSizePanel").hidden = mode !== "auto";
     this.document.getElementById("pixelSizePanel").hidden = mode !== "pixel";
     this.document.getElementById("screenSizePanel").hidden = mode !== "screen";
+    Object.entries(this.limitTogglePairs).forEach(([toggleId, inputId]) => {
+      this.document.getElementById(inputId).disabled = !this.document.getElementById(toggleId).checked;
+    });
   }
 
   renderEnhancementSettings() {

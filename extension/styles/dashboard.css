@@ -7,6 +7,9 @@ h1, h2, h3, p { margin-top: 0; }
 .card { padding: 18px; border: 1px solid #d8dfdc; border-radius: 12px; background: #fff; box-shadow: 0 4px 16px #13212e0d; }
 .settings { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 18px; }
 .settings label { display: grid; flex: 1 1 190px; gap: 7px; min-width: 180px; font-weight: 650; }
+.settings .limit-control span { display: flex; align-items: center; gap: 7px; }
+.settings .limit-control input[type="checkbox"] { width: auto; }
+.settings .limit-control input[type="number"]:disabled { opacity: .55; background: #eef1f3; }
 .setting-mode-panel { display: flex; flex: 1 1 100%; gap: 16px; align-items: end; padding: 12px; border-radius: 8px; background: #edf5f5; }
 .setting-mode-panel small, .setting-mode-panel strong { display: block; }
 [hidden] { display: none !important; }

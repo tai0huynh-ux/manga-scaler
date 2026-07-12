@@ -16,8 +16,12 @@ class ImageProvider {
   canProcess(image) {
     const width = image.naturalWidth || image.width || image.clientWidth;
     const height = image.naturalHeight || image.height || image.clientHeight;
-    return width >= this.limits.minInputWidth && height >= this.limits.minInputHeight &&
-      width <= this.limits.maxInputWidth && height <= this.limits.maxInputHeight;
+    return (
+      (this.limits.minInputWidthEnabled === false || width >= this.limits.minInputWidth) &&
+      (this.limits.minInputHeightEnabled === false || height >= this.limits.minInputHeight) &&
+      (this.limits.maxInputWidthEnabled === false || width <= this.limits.maxInputWidth) &&
+      (this.limits.maxInputHeightEnabled === false || height <= this.limits.maxInputHeight)
+    );
   }
 
   read(image) {
@@ -220,6 +224,10 @@ class ViewportImageProvider {
       minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
       maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
       maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+      minInputWidthEnabled: true,
+      minInputHeightEnabled: true,
+      maxInputWidthEnabled: true,
+      maxInputHeightEnabled: true,
       preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
     });
     this.enabled = stored.enabled;
@@ -576,6 +584,10 @@ const viewportProvider = new ViewportImageProvider({
     minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
     maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
     maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+    minInputWidthEnabled: true,
+    minInputHeightEnabled: true,
+    maxInputWidthEnabled: true,
+    maxInputHeightEnabled: true,
   }),
   renderer,
 });
@@ -590,12 +602,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.blacklistRules) {
     viewportProvider.blacklist = new Set(changes.blacklistRules.newValue || []);
   }
-  if (areaName === "local" && (changes.minInputWidth || changes.minInputHeight || changes.maxInputWidth || changes.maxInputHeight)) {
+  if (areaName === "local" && (
+    changes.minInputWidth || changes.minInputHeight || changes.maxInputWidth || changes.maxInputHeight ||
+    changes.minInputWidthEnabled || changes.minInputHeightEnabled || changes.maxInputWidthEnabled || changes.maxInputHeightEnabled
+  )) {
     chrome.storage.local.get({
       minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
       minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
       maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
       maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+      minInputWidthEnabled: true,
+      minInputHeightEnabled: true,
+      maxInputWidthEnabled: true,
+      maxInputHeightEnabled: true,
     }).then((limits) => {
       viewportProvider.imageProvider.updateLimits(limits);
       viewportProvider.reprocessVisibleImages();

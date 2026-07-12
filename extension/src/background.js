@@ -11,6 +11,12 @@ const DEFAULT_STATE = Object.freeze({
   maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
   maxOutputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxOutputWidthPx,
   maxOutputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxOutputHeightPx,
+  minInputWidthEnabled: true,
+  minInputHeightEnabled: true,
+  maxInputWidthEnabled: true,
+  maxInputHeightEnabled: true,
+  maxOutputWidthEnabled: true,
+  maxOutputHeightEnabled: true,
   outputQuality: AI_MANGA_UPSCALER_CONFIG.images.outputQuality,
   sizingMode: "auto",
   resolutionPreset: "fhd",
@@ -106,6 +112,12 @@ class StatisticsTracker {
       minInputWidth: Number(current.minInputWidth), minInputHeight: Number(current.minInputHeight),
       maxInputWidth: Number(current.maxInputWidth), maxInputHeight: Number(current.maxInputHeight),
       maxOutputWidth: Number(current.maxOutputWidth), maxOutputHeight: Number(current.maxOutputHeight),
+      minInputWidthEnabled: current.minInputWidthEnabled !== false,
+      minInputHeightEnabled: current.minInputHeightEnabled !== false,
+      maxInputWidthEnabled: current.maxInputWidthEnabled !== false,
+      maxInputHeightEnabled: current.maxInputHeightEnabled !== false,
+      maxOutputWidthEnabled: current.maxOutputWidthEnabled !== false,
+      maxOutputHeightEnabled: current.maxOutputHeightEnabled !== false,
       outputQuality: Number(current.outputQuality),
       sizingMode: current.sizingMode || "auto",
       resolutionPreset: current.resolutionPreset || "fhd",
@@ -917,8 +929,15 @@ async function maintainRuntime() {
 
 function resolveOutputLimits(settings, metrics = {}) {
   const clamp = (value, minimum, maximum) => Math.min(Math.max(Math.round(value), minimum), maximum);
+  const outputWidthEnabled = settings.maxOutputWidthEnabled !== false;
+  const outputHeightEnabled = settings.maxOutputHeightEnabled !== false;
+  const configuredMaxWidth = outputWidthEnabled ? Number(settings.maxOutputWidth) : 16383;
+  const configuredMaxHeight = outputHeightEnabled ? Number(settings.maxOutputHeight) : 16383;
   if (settings.sizingMode === "pixel") {
-    return { width: Number(settings.maxOutputWidth), height: Number(settings.maxOutputHeight) };
+    return {
+      width: outputWidthEnabled ? Number(settings.maxOutputWidth) : null,
+      height: outputHeightEnabled ? Number(settings.maxOutputHeight) : null,
+    };
   }
   const presets = { hd: [1280, 720], fhd: [1920, 1080], "2k": [2560, 1440], "4k": [3840, 2160] };
   if (settings.sizingMode === "screen") {
@@ -927,7 +946,10 @@ function resolveOutputLimits(settings, metrics = {}) {
       ? ((metrics.screenHeight || 0) > (metrics.screenWidth || 0) ? "portrait" : "landscape")
       : settings.screenOrientation;
     if (orientation === "portrait") [width, height] = [height, width];
-    return { width, height };
+    return {
+      width: outputWidthEnabled ? Math.min(width, configuredMaxWidth) : null,
+      height: outputHeightEnabled ? Math.min(height, configuredMaxHeight) : null,
+    };
   }
   const ratio = clamp(Number(metrics.devicePixelRatio) || 1, 1, 3);
   const visibleWidth = Math.min(Number(metrics.renderedWidth) || 512, Number(metrics.viewportWidth) || 1920);
@@ -936,8 +958,8 @@ function resolveOutputLimits(settings, metrics = {}) {
   const screenHeight = (Number(metrics.screenHeight) || 1080) * ratio;
   const snap = (value, maximum) => clamp(Math.ceil(value / 256) * 256, 256, maximum);
   return {
-    width: snap(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), Number(settings.maxOutputWidth)),
-    height: snap(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), Number(settings.maxOutputHeight)),
+    width: outputWidthEnabled ? snap(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), configuredMaxWidth) : null,
+    height: outputHeightEnabled ? snap(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), configuredMaxHeight) : null,
   };
 }
 
@@ -1078,6 +1100,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       maxInputHeight: clamp(message.maxInputHeight, 1, 32768, 12000),
       maxOutputWidth: clamp(message.maxOutputWidth, 256, 16383, 2048),
       maxOutputHeight: clamp(message.maxOutputHeight, 256, 16383, 8192),
+      minInputWidthEnabled: message.minInputWidthEnabled !== false,
+      minInputHeightEnabled: message.minInputHeightEnabled !== false,
+      maxInputWidthEnabled: message.maxInputWidthEnabled !== false,
+      maxInputHeightEnabled: message.maxInputHeightEnabled !== false,
+      maxOutputWidthEnabled: message.maxOutputWidthEnabled !== false,
+      maxOutputHeightEnabled: message.maxOutputHeightEnabled !== false,
       outputQuality: clamp(message.outputQuality, 50, 100, 90),
       sizingMode: ["pixel", "auto", "screen"].includes(message.sizingMode) ? message.sizingMode : "auto",
       resolutionPreset: ["hd", "fhd", "2k", "4k"].includes(message.resolutionPreset) ? message.resolutionPreset : "fhd",

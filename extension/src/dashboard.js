@@ -1,4 +1,19 @@
 const labels = { currentPage: "Current page", openPages: "All open tabs", lifetime: "All time" };
+const imageSettingIds = [
+  "sizingMode", "resolutionPreset", "screenOrientation",
+  "maxOutputWidthEnabled", "maxOutputHeightEnabled", "maxOutputWidth", "maxOutputHeight",
+  "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
+  "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
+  "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost",
+];
+const limitTogglePairs = {
+  maxOutputWidthEnabled: "maxOutputWidth",
+  maxOutputHeightEnabled: "maxOutputHeight",
+  minInputWidthEnabled: "minInputWidth",
+  minInputHeightEnabled: "minInputHeight",
+  maxInputWidthEnabled: "maxInputWidth",
+  maxInputHeightEnabled: "maxInputHeight",
+};
 
 async function refresh() {
   const [stats, page] = await Promise.all([
@@ -10,10 +25,11 @@ async function refresh() {
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
   document.getElementById("timeout").value = stats.maxProcessingSeconds ?? 60;
   if (!document.querySelector(".settings").contains(document.activeElement)) {
-    ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency"].forEach((id) => {
-      document.getElementById(id).value = stats[id] ?? "";
+    imageSettingIds.forEach((id) => {
+      const element = document.getElementById(id);
+      if (element.type === "checkbox") element.checked = Boolean(stats[id]);
+      else element.value = stats[id] ?? "";
     });
-    document.getElementById("performanceBoost").checked = Boolean(stats.performanceBoost);
   }
   renderSizeMode();
   document.getElementById("status").textContent = stats.processing ? `${stats.processing} processing` : "Ready";
@@ -141,6 +157,7 @@ async function saveSettings() {
 
 async function saveImageSettings() {
   const value = (id) => document.getElementById(id).value;
+  const checked = (id) => document.getElementById(id).checked;
   renderSizeMode();
   await chrome.runtime.sendMessage({
     type: "SET_IMAGE_LIMITS", sizingMode: value("sizingMode"),
@@ -148,6 +165,9 @@ async function saveImageSettings() {
     maxOutputWidth: Number(value("maxOutputWidth")), maxOutputHeight: Number(value("maxOutputHeight")),
     minInputWidth: Number(value("minInputWidth")), minInputHeight: Number(value("minInputHeight")),
     maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
+    maxOutputWidthEnabled: checked("maxOutputWidthEnabled"), maxOutputHeightEnabled: checked("maxOutputHeightEnabled"),
+    minInputWidthEnabled: checked("minInputWidthEnabled"), minInputHeightEnabled: checked("minInputHeightEnabled"),
+    maxInputWidthEnabled: checked("maxInputWidthEnabled"), maxInputHeightEnabled: checked("maxInputHeightEnabled"),
     outputQuality: Number(value("outputQuality")), performanceBoost: document.getElementById("performanceBoost").checked,
     preprocessingConcurrency: Number(value("preprocessingConcurrency")), upscaleConcurrency: Number(value("upscaleConcurrency")),
   });
@@ -158,6 +178,9 @@ function renderSizeMode() {
   document.getElementById("autoSizePanel").hidden = mode !== "auto";
   document.getElementById("pixelSizePanel").hidden = mode !== "pixel";
   document.getElementById("screenSizePanel").hidden = mode !== "screen";
+  Object.entries(limitTogglePairs).forEach(([toggleId, inputId]) => {
+    document.getElementById(inputId).disabled = !document.getElementById(toggleId).checked;
+  });
 }
 
 document.getElementById("mode").addEventListener("change", saveSettings);
@@ -166,7 +189,7 @@ document.getElementById("level").addEventListener("change", saveSettings);
 document.getElementById("timeout").addEventListener("change", () => chrome.runtime.sendMessage({
   type: "SET_PROCESSING_TIMEOUT", seconds: Number(document.getElementById("timeout").value),
 }));
-["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost"].forEach((id) => {
+imageSettingIds.forEach((id) => {
   document.getElementById(id).addEventListener("change", saveImageSettings);
 });
 refresh();

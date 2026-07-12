@@ -130,6 +130,9 @@ select {
 .compact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
 .compact-grid label { color: #344454; font-size: 11px; font-weight: 650; }
 .compact-grid select, .compact-grid input { box-sizing: border-box; width: 100%; margin: 4px 0 0; padding: 6px; }
+.compact-grid .limit-control span { display: flex; align-items: center; gap: 5px; }
+.compact-grid .limit-control input[type="checkbox"] { width: auto; margin: 0; padding: 0; }
+.compact-grid .limit-control input[type="number"]:disabled { opacity: .55; background: #eef1f3; }
 .mode-panel { margin: 8px 0; }
 [hidden] { display: none !important; }
 

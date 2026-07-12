@@ -16,11 +16,11 @@
         <label>Size mode<select id="sizingMode"><option value="auto">Auto</option><option value="pixel">Manual pixels</option><option value="screen">Screen preset</option></select></label>
         <div id="autoSizePanel" class="setting-mode-panel"><strong>Automatic sizing</strong><small>Uses image position, margins, viewport, screen size and DPR.</small></div>
         <div id="screenSizePanel" class="setting-mode-panel"><label>Quality preset<select id="resolutionPreset"><option value="hd">HD 1280×720</option><option value="fhd">Full HD 1920×1080</option><option value="2k">2K 2560×1440</option><option value="4k">4K 3840×2160</option></select></label><label>Screen orientation<select id="screenOrientation"><option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label></div>
-        <div id="pixelSizePanel" class="setting-mode-panel"><label>Max output width<input id="maxOutputWidth" type="number" min="256" max="16383"></label><label>Max output height<input id="maxOutputHeight" type="number" min="256" max="16383"></label></div>
-        <label>Min input width<input id="minInputWidth" type="number" min="1" max="16383"></label>
-        <label>Min input height<input id="minInputHeight" type="number" min="1" max="16383"></label>
-        <label>Max input width<input id="maxInputWidth" type="number" min="1" max="32768"></label>
-        <label>Max input height<input id="maxInputHeight" type="number" min="1" max="32768"></label>
+        <div id="pixelSizePanel" class="setting-mode-panel"><label class="limit-control"><span><input id="maxOutputWidthEnabled" type="checkbox"> Max output width</span><input id="maxOutputWidth" type="number" min="256" max="16383"></label><label class="limit-control"><span><input id="maxOutputHeightEnabled" type="checkbox"> Max output height</span><input id="maxOutputHeight" type="number" min="256" max="16383"></label></div>
+        <label class="limit-control"><span><input id="minInputWidthEnabled" type="checkbox"> Min input width</span><input id="minInputWidth" type="number" min="1" max="16383"></label>
+        <label class="limit-control"><span><input id="minInputHeightEnabled" type="checkbox"> Min input height</span><input id="minInputHeight" type="number" min="1" max="16383"></label>
+        <label class="limit-control"><span><input id="maxInputWidthEnabled" type="checkbox"> Max input width</span><input id="maxInputWidth" type="number" min="1" max="32768"></label>
+        <label class="limit-control"><span><input id="maxInputHeightEnabled" type="checkbox"> Max input height</span><input id="maxInputHeight" type="number" min="1" max="32768"></label>
         <label>WebP quality<input id="outputQuality" type="number" min="50" max="100"></label>
         <label>Parallel preprocessing<input id="preprocessingConcurrency" type="number" min="1" max="12"></label>
         <label>Parallel upscale requests<input id="upscaleConcurrency" type="number" min="1" max="2"></label>
