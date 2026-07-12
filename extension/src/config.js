@@ -24,4 +24,9 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     maxAttempts: 3,
     baseDelayMs: 750,
   },
+  enhancement: {
+    defaultMode: "auto",
+    defaultLevel: 0.35,
+    modes: ["auto", "manga", "artwork", "photo"],
+  },
 });

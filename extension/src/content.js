@@ -16,11 +16,13 @@ class ImageProvider {
   }
 
   read(image) {
+    const originalSource = image.dataset.aiMangaOriginalSrc;
+    const stableUrl = originalSource ? new URL(originalSource, document.baseURI).href : image.currentSrc || image.src;
     return {
-      imageUrl: image.currentSrc || image.src,
-      src: image.getAttribute("src"),
-      srcset: image.getAttribute("srcset"),
-      sizes: image.getAttribute("sizes"),
+      imageUrl: stableUrl,
+      src: originalSource || image.getAttribute("src"),
+      srcset: image.dataset.aiMangaOriginalSrcset || image.getAttribute("srcset"),
+      sizes: image.dataset.aiMangaOriginalSizes || image.getAttribute("sizes"),
       width: image.width || image.clientWidth,
       height: image.height || image.clientHeight,
       pictureSources: this.readPictureSources(image),
@@ -195,6 +197,15 @@ class ViewportImageProvider {
     } else {
       trackedImages.forEach((entry) => this.cancel(entry));
     }
+  }
+
+  reprocessVisibleImages() {
+    processedImageUrls.clear();
+    document.querySelectorAll("img").forEach((image) => {
+      if (this.viewportDistance(image) <= AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx) {
+        this.schedule(image);
+      }
+    });
   }
 
   observeExistingImages() {
@@ -372,6 +383,9 @@ const viewportProvider = new ViewportImageProvider({
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.enabled) {
     viewportProvider.setEnabled(Boolean(changes.enabled.newValue));
+  }
+  if (areaName === "local" && (changes.mode || changes.enhanceLevel)) {
+    viewportProvider.reprocessVisibleImages();
   }
 });
 

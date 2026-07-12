@@ -8,6 +8,7 @@ from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
 from app.services.image_pipeline import EncodedImage, ImagePipeline
+from app.services.image_classifier import ClassificationResult, ImageTypeClassifier
 from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
 from app.services.statistics import MemorySampler, StageTimings
@@ -26,12 +27,14 @@ class UpscalerService:
         downloader: ImageDownloader,
         model_manager: ModelManager,
         pipeline: ImagePipeline,
+        classifier: ImageTypeClassifier,
     ) -> None:
         self.settings = settings
         self.cache = cache
         self.downloader = downloader
         self.model_manager = model_manager
         self.pipeline = pipeline
+        self.classifier = classifier
         self.memory_sampler = MemorySampler()
         self.queue = InferenceQueue(
             max_size=settings.inference.queue_max_size,
@@ -55,9 +58,10 @@ class UpscalerService:
         model_name: str | None = None,
         tile_size: int | None = None,
         enhance_level: float | None = None,
+        mode: str = "auto",
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
-        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level)
+        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level, mode)
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
         return result
@@ -72,11 +76,21 @@ class UpscalerService:
         timings.set("download", download_started)
 
         source_key = sha256_bytes(downloaded.content)
-        model = self.model_manager.get_model(job.model_name)
-        tile_size = self._resolve_tile_size(job.tile_size)
-        enhance_level = self.settings.enhancement.default_level if job.enhance_level is None else job.enhance_level
+        decode_started = time.perf_counter()
+        image = await self.pipeline.decode(downloaded.content)
+        timings.set("decode", decode_started)
+
+        classification = self._resolve_mode(job.mode, image)
+        profile = self.settings.modes[classification.mode]
+        model = self.model_manager.get_model(job.model_name or profile.model)
+        requested_tile_size = self._resolve_tile_size(job.tile_size)
+        tile_size = model.fixed_tile_size or requested_tile_size
+        overlap = min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
+        enhance_level = profile.enhance_level if job.enhance_level is None else job.enhance_level
         enhancement_key = round(enhance_level, 3)
-        output_key = f"{source_key}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}-webp"
+        output_key = (
+            f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}-webp"
+        )
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
         if final_path.exists():
@@ -97,18 +111,18 @@ class UpscalerService:
                 provider=model.provider,
                 scale=model.scale,
                 timings=timings.values,
+                requested_mode=job.mode,
+                classification=classification,
+                tile_size=tile_size,
+                enhance_level=enhance_level,
             )
-
-        decode_started = time.perf_counter()
-        image = await self.pipeline.decode(downloaded.content)
-        timings.set("decode", decode_started)
 
         inference_started = time.perf_counter()
         output = await self.pipeline.infer_tiled(
             image=image,
             model=model,
             tile_size=tile_size,
-            overlap=self.settings.inference.tile_overlap,
+            overlap=overlap,
             batch_size=self.settings.inference.batch_size,
         )
         timings.set("inference", inference_started)
@@ -116,6 +130,8 @@ class UpscalerService:
 
         enhance_started = time.perf_counter()
         enhanced_image = await self.pipeline.enhance(output.image, enhance_level)
+        if profile.preserve_grayscale:
+            enhanced_image = enhanced_image.convert("L").convert("RGB")
         timings.set("enhance", enhance_started)
 
         encode_started = time.perf_counter()
@@ -151,6 +167,10 @@ class UpscalerService:
             provider=model.provider,
             scale=model.scale,
             timings=timings.values,
+            requested_mode=job.mode,
+            classification=classification,
+            tile_size=tile_size,
+            enhance_level=enhance_level,
         )
 
     def _response(
@@ -163,6 +183,10 @@ class UpscalerService:
         provider: str,
         scale: int,
         timings: dict[str, float],
+        requested_mode: str,
+        classification: ClassificationResult,
+        tile_size: int,
+        enhance_level: float,
     ) -> UpscaleResponse:
         """Build an API response compatible with the existing extension."""
         filename = self.cache.public_filename(output_path)
@@ -174,14 +198,27 @@ class UpscalerService:
             contentType=output.content_type,
             bytesWritten=len(output.content),
             model=model_name,
+            requestedMode=requested_mode,
+            detectedMode=classification.mode,
+            detectionConfidence=classification.confidence,
+            detectionMetrics=classification.metrics,
             provider=provider,
             scale=scale,
+            tileSize=tile_size,
+            enhanceLevel=enhance_level,
             outputWidth=output.width,
             outputHeight=output.height,
             timings=timings,
             memory=self.memory_sampler.snapshot(),
             queue=self.queue.snapshot(),
         )
+
+    def _resolve_mode(self, requested_mode: str, image) -> ClassificationResult:
+        if requested_mode == "auto":
+            return self.classifier.classify(image)
+        if requested_mode not in self.settings.modes:
+            raise ValueError(f"Unknown enhancement mode: {requested_mode}")
+        return ClassificationResult(requested_mode, 1.0, {})
 
     def _resolve_tile_size(self, requested_tile_size: int | None) -> int:
         """Validate and return the effective tile size."""

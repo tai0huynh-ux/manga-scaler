@@ -6,6 +6,10 @@ class PopupController {
     this.document = documentRef;
     this.backendStatus = this.document.getElementById("backendStatus");
     this.enabledToggle = this.document.getElementById("enabledToggle");
+    this.modeSelect = this.document.getElementById("modeSelect");
+    this.enhanceLevel = this.document.getElementById("enhanceLevel");
+    this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
+    this.modeDescription = this.document.getElementById("modeDescription");
     this.processedCount = this.document.getElementById("processedCount");
     this.cacheHitCount = this.document.getElementById("cacheHitCount");
     this.errorCount = this.document.getElementById("errorCount");
@@ -18,6 +22,9 @@ class PopupController {
 
   start() {
     this.enabledToggle.addEventListener("change", () => this.setEnabled(this.enabledToggle.checked));
+    this.modeSelect.addEventListener("change", () => this.saveEnhancementSettings());
+    this.enhanceLevel.addEventListener("input", () => this.renderEnhancementSettings());
+    this.enhanceLevel.addEventListener("change", () => this.saveEnhancementSettings());
     this.refresh();
   }
 
@@ -42,6 +49,9 @@ class PopupController {
   async refreshStats() {
     const stats = await chrome.runtime.sendMessage({ type: "GET_STATS" });
     this.enabledToggle.checked = Boolean(stats.enabled);
+    this.modeSelect.value = stats.mode || "auto";
+    this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
+    this.renderEnhancementSettings();
     this.processedCount.textContent = String(stats.processed ?? 0);
     this.cacheHitCount.textContent = String(stats.cacheHits ?? 0);
     this.errorCount.textContent = String(stats.errors ?? 0);
@@ -54,6 +64,24 @@ class PopupController {
 
   async setEnabled(enabled) {
     await chrome.runtime.sendMessage({ type: "SET_ENABLED", enabled });
+  }
+
+  async saveEnhancementSettings() {
+    const mode = this.modeSelect.value;
+    const enhanceLevel = Number(this.enhanceLevel.value) / 100;
+    await chrome.runtime.sendMessage({ type: "SET_ENHANCEMENT", mode, enhanceLevel });
+    this.renderEnhancementSettings();
+  }
+
+  renderEnhancementSettings() {
+    const descriptions = {
+      auto: "Detects each image and selects Manga, Artwork, or Photo automatically.",
+      manga: "Preserves grayscale while strengthening line art and dialogue text.",
+      artwork: "Optimized for colored anime, illustrations, and digital artwork.",
+      photo: "Uses the general Real-ESRGAN model for photographic detail.",
+    };
+    this.enhanceLevelValue.textContent = `${this.enhanceLevel.value}%`;
+    this.modeDescription.textContent = descriptions[this.modeSelect.value] || descriptions.auto;
   }
 
   setBackendStatus(text, isOnline) {

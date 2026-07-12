@@ -38,7 +38,10 @@
       },
       "general_x4": {
         "file": "general_x4.onnx",
-        "scale": 4
+        "scale": 4,
+        "url": "https://huggingface.co/imgdesignart/realesrgan-x4-onnx/resolve/main/onnx/model.onnx?download=true",
+        "sha256": "fa18ce70de3a55f3149d0cc898d335d2d69fca29edc0692cb362c856b2942c3f",
+        "autoDownload": true
       }
     },
     "providerPreference": [
@@ -62,6 +65,18 @@
     "contrast": 1.08,
     "color": 1.0,
     "denoise": 0.12
+  },
+  "modes": {
+    "manga": {"model": "anime_x4", "enhanceLevel": 0.42, "preserveGrayscale": true},
+    "artwork": {"model": "anime_x4", "enhanceLevel": 0.32, "preserveGrayscale": false},
+    "photo": {"model": "general_x4", "enhanceLevel": 0.22, "preserveGrayscale": false}
+  },
+  "autoDetection": {
+    "sampleSize": 256,
+    "grayscaleThreshold": 0.055,
+    "mangaGrayscaleRatio": 0.9,
+    "artworkPaletteRatio": 0.12,
+    "artworkSaturation": 0.2
   },
   "encoding": {
     "format": "WEBP",

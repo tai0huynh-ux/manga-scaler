@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AI Manga Upscaler</title>
+    <title>Universal AI Image Enhancer</title>
     <link rel="stylesheet" href="styles/popup.css">
   </head>
   <body>
     <main class="popup-shell">
       <header class="header">
         <div>
-          <h1>AI Manga Upscaler</h1>
+          <h1>Universal AI Enhancer</h1>
           <p id="backendStatus" class="status status-muted">Checking backend</p>
         </div>
         <label class="switch" title="Enable or disable image processing">
@@ -18,6 +18,22 @@
           <span class="switch-track"></span>
         </label>
       </header>
+
+      <section class="controls" aria-label="Enhancement controls">
+        <label class="control-label" for="modeSelect">Enhancement mode</label>
+        <select id="modeSelect">
+          <option value="auto">🤖 Auto Mode</option>
+          <option value="manga">📖 Manga Mode</option>
+          <option value="artwork">🎨 Anime / Artwork Mode</option>
+          <option value="photo">📷 Photo Mode</option>
+        </select>
+        <div class="range-heading">
+          <label class="control-label" for="enhanceLevel">Enhancement strength</label>
+          <output id="enhanceLevelValue" for="enhanceLevel">35%</output>
+        </div>
+        <input id="enhanceLevel" type="range" min="0" max="100" step="5" value="35">
+        <p id="modeDescription" class="mode-description"></p>
+      </section>
 
       <section class="stats-grid" aria-label="Extension statistics">
         <article class="stat">

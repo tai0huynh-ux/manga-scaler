@@ -2,6 +2,8 @@ importScripts("./config.js");
 
 const DEFAULT_STATE = Object.freeze({
   enabled: true,
+  mode: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
+  enhanceLevel: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
   processed: 0,
   errors: 0,
   cacheHits: 0,
@@ -48,6 +50,8 @@ class StatisticsTracker {
 
     return {
       enabled: Boolean(current.enabled),
+      mode: current.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
+      enhanceLevel: Number(current.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
       processed,
       errors: Number(current.errors ?? 0),
       cacheHits,
@@ -118,6 +122,7 @@ class IndexedDBCacheProvider {
       buffer: record.buffer,
       contentType: record.contentType,
       cacheKey: record.cacheKey,
+      detectedMode: record.detectedMode,
     };
   }
 
@@ -129,6 +134,7 @@ class IndexedDBCacheProvider {
       buffer: value.buffer,
       contentType: value.contentType,
       cacheKey: value.cacheKey,
+      detectedMode: value.detectedMode,
       byteLength: value.buffer.byteLength,
       lastAccessedAt: Date.now(),
     });
@@ -247,7 +253,7 @@ class BackendUpscaleProvider {
     this.requestTimeoutMs = requestTimeoutMs;
   }
 
-  async upscale(imageUrl, abortSignal) {
+  async upscale(imageUrl, options, abortSignal) {
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
     const signal = this.combineSignals(abortSignal, timeoutController.signal);
@@ -256,7 +262,11 @@ class BackendUpscaleProvider {
       const response = await fetch(`${this.baseUrl}/upscale`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrl }),
+        body: JSON.stringify({
+          imageUrl,
+          mode: options.mode,
+          enhanceLevel: options.enhanceLevel,
+        }),
         signal,
       });
       if (!response.ok) {
@@ -275,6 +285,7 @@ class BackendUpscaleProvider {
         contentType: metadata.contentType || imageResponse.headers.get("content-type") || "image/png",
         cacheKey: metadata.cacheKey,
         backendCacheHit: Boolean(metadata.cacheHit),
+        detectedMode: metadata.detectedMode,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -379,7 +390,8 @@ class QueueScheduler {
   async process(job) {
     const startedAt = performance.now();
     try {
-      const cached = await this.cacheProvider.get(job.imageUrl);
+      const cacheIdentity = `${job.imageUrl}|${job.mode}|${job.enhanceLevel}`;
+      const cached = await this.cacheProvider.get(cacheIdentity);
       if (job.abortController.signal.aborted) {
         return;
       }
@@ -392,11 +404,15 @@ class QueueScheduler {
         return;
       }
 
-      const result = await this.upscaleProvider.upscale(job.imageUrl, job.abortController.signal);
+      const result = await this.upscaleProvider.upscale(
+        job.imageUrl,
+        { mode: job.mode, enhanceLevel: job.enhanceLevel },
+        job.abortController.signal,
+      );
       if (job.abortController.signal.aborted) {
         return;
       }
-      await this.cacheProvider.set(job.imageUrl, result);
+      await this.cacheProvider.set(cacheIdentity, result);
       await this.statisticsTracker.recordSuccess({
         latencyMs: performance.now() - startedAt,
         cacheHit: false,
@@ -433,6 +449,7 @@ class QueueScheduler {
       contentType: result.contentType,
       cacheKey: result.cacheKey,
       cacheHit,
+      detectedMode: result.detectedMode || job.mode,
     });
   }
 
@@ -484,14 +501,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
 
-    scheduler.enqueue({
-      tabId: sender.tab.id,
-      imageId: message.imageId,
-      imageUrl: message.imageUrl,
-      viewportDistance: message.viewportDistance,
+    chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+      scheduler.enqueue({
+        tabId: sender.tab.id,
+        imageId: message.imageId,
+        imageUrl: message.imageUrl,
+        viewportDistance: message.viewportDistance,
+        mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
+        enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
+      });
+      sendResponse({ accepted: true });
     });
-    sendResponse({ accepted: true });
-    return false;
+    return true;
   }
 
   if (message.type === "UPDATE_PRIORITY") {
@@ -515,6 +536,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.set({ enabled: Boolean(message.enabled) }).then(() => {
       sendResponse({ enabled: Boolean(message.enabled) });
     });
+    return true;
+  }
+
+  if (message.type === "SET_ENHANCEMENT") {
+    const mode = AI_MANGA_UPSCALER_CONFIG.enhancement.modes.includes(message.mode) ? message.mode : "auto";
+    const enhanceLevel = Math.min(Math.max(Number(message.enhanceLevel) || 0, 0), 1);
+    chrome.storage.local.set({ mode, enhanceLevel }).then(() => sendResponse({ mode, enhanceLevel }));
     return true;
   }
 

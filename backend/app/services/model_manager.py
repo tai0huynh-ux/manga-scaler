@@ -32,6 +32,7 @@ class LoadedModel:
     mtime: float
     provider: str
     run_lock: threading.Lock
+    fixed_tile_size: int | None
 
 
 class ModelManager:
@@ -130,6 +131,14 @@ class ModelManager:
             providers=[provider],
         )
         input_name = session.get_inputs()[0].name
+        input_shape = session.get_inputs()[0].shape
+        fixed_tile_size = (
+            input_shape[2]
+            if len(input_shape) == 4
+            and isinstance(input_shape[2], int)
+            and input_shape[2] == input_shape[3]
+            else None
+        )
         output_name = session.get_outputs()[0].name
         loaded = LoadedModel(
             name=model_name,
@@ -141,6 +150,7 @@ class ModelManager:
             mtime=path.stat().st_mtime,
             provider=provider,
             run_lock=threading.Lock(),
+            fixed_tile_size=fixed_tile_size,
         )
         self.loaded[model_name] = loaded
         LOGGER.info("Loaded ONNX model", extra={"_model": model_name, "_path": str(path), "_provider": provider})

@@ -27,6 +27,7 @@ def fake_model() -> LoadedModel:
         mtime=0,
         provider="CPUExecutionProvider",
         run_lock=threading.Lock(),
+        fixed_tile_size=None,
     )
 
 

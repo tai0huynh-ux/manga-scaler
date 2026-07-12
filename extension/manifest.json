@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "AI Manga Upscaler",
-  "description": "Local manga image upscaling pipeline for pages viewed in Chrome or Edge.",
-  "version": "0.1.0",
+  "name": "Universal AI Image Enhancer",
+  "description": "Local DirectML enhancement for manga, artwork, anime, and photos.",
+  "version": "0.2.0",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "AI Manga Upscaler"
+    "default_title": "Universal AI Image Enhancer"
   },
   "background": {
     "service_worker": "src/background.js"

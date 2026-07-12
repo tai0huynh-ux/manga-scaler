@@ -54,6 +54,7 @@ async def upscale(
             model_name=payload.model,
             tile_size=payload.tile_size,
             enhance_level=payload.enhance_level,
+            mode=payload.mode,
         )
     except FileNotFoundError as exc:
         raise HTTPException(

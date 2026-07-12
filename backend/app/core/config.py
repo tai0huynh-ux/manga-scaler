@@ -97,6 +97,24 @@ class EnhancementConfig(BaseModel):
     denoise: float = Field(ge=0.0, le=1.0)
 
 
+class ModeConfig(BaseModel):
+    """Model and post-processing defaults for one content mode."""
+
+    model: str
+    enhance_level: float = Field(alias="enhanceLevel", ge=0.0, le=1.0)
+    preserve_grayscale: bool = Field(alias="preserveGrayscale")
+
+
+class AutoDetectionConfig(BaseModel):
+    """Thresholds for deterministic image-type classification."""
+
+    sample_size: int = Field(alias="sampleSize", ge=32, le=1024)
+    grayscale_threshold: float = Field(alias="grayscaleThreshold", ge=0.0, le=1.0)
+    manga_grayscale_ratio: float = Field(alias="mangaGrayscaleRatio", ge=0.0, le=1.0)
+    artwork_palette_ratio: float = Field(alias="artworkPaletteRatio", ge=0.0, le=1.0)
+    artwork_saturation: float = Field(alias="artworkSaturation", ge=0.0, le=1.0)
+
+
 class LoggingConfig(BaseModel):
     """Structured rotating log settings."""
 
@@ -114,9 +132,21 @@ class Settings(BaseModel):
     download: DownloadConfig
     inference: InferenceConfig
     enhancement: EnhancementConfig
+    modes: dict[str, ModeConfig]
+    auto_detection: AutoDetectionConfig = Field(alias="autoDetection")
     encoding: EncodingConfig
     logging: LoggingConfig
     root_dir: Path = Field(exclude=True)
+
+    @model_validator(mode="after")
+    def validate_modes(self) -> "Settings":
+        required = {"manga", "artwork", "photo"}
+        if not required.issubset(self.modes):
+            raise ValueError("modes must configure manga, artwork, and photo.")
+        unknown = {profile.model for profile in self.modes.values()} - set(self.inference.models)
+        if unknown:
+            raise ValueError(f"Mode profiles reference unknown models: {sorted(unknown)}")
+        return self
 
     def resolve_path(self, path: Path) -> Path:
         """Resolve relative config paths against the backend directory."""

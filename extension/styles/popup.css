@@ -97,6 +97,55 @@ h1 {
   gap: 8px;
 }
 
+.controls {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #d7d2c8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.control-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #344454;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+select,
+input[type="range"] {
+  width: 100%;
+}
+
+select {
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid #b8c1ca;
+  border-radius: 7px;
+  background: #fff;
+  color: #13212e;
+}
+
+.range-heading {
+  display: flex;
+  justify-content: space-between;
+}
+
+.range-heading output {
+  color: #216e8f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mode-description {
+  min-height: 32px;
+  margin: 8px 0 0;
+  color: #687684;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .stat {
   min-height: 74px;
   padding: 12px;

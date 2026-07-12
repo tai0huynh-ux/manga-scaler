@@ -13,6 +13,7 @@ class InferenceJob:
     """A queued image inference job."""
 
     image_url: str
+    mode: str
     model_name: str | None
     tile_size: int | None
     enhance_level: float | None
@@ -58,13 +59,19 @@ class InferenceQueue:
         await asyncio.gather(*self.workers, return_exceptions=True)
 
     async def submit(
-        self, image_url: str, model_name: str | None, tile_size: int | None, enhance_level: float | None = None
+        self,
+        image_url: str,
+        model_name: str | None,
+        tile_size: int | None,
+        enhance_level: float | None = None,
+        mode: str = "auto",
     ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         job = InferenceJob(
             image_url=image_url,
+            mode=mode,
             model_name=model_name,
             tile_size=tile_size,
             enhance_level=enhance_level,

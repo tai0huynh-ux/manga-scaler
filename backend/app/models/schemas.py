@@ -1,6 +1,6 @@
 """Request and response contracts for the local REST API."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_serializer
 
@@ -21,6 +21,9 @@ class UpscaleRequest(BaseModel):
     """Payload sent by the extension when it discovers an image."""
 
     image_url: HttpUrl = Field(alias="imageUrl", description="Absolute source image URL.")
+    mode: Literal["auto", "manga", "artwork", "photo"] = Field(
+        default="auto", description="Universal enhancement mode."
+    )
     model: str | None = Field(default=None, description="Optional model override.")
     tile_size: int | None = Field(default=None, alias="tileSize", description="Optional tile size override.")
     enhance_level: float | None = Field(
@@ -41,8 +44,14 @@ class UpscaleResponse(BaseModel):
     content_type: str = Field(alias="contentType", description="Downloaded image MIME type.")
     bytes_written: int = Field(alias="bytesWritten", description="Image byte size.")
     model: str | None = Field(default=None, description="Model used for inference.")
+    requested_mode: str | None = Field(default=None, alias="requestedMode")
+    detected_mode: str | None = Field(default=None, alias="detectedMode")
+    detection_confidence: float | None = Field(default=None, alias="detectionConfidence")
+    detection_metrics: dict[str, float] = Field(default_factory=dict, alias="detectionMetrics")
     provider: str | None = Field(default=None, description="ONNX Runtime provider used for inference.")
     scale: int | None = Field(default=None, description="Model scale factor.")
+    tile_size: int | None = Field(default=None, alias="tileSize", description="Effective model tile size.")
+    enhance_level: float | None = Field(default=None, alias="enhanceLevel")
     output_width: int | None = Field(default=None, alias="outputWidth", description="Output image width.")
     output_height: int | None = Field(default=None, alias="outputHeight", description="Output image height.")
     timings: dict[str, float] = Field(default_factory=dict, description="Stage timings in milliseconds.")

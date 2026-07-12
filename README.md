@@ -1,6 +1,15 @@
-# AI Manga Upscaler
+# Universal AI Image Enhancer
 
-AI Manga Upscaler is a local-first image upscaling service for manga pages. Phase 2 runs production-oriented ONNX Runtime inference with automatic DirectML, CUDA, or CPU provider selection. Images are downloaded, decoded with Pillow, processed in overlapping tiles, merged, encoded as WebP, cached, and returned to the existing browser extension.
+Universal AI Image Enhancer is a local-first image enhancement service for manga, anime/artwork, and photos. It runs ONNX Runtime with automatic DirectML, CUDA, or CPU provider selection. Images are downloaded, classified when Auto Mode is active, processed with a mode-specific Real-ESRGAN model and profile, encoded as WebP, cached, and returned to the browser extension.
+
+## Universal modes
+
+- **Manga:** Real-ESRGAN anime 6B with grayscale preservation and stronger line/text enhancement.
+- **Anime / Artwork:** Real-ESRGAN anime 6B with color-preserving artwork enhancement.
+- **Photo:** General Real-ESRGAN x4 for photographic textures.
+- **Auto:** Uses grayscale ratio, saturation, edge density, and palette complexity to select one of the modes per image.
+
+Both production models download automatically on first use and are pinned by SHA-256. Auto classification is deterministic and local; no image is sent to a third-party classification service.
 
 ## Project Layout
 
@@ -74,7 +83,7 @@ The health response includes the active provider/model, GPU diagnostics, queue a
 
 Compatible models use float32 RGB NCHW input and output. Configured filenames are `anime_x2.onnx`, `anime_x4.onnx`, and `general_x4.onnx`; only the selected model must be installed. The service starts without model files so `/health` remains available, while an unavailable requested model returns HTTP 503.
 
-`anime_x4` is configured for automatic download on first use. The download is written atomically and accepted only when its SHA-256 matches `config.json`. Other model entries are optional local slots and return HTTP 503 until you provide compatible ONNX files.
+`anime_x4` and `general_x4` are configured for automatic download on first use. Downloads are written atomically and accepted only when their SHA-256 matches `config.json`. `anime_x2` remains an optional local slot.
 
 Control post-processing per request with `enhanceLevel` from `0.0` to `1.0`. `0` preserves the neural output, the default is `0.35`, and `1` applies the full sharpness, contrast, color, and denoise values from the `enhancement` section of `backend/config.json`:
 
