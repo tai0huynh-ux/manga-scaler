@@ -18,6 +18,8 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     maxHeightPx: 12000,
     maxOutputWidthPx: 2048,
     maxOutputHeightPx: 8192,
+    slicingEnabled: true,
+    sliceMaxHeightPx: 2200,
     outputQuality: 90,
     prefetchMarginPx: 1800,
     cancelDistancePx: 3600,

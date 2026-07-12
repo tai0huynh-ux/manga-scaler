@@ -60,7 +60,6 @@ class ImageProvider {
 class Renderer {
   constructor() {
     this.activeObjectUrls = new WeakMap();
-    this.segmentLayers = new WeakMap();
     this.installStyles();
   }
 
@@ -71,11 +70,6 @@ class Renderer {
 
     const metadata = trackedImages.get(payload.imageId)?.metadata;
     if (!metadata) {
-      return;
-    }
-
-    if (metadata.segment) {
-      await this.renderSegment(image, payload, metadata);
       return;
     }
 
@@ -101,44 +95,32 @@ class Renderer {
     }
   }
 
-  async renderSegment(image, payload, metadata) {
-    const layer = this.ensureSegmentLayer(image, metadata);
-    const blob = new Blob([this.base64ToUint8Array(payload.imageBase64)], {
-      type: payload.contentType || "image/png",
-    });
-    const objectUrl = URL.createObjectURL(blob);
-    const segmentImage = new Image();
-    segmentImage.className = "ai-enhancer-segment";
-    segmentImage.alt = "";
-    segmentImage.style.top = `${metadata.segment.renderedTop}px`;
-    segmentImage.style.height = `${metadata.segment.renderedHeight}px`;
-    segmentImage.src = objectUrl;
-    await this.waitForImageLoad(segmentImage);
-    layer.appendChild(segmentImage);
-    const urls = this.activeObjectUrls.get(image) || [];
-    urls.push(objectUrl);
-    this.activeObjectUrls.set(image, urls);
-  }
-
-  ensureSegmentLayer(image, metadata) {
-    const existing = this.segmentLayers.get(image);
-    if (existing) return existing.layer;
-
+  installRawSlices(image, metadata, segments) {
     const wrapper = document.createElement("div");
-    wrapper.className = "ai-enhancer-segment-wrapper";
-    wrapper.style.width = `${metadata.width}px`;
-    wrapper.style.height = `${metadata.height}px`;
+    wrapper.className = "ai-enhancer-slice-wrapper";
+    if (metadata.width > 0) {
+      wrapper.style.width = `${metadata.width}px`;
+      wrapper.style.maxWidth = "100%";
+    }
     image.parentNode.insertBefore(wrapper, image);
-    wrapper.appendChild(image);
-    image.style.width = "100%";
-    image.style.height = "100%";
-    image.style.display = "block";
+    image.style.display = "none";
+    image.dataset.aiEnhancerSliced = "true";
 
-    const layer = document.createElement("div");
-    layer.className = "ai-enhancer-segment-layer";
-    wrapper.appendChild(layer);
-    this.segmentLayers.set(image, { wrapper, layer });
-    return layer;
+    return segments.map((segment) => {
+      const raw = new Image();
+      raw.className = "ai-enhancer-raw-slice";
+      raw.dataset.aiEnhancerRawSlice = "true";
+      raw.alt = image.alt || "";
+      raw.decoding = "async";
+      raw.src = segment.objectUrl;
+      raw.style.width = metadata.width > 0 ? `${metadata.width}px` : "100%";
+      raw.style.height = `${segment.renderedHeight}px`;
+      raw.style.display = "block";
+      raw.style.objectFit = "fill";
+      wrapper.appendChild(raw);
+      this.activeObjectUrls.set(raw, segment.objectUrl);
+      return raw;
+    });
   }
 
   freezeLayout(image, metadata) {
@@ -209,30 +191,14 @@ class Renderer {
         opacity: 1 !important;
       }
 
-      .ai-enhancer-segment-wrapper {
-        position: relative !important;
-        overflow: hidden !important;
+      .ai-enhancer-slice-wrapper {
         display: block !important;
       }
 
-      .ai-enhancer-segment-layer {
-        position: absolute !important;
-        inset: 0 !important;
-        z-index: 2 !important;
-        pointer-events: none !important;
-      }
-
-      .ai-enhancer-segment {
-        position: absolute !important;
-        left: 0 !important;
-        width: 100% !important;
-        object-fit: fill !important;
-        opacity: 0;
-        animation: ai-enhancer-segment-in 160ms ease forwards;
-      }
-
-      @keyframes ai-enhancer-segment-in {
-        to { opacity: 1; }
+      .ai-enhancer-raw-slice {
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
       }
     `;
     document.documentElement.appendChild(style);
@@ -261,6 +227,8 @@ class ViewportImageProvider {
     this.preprocessingActive = 0;
     this.preprocessingWaiters = [];
     this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
+    this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
+    this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
     this.intersectionObserver = new IntersectionObserver(
       (entries) => this.handleIntersections(entries),
@@ -284,11 +252,15 @@ class ViewportImageProvider {
       minInputHeightEnabled: true,
       maxInputWidthEnabled: true,
       maxInputHeightEnabled: true,
+      imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
+      imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
       preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
     });
     this.enabled = stored.enabled;
     this.blacklist = new Set(stored.blacklistRules || []);
     this.imageProvider.updateLimits(stored);
+    this.imageSlicingEnabled = stored.imageSlicingEnabled !== false;
+    this.imageSliceMaxHeight = Number(stored.imageSliceMaxHeight) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.preprocessingConcurrency = Number(stored.preprocessingConcurrency) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.observeExistingImages();
     this.mutationObserver.observe(document.documentElement, {
@@ -342,6 +314,9 @@ class ViewportImageProvider {
   }
 
   observeImage(image) {
+    if (image.dataset.aiEnhancerRawSlice === "true" || image.dataset.aiEnhancerSliced === "true") {
+      return;
+    }
     if (image.dataset.aiMangaUpscalerObserved === "true") {
       return;
     }
@@ -390,6 +365,9 @@ class ViewportImageProvider {
   }
 
   async schedule(image, allowSegments = true) {
+    if (image.dataset.aiEnhancerRawSlice === "true" || image.dataset.aiEnhancerSliced === "true") {
+      return;
+    }
     const metadata = this.imageProvider.read(image);
     if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
       return;
@@ -403,7 +381,7 @@ class ViewportImageProvider {
     }
     image.dataset.aiEnhancerImageId = imageId;
     processedImageUrls.add(baseKey);
-    if (allowSegments && this.shouldSegmentImage(image)) {
+    if (allowSegments && this.shouldSliceImage(image)) {
       await this.scheduleSegments(image, metadata, imageId, baseKey);
       return;
     }
@@ -459,16 +437,24 @@ class ViewportImageProvider {
       return;
     }
 
+    const rawImages = this.renderer.installRawSlices(image, metadata, segments);
+    await Promise.all(rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
     for (const segment of segments) {
       const segmentId = `${imageId}-seg-${segment.index}`;
+      const rawImage = rawImages[segment.index];
       const segmentMetadata = {
         ...metadata,
         imageUrl: `${metadata.imageUrl}#ai-segment-${segment.index}`,
-        segment,
+        src: segment.objectUrl,
+        srcset: null,
+        sizes: null,
+        width: metadata.width,
+        height: segment.renderedHeight,
+        pictureSources: [],
       };
       trackedImages.set(segmentId, {
         imageId: segmentId,
-        image,
+        image: rawImage,
         metadata: segmentMetadata,
         state: "waiting",
       });
@@ -482,9 +468,9 @@ class ViewportImageProvider {
         imageUrl: metadata.imageUrl,
         imageData: segment.imageData,
         cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
-        viewportDistance: this.viewportDistance(image) + segment.index,
+        viewportDistance: this.viewportDistance(rawImage) + segment.index,
         displayMetrics: {
-          ...this.displayMetrics(image),
+          ...this.displayMetrics(rawImage),
           sourceHeight: segment.sourceHeight,
           renderedHeight: segment.renderedHeight,
         },
@@ -492,10 +478,11 @@ class ViewportImageProvider {
     }
   }
 
-  shouldSegmentImage(image) {
+  shouldSliceImage(image) {
+    if (!this.imageSlicingEnabled) return false;
     const sourceHeight = image.naturalHeight || 0;
     const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || 0;
-    return sourceHeight >= 4096 || renderedHeight > window.innerHeight * 1.8;
+    return sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
   }
 
   async cropImageSegments(imageData, image) {
@@ -503,7 +490,7 @@ class ViewportImageProvider {
     const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || source.height;
     const sourcePerRenderedPixel = source.height / Math.max(renderedHeight, 1);
     const screenSourceHeight = Math.round((window.innerHeight || 900) * 1.25 * sourcePerRenderedPixel);
-    const segmentSourceHeight = Math.min(Math.max(screenSourceHeight, 768), 3072);
+    const segmentSourceHeight = Math.min(Math.max(screenSourceHeight, 512), this.imageSliceMaxHeight);
     const renderedPerSourcePixel = renderedHeight / source.height;
     const segments = [];
     for (let sourceY = 0, index = 0; sourceY < source.height; sourceY += segmentSourceHeight, index += 1) {
@@ -519,7 +506,7 @@ class ViewportImageProvider {
         sourceHeight,
         renderedTop: sourceY * renderedPerSourcePixel,
         renderedHeight: sourceHeight * renderedPerSourcePixel,
-        imageData: await this.canvasToBase64(canvas),
+        ...(await this.canvasToSegmentPayload(canvas)),
       });
     }
     return segments;
@@ -542,15 +529,23 @@ class ViewportImageProvider {
     return "image/png";
   }
 
-  canvasToBase64(canvas) {
+  canvasToSegmentPayload(canvas) {
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (!blob) {
           reject(new Error("Unable to encode image segment."));
           return;
         }
+        const objectUrl = URL.createObjectURL(blob);
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+        reader.onload = () => resolve({
+          objectUrl,
+          imageData: String(reader.result).split(",", 2)[1] || "",
+        });
+        reader.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error("Unable to read image segment."));
+        };
         reader.readAsDataURL(blob);
       }, "image/png");
     });
@@ -782,6 +777,16 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   if (areaName === "local" && changes.preprocessingConcurrency) {
     viewportProvider.preprocessingConcurrency = Number(changes.preprocessingConcurrency.newValue) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
+  }
+  if (areaName === "local" && (changes.imageSlicingEnabled || changes.imageSliceMaxHeight)) {
+    chrome.storage.local.get({
+      imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
+      imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
+    }).then((settings) => {
+      viewportProvider.imageSlicingEnabled = settings.imageSlicingEnabled !== false;
+      viewportProvider.imageSliceMaxHeight = Number(settings.imageSliceMaxHeight) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
+      viewportProvider.reprocessVisibleImages();
+    });
   }
 });
 

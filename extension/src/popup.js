@@ -15,7 +15,8 @@ class PopupController {
       "maxOutputWidthEnabled", "maxOutputHeightEnabled", "maxOutputWidth", "maxOutputHeight",
       "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
       "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
-      "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost",
+      "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
+      "imageSlicingEnabled", "imageSliceMaxHeight", "performanceBoost",
     ];
     this.limitTogglePairs = {
       maxOutputWidthEnabled: "maxOutputWidth",
@@ -154,6 +155,8 @@ class PopupController {
       outputQuality: Number(value("outputQuality")),
       preprocessingConcurrency: Number(value("preprocessingConcurrency")),
       upscaleConcurrency: Number(value("upscaleConcurrency")),
+      imageSlicingEnabled: checked("imageSlicingEnabled"),
+      imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),
       performanceBoost: this.document.getElementById("performanceBoost").checked,
     });
   }

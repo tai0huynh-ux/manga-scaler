@@ -54,6 +54,9 @@
           <label>Preprocess parallel<input id="preprocessingConcurrency" type="number" min="1" max="12"></label>
           <label>Upscale parallel<input id="upscaleConcurrency" type="number" min="1" max="2"></label>
         </div>
+        <label class="preview-control"><input id="imageSlicingEnabled" type="checkbox"><span>Slice long images</span></label>
+        <label class="control-label" for="imageSliceMaxHeight">Maximum raw slice height</label>
+        <input id="imageSliceMaxHeight" type="number" min="512" max="8192" step="128">
         <label class="preview-control"><input id="performanceBoost" type="checkbox"><span>Performance boost (larger GPU tiles)</span></label>
         <p id="modeDescription" class="mode-description"></p>
         <label class="preview-control">

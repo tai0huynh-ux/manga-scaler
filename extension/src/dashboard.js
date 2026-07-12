@@ -4,7 +4,8 @@ const imageSettingIds = [
   "maxOutputWidthEnabled", "maxOutputHeightEnabled", "maxOutputWidth", "maxOutputHeight",
   "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
   "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
-  "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost",
+  "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
+  "imageSlicingEnabled", "imageSliceMaxHeight", "performanceBoost",
 ];
 const limitTogglePairs = {
   maxOutputWidthEnabled: "maxOutputWidth",
@@ -201,6 +202,7 @@ async function saveImageSettings() {
     minInputWidthEnabled: checked("minInputWidthEnabled"), minInputHeightEnabled: checked("minInputHeightEnabled"),
     maxInputWidthEnabled: checked("maxInputWidthEnabled"), maxInputHeightEnabled: checked("maxInputHeightEnabled"),
     outputQuality: Number(value("outputQuality")), performanceBoost: document.getElementById("performanceBoost").checked,
+    imageSlicingEnabled: checked("imageSlicingEnabled"), imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),
     preprocessingConcurrency: Number(value("preprocessingConcurrency")), upscaleConcurrency: Number(value("upscaleConcurrency")),
   });
 }
