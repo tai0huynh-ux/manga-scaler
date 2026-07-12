@@ -4,6 +4,7 @@ const DEFAULT_STATE = Object.freeze({
   enabled: true,
   mode: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
   enhanceLevel: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
+  maxProcessingSeconds: AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds,
   seen: 0,
   processed: 0,
   errors: 0,
@@ -13,6 +14,7 @@ const DEFAULT_STATE = Object.freeze({
   lastQuality: null,
   lastDetectedMode: null,
   lastComparison: null,
+  blacklistRules: [],
 });
 
 /**
@@ -87,6 +89,7 @@ class StatisticsTracker {
       enabled: Boolean(current.enabled),
       mode: current.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
       enhanceLevel: Number(current.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
+      maxProcessingSeconds: Number(current.maxProcessingSeconds ?? AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds),
       processed,
       errors: Number(current.errors ?? 0),
       cacheHits,
@@ -99,6 +102,7 @@ class StatisticsTracker {
       lastQuality: current.lastQuality || null,
       lastDetectedMode: current.lastDetectedMode || null,
       lastComparison: current.lastComparison || null,
+      blacklistRules: current.blacklistRules || [],
       scopes: {
         currentPage: { ...currentTab, processing: queueSnapshot.byTab[activeTabId] ?? 0 },
         openPages: { ...openTabs, processing: queueSnapshot.queueSize },
@@ -160,7 +164,7 @@ class PageImageRegistry {
         id: ruleId,
         priority: 1,
         action: { type: "modifyHeaders", requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }] },
-        condition: { urlFilter: `||${hostname}^`, resourceTypes: ["image", "xmlhttprequest", "other"] },
+        condition: { urlFilter: `||${hostname}^`, resourceTypes: ["image", "xmlhttprequest", "other", "main_frame"] },
       }],
     }).catch(() => {});
     this.domainRules.set(key, ruleId);
@@ -364,7 +368,9 @@ class BackendUpscaleProvider {
 
   async upscale(imageUrl, options, abortSignal) {
     const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
+    let timedOut = false;
+    const timeoutMs = Math.max(5, Number(options.maxProcessingSeconds) || 60) * 1000;
+    const timeoutId = setTimeout(() => { timedOut = true; timeoutController.abort(); }, timeoutMs);
     const signal = this.combineSignals(abortSignal, timeoutController.signal);
 
     try {
@@ -402,6 +408,13 @@ class BackendUpscaleProvider {
         originalImageUrl: metadata.originalImageUrl,
         enhancedImageUrl: metadata.imageUrl,
       };
+    } catch (error) {
+      if (timedOut) {
+        const timeoutError = new Error(`Image exceeded the ${Math.round(timeoutMs / 1000)} second processing limit`);
+        timeoutError.code = "PROCESSING_TIMEOUT";
+        throw timeoutError;
+      }
+      throw error;
     } finally {
       if (signal.aborted && options.jobId) {
         await this.cancel(options.jobId);
@@ -510,9 +523,13 @@ class QueueScheduler {
     this.statisticsTracker = statisticsTracker;
     this.pending = new Map();
     this.active = new Map();
+    this.tabGenerations = new Map();
   }
 
   enqueue(job) {
+    const generation = this.tabGenerations.get(job.tabId) || 0;
+    if (job.generation !== undefined && job.generation !== generation) return;
+    job.generation = generation;
     if (this.active.has(job.imageId)) {
       this.updatePriority(job.imageId, job.viewportDistance);
       return;
@@ -552,6 +569,7 @@ class QueueScheduler {
   }
 
   cancelTab(tabId) {
+    this.tabGenerations.set(tabId, (this.tabGenerations.get(tabId) || 0) + 1);
     [...this.pending.values()]
       .filter((job) => job.tabId === tabId)
       .forEach((job) => this.pending.delete(job.imageId));
@@ -594,6 +612,7 @@ class QueueScheduler {
 
   nextJob() {
     return [...this.pending.values()].sort((left, right) => {
+      if (Boolean(left.deferred) !== Boolean(right.deferred)) return left.deferred ? 1 : -1;
       if (left.viewportDistance !== right.viewportDistance) {
         return left.viewportDistance - right.viewportDistance;
       }
@@ -643,6 +662,7 @@ class QueueScheduler {
           pageUrl: job.pageUrl,
           imageData: job.imageData,
           jobId: job.imageId,
+          maxProcessingSeconds: job.maxProcessingSeconds,
         },
         job.abortController.signal,
       );
@@ -677,10 +697,15 @@ class QueueScheduler {
         return;
       }
 
+      if (error?.code === "PROCESSING_TIMEOUT") {
+        pageImageRegistry.update(job.tabId, job.imageId, { status: "timeout", error: error.message });
+      }
       if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
         setTimeout(() => {
-          this.enqueue({ ...job, attempt: job.attempt + 1 });
+          if (job.generation === (this.tabGenerations.get(job.tabId) || 0)) {
+            this.enqueue({ ...job, attempt: job.attempt + 1, deferred: error?.code === "PROCESSING_TIMEOUT" });
+          }
         }, delay);
         return;
       }
@@ -746,12 +771,52 @@ const scheduler = new QueueScheduler({
   statisticsTracker,
 });
 
+async function backendHealthy() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(`${AI_MANGA_UPSCALER_CONFIG.backend.baseUrl}/health`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureBackendStarted() {
+  if (await backendHealthy()) {
+    await chrome.storage.local.set({ backendLaunchStatus: "online", backendLaunchError: null });
+    return { ok: true, status: "online" };
+  }
+  return new Promise((resolve) => {
+    chrome.runtime.sendNativeMessage(
+      "com.universal_ai_image_enhancer.launcher",
+      { command: "start" },
+      async (response) => {
+        const runtimeError = chrome.runtime.lastError?.message;
+        const error = runtimeError || response?.error || null;
+        const ok = Boolean(response?.ok) && !error;
+        await chrome.storage.local.set({
+          backendLaunchStatus: ok ? response.status || "started" : "error",
+          backendLaunchError: error,
+        });
+        resolve({ ok, status: response?.status, error });
+      },
+    );
+  });
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
+  const settings = await chrome.storage.local.get({ enabled: true });
+  if (settings.enabled) await ensureBackendStarted();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await statisticsTracker.ensureDefaults();
+  const settings = await chrome.storage.local.get({ enabled: true });
+  if (settings.enabled) await ensureBackendStarted();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -790,6 +855,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         viewportDistance: message.viewportDistance,
         mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
         enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
+        maxProcessingSeconds: Number(settings.maxProcessingSeconds ?? AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds),
       });
       sendResponse({ accepted: true });
     });
@@ -823,8 +889,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "SET_ENABLED") {
     chrome.storage.local.set({ enabled: Boolean(message.enabled) }).then(() => {
-      sendResponse({ enabled: Boolean(message.enabled) });
+      if (message.enabled) {
+        ensureBackendStarted().then((launch) => sendResponse({ enabled: true, launch }));
+      } else {
+        sendResponse({ enabled: false });
+      }
     });
+    return true;
+  }
+
+  if (message.type === "START_BACKEND") {
+    ensureBackendStarted().then(sendResponse);
     return true;
   }
 
@@ -832,6 +907,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const mode = AI_MANGA_UPSCALER_CONFIG.enhancement.modes.includes(message.mode) ? message.mode : "auto";
     const enhanceLevel = Math.min(Math.max(Number(message.enhanceLevel) || 0, 0), 1);
     chrome.storage.local.set({ mode, enhanceLevel }).then(() => sendResponse({ mode, enhanceLevel }));
+    return true;
+  }
+
+  if (message.type === "SET_PROCESSING_TIMEOUT") {
+    const maxProcessingSeconds = Math.min(Math.max(Number(message.seconds) || 60, 5), 300);
+    chrome.storage.local.set({ maxProcessingSeconds }).then(() => sendResponse({ maxProcessingSeconds }));
     return true;
   }
 
@@ -857,4 +938,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   pageImageRegistry.remove(tabId);
 });
 
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "loading") return;
+  scheduler.cancelTab(tabId);
+  statisticsTracker.removeTab(tabId);
+  pageImageRegistry.remove(tabId);
+});
+
 statisticsTracker.ensureDefaults();
+chrome.storage.local.get({ enabled: true }).then((settings) => {
+  if (settings.enabled) ensureBackendStarted();
+});

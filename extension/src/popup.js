@@ -9,6 +9,7 @@ class PopupController {
     this.modeSelect = this.document.getElementById("modeSelect");
     this.enhanceLevel = this.document.getElementById("enhanceLevel");
     this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
+    this.processingTimeout = this.document.getElementById("processingTimeout");
     this.modeDescription = this.document.getElementById("modeDescription");
     this.previewOriginal = this.document.getElementById("previewOriginal");
     this.qualitySummary = this.document.getElementById("qualitySummary");
@@ -29,6 +30,9 @@ class PopupController {
     this.modeSelect.addEventListener("change", () => this.saveEnhancementSettings());
     this.enhanceLevel.addEventListener("input", () => this.renderEnhancementSettings());
     this.enhanceLevel.addEventListener("change", () => this.saveEnhancementSettings());
+    this.processingTimeout.addEventListener("change", () => chrome.runtime.sendMessage({
+      type: "SET_PROCESSING_TIMEOUT", seconds: Number(this.processingTimeout.value),
+    }));
     this.previewOriginal.addEventListener("change", () => {
       chrome.runtime.sendMessage({ type: "SET_PREVIEW_ORIGINAL", enabled: this.previewOriginal.checked });
     });
@@ -51,7 +55,9 @@ class PopupController {
       const payload = await response.json();
       this.setBackendStatus(payload.status === "ok" ? "Backend online" : "Backend unavailable", true);
     } catch {
-      this.setBackendStatus("Backend offline", false);
+      const launch = await chrome.storage.local.get({ backendLaunchError: null });
+      this.setBackendStatus(launch.backendLaunchError ? "Backend start failed" : "Backend offline", false);
+      this.backendStatus.title = launch.backendLaunchError || "Backend is not reachable.";
     }
   }
 
@@ -60,6 +66,7 @@ class PopupController {
     this.enabledToggle.checked = Boolean(stats.enabled);
     this.modeSelect.value = stats.mode || "auto";
     this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
+    this.processingTimeout.value = String(stats.maxProcessingSeconds ?? 60);
     this.renderEnhancementSettings();
     this.processedCount.textContent = String(stats.processed ?? 0);
     this.cacheHitCount.textContent = String(stats.cacheHits ?? 0);
@@ -89,7 +96,11 @@ class PopupController {
   }
 
   async setEnabled(enabled) {
-    await chrome.runtime.sendMessage({ type: "SET_ENABLED", enabled });
+    const result = await chrome.runtime.sendMessage({ type: "SET_ENABLED", enabled });
+    if (enabled && result?.launch && !result.launch.ok) {
+      this.setBackendStatus("Backend start failed", false);
+      this.backendStatus.title = result.launch.error || "Native launcher failed.";
+    }
   }
 
   async saveEnhancementSettings() {

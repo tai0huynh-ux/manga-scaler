@@ -10,3 +10,4 @@ dist/
 backend/logs/
 backend/models/*.onnx
 backend/models/*.download
+native-host/com.universal_ai_image_enhancer.launcher.json

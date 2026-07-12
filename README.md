@@ -173,6 +173,20 @@ The backend also defines provider protocols in `backend/app/services/providers.p
 
 Run backend tests with `cd backend; ..\.venv\Scripts\python.exe -m pytest -q`.
 
+## Automatic backend startup
+
+Chrome and Edge require a one-time Native Messaging registration before an extension may start a local process. After loading the unpacked extension, copy its ID from `chrome://extensions` or `edge://extensions`, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId "YOUR_EXTENSION_ID"
+```
+
+Reload the extension afterward. When its enable switch is turned on, it checks `/health` and starts the backend through the registered native host when needed. The popup displays `Backend start failed` with the native error in its tooltip if registration, the virtual environment, or startup fails.
+
+Per-image processing timeout is configurable from 5 to 300 seconds in both popup and Dashboard. Timed-out work is cancelled, moved behind normal images, and retried after other work. Closing a tab or navigating that tab to another page cancels queued, active, and delayed-retry jobs belonging to the old page.
+
+Every eligible page image has a `Block AI` button. Blocking stores the normalized image URL without its temporary query token, cancels current work, and prevents that image from being enhanced on later visits. Dashboard settings list blacklist entries and allow removing them.
+
 ## Notes
 
 This project is designed for a trusted local machine. Before exposing the backend to a network, add stricter origin policy, URL allow/deny rules, SSRF protection, and authenticated access.

@@ -153,6 +153,21 @@ class Renderer {
       img.ai-manga-upscaler-ready {
         opacity: 1 !important;
       }
+
+      .ai-enhancer-blacklist-button {
+        position: absolute !important;
+        z-index: 2147483647 !important;
+        padding: 4px 7px !important;
+        border: 1px solid #fff8 !important;
+        border-radius: 6px !important;
+        background: #9b271ee8 !important;
+        color: #fff !important;
+        font: 600 11px/1.2 system-ui, sans-serif !important;
+        cursor: pointer !important;
+        opacity: .78 !important;
+      }
+
+      .ai-enhancer-blacklist-button:hover { opacity: 1 !important; }
     `;
     document.documentElement.appendChild(style);
   }
@@ -176,6 +191,8 @@ class ViewportImageProvider {
     this.renderer = renderer;
     this.enabled = true;
     this.sequence = 0;
+    this.blacklist = new Set();
+    this.blacklistButtons = new WeakMap();
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
     this.intersectionObserver = new IntersectionObserver(
       (entries) => this.handleIntersections(entries),
@@ -189,8 +206,9 @@ class ViewportImageProvider {
   }
 
   async start() {
-    const stored = await chrome.storage.local.get({ enabled: true });
+    const stored = await chrome.storage.local.get({ enabled: true, blacklistRules: [] });
     this.enabled = stored.enabled;
+    this.blacklist = new Set(stored.blacklistRules || []);
     this.observeExistingImages();
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
@@ -258,6 +276,8 @@ class ViewportImageProvider {
         image.dataset.aiEnhancerImageId = imageId;
         image.dataset.aiEnhancerSeen = "true";
         const metadata = this.imageProvider.read(image);
+        if (this.isBlacklisted(metadata.imageUrl)) return;
+        this.addBlacklistButton(image, metadata.imageUrl);
         chrome.runtime.sendMessage({
           type: "IMAGE_SEEN",
           imageId,
@@ -296,7 +316,7 @@ class ViewportImageProvider {
 
   async schedule(image) {
     const metadata = this.imageProvider.read(image);
-    if (!metadata.imageUrl || processedImageUrls.has(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
+    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || processedImageUrls.has(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
       return;
     }
 
@@ -322,6 +342,49 @@ class ViewportImageProvider {
       imageData,
       viewportDistance: this.viewportDistance(image),
     });
+  }
+
+  normalizeBlacklistUrl(imageUrl) {
+    try {
+      const url = new URL(imageUrl, document.baseURI);
+      return `${url.origin}${url.pathname}`;
+    } catch {
+      return imageUrl;
+    }
+  }
+
+  isBlacklisted(imageUrl) {
+    return this.blacklist.has(this.normalizeBlacklistUrl(imageUrl));
+  }
+
+  addBlacklistButton(image, imageUrl) {
+    if (this.blacklistButtons.has(image)) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ai-enhancer-blacklist-button";
+    button.textContent = "Block AI";
+    button.title = "Never upscale this image URL again";
+    const position = () => {
+      const rect = image.getBoundingClientRect();
+      button.style.left = `${Math.max(4, rect.right + window.scrollX - button.offsetWidth)}px`;
+      button.style.top = `${Math.max(4, rect.top + window.scrollY + 4)}px`;
+    };
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rule = this.normalizeBlacklistUrl(imageUrl);
+      this.blacklist.add(rule);
+      const stored = await chrome.storage.local.get({ blacklistRules: [] });
+      await chrome.storage.local.set({ blacklistRules: [...new Set([...(stored.blacklistRules || []), rule])] });
+      const tracked = this.findByImage(image);
+      if (tracked) this.cancel(tracked);
+      button.remove();
+    });
+    document.body.appendChild(button);
+    this.blacklistButtons.set(image, button);
+    position();
+    window.addEventListener("scroll", position, { passive: true });
+    window.addEventListener("resize", position, { passive: true });
   }
 
   async readDisplayedImage(imageUrl) {
@@ -456,6 +519,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   if (areaName === "local" && (changes.mode || changes.enhanceLevel)) {
     viewportProvider.reprocessVisibleImages();
+  }
+  if (areaName === "local" && changes.blacklistRules) {
+    viewportProvider.blacklist = new Set(changes.blacklistRules.newValue || []);
   }
 });
 

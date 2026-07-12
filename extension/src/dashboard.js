@@ -8,11 +8,33 @@ async function refresh() {
   document.getElementById("mode").value = stats.mode || "auto";
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
+  document.getElementById("timeout").value = stats.maxProcessingSeconds ?? 60;
   document.getElementById("status").textContent = stats.processing ? `${stats.processing} processing` : "Ready";
   const images = page?.images || [];
   renderImages(images);
   renderQuality([...images].reverse().find((item) => item.quality)?.quality || stats.lastQuality);
   renderScopes(stats.scopes || {});
+  renderBlacklist(stats.blacklistRules || []);
+}
+
+function renderBlacklist(rules) {
+  const target = document.getElementById("blacklist");
+  target.replaceChildren();
+  if (!rules.length) { target.textContent = "No images are blocked."; return; }
+  rules.forEach((rule) => {
+    const row = document.createElement("div");
+    row.className = "blacklist-row";
+    const text = document.createElement("code");
+    text.textContent = rule;
+    const remove = document.createElement("button");
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      await chrome.storage.local.set({ blacklistRules: rules.filter((item) => item !== rule) });
+      refresh();
+    });
+    row.append(text, remove);
+    target.appendChild(row);
+  });
 }
 
 function renderImages(images) {
@@ -43,6 +65,7 @@ function renderImages(images) {
 
     if (item.enhancedImageUrl) {
       ai.appendChild(createImage(item.enhancedImageUrl, `AI enhanced image ${index + 1}`));
+      ai.appendChild(createOpenButton(item.enhancedImageUrl, "Open AI image"));
     } else {
       const pending = document.createElement("div");
       pending.className = "pending";
@@ -56,9 +79,20 @@ function renderImages(images) {
       ai.appendChild(pending);
     }
     original.appendChild(createImage(item.originalImageUrl || item.imageUrl, `Original image ${index + 1}`));
+    original.appendChild(createOpenButton(item.originalImageUrl || item.imageUrl, "Open original image"));
     row.append(ai, original);
     list.appendChild(row);
   });
+}
+
+function createOpenButton(source, text) {
+  const link = document.createElement("a");
+  link.className = "open-image";
+  link.href = source;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = text;
+  return link;
 }
 
 function createImage(source, alt) {
@@ -101,5 +135,8 @@ async function saveSettings() {
 document.getElementById("mode").addEventListener("change", saveSettings);
 document.getElementById("level").addEventListener("input", () => document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`);
 document.getElementById("level").addEventListener("change", saveSettings);
+document.getElementById("timeout").addEventListener("change", () => chrome.runtime.sendMessage({
+  type: "SET_PROCESSING_TIMEOUT", seconds: Number(document.getElementById("timeout").value),
+}));
 refresh();
 setInterval(refresh, 2000);
