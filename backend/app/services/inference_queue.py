@@ -13,6 +13,7 @@ class InferenceJob:
     """A queued image inference job."""
 
     image_url: str
+    image_bytes: bytes | None
     mode: str
     model_name: str | None
     tile_size: int | None
@@ -65,12 +66,14 @@ class InferenceQueue:
         tile_size: int | None,
         enhance_level: float | None = None,
         mode: str = "auto",
+        image_bytes: bytes | None = None,
     ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         job = InferenceJob(
             image_url=image_url,
+            image_bytes=image_bytes,
             mode=mode,
             model_name=model_name,
             tile_size=tile_size,

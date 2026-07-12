@@ -11,6 +11,8 @@ Universal AI Image Enhancer is a local-first image enhancement service for manga
 
 Both production models download automatically on first use and are pinned by SHA-256. Auto classification is deterministic and local; no image is sent to a third-party classification service.
 
+The extension reads the browser's currently selected `currentSrc` bytes using the page/browser HTTP cache, cookies, and extension host permissions. It sends those bytes to the local backend as `imageData`; the backend therefore does not need to re-download protected image URLs. After inference completes, only the corresponding `<img>` element is replaced with the enhanced WebP blob.
+
 ## Project Layout
 
 ```text

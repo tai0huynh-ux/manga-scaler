@@ -59,9 +59,10 @@ class UpscalerService:
         tile_size: int | None = None,
         enhance_level: float | None = None,
         mode: str = "auto",
+        image_bytes: bytes | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
-        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level, mode)
+        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level, mode, image_bytes)
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
         return result
@@ -72,12 +73,20 @@ class UpscalerService:
         timings = StageTimings()
 
         download_started = time.perf_counter()
-        downloaded = await self.downloader.download(job.image_url)
+        if job.image_bytes is not None:
+            image_content = job.image_bytes
+            if not image_content:
+                raise ValueError("Browser-supplied image is empty.")
+            if len(image_content) > self.settings.download.max_bytes:
+                raise ValueError("Browser-supplied image exceeds the configured size limit.")
+        else:
+            downloaded = await self.downloader.download(job.image_url)
+            image_content = downloaded.content
         timings.set("download", download_started)
 
-        source_key = sha256_bytes(downloaded.content)
+        source_key = sha256_bytes(image_content)
         decode_started = time.perf_counter()
-        image = await self.pipeline.decode(downloaded.content)
+        image = await self.pipeline.decode(image_content)
         timings.set("decode", decode_started)
 
         classification = self._resolve_mode(job.mode, image)

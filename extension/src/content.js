@@ -266,7 +266,7 @@ class ViewportImageProvider {
     }
   }
 
-  schedule(image) {
+  async schedule(image) {
     const metadata = this.imageProvider.read(image);
     if (!metadata.imageUrl || processedImageUrls.has(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
       return;
@@ -282,12 +282,39 @@ class ViewportImageProvider {
       state: "waiting",
     });
 
+    const imageData = await this.readDisplayedImage(metadata.imageUrl);
+    if (!trackedImages.has(imageId)) {
+      return;
+    }
     chrome.runtime.sendMessage({
       type: "ENQUEUE_IMAGE",
       imageId,
       imageUrl: metadata.imageUrl,
+      imageData,
       viewportDistance: this.viewportDistance(image),
     });
+  }
+
+  async readDisplayedImage(imageUrl) {
+    try {
+      const response = await fetch(imageUrl, {
+        cache: "force-cache",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+      }
+      return btoa(binary);
+    } catch {
+      return null;
+    }
   }
 
   refreshPriorities() {

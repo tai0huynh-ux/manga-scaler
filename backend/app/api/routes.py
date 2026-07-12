@@ -1,5 +1,8 @@
 """HTTP routes exposed by the local AI Manga Upscaler backend."""
 
+import base64
+import binascii
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.models.schemas import HealthResponse, ModelStatusResponse, SwitchModelRequest, UpscaleRequest, UpscaleResponse
@@ -49,12 +52,19 @@ async def upscale(
 ) -> UpscaleResponse:
     """Download, upscale with ONNX Runtime, cache, and return WebP output."""
     try:
+        image_bytes = None
+        if payload.image_data is not None:
+            try:
+                image_bytes = base64.b64decode(payload.image_data, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("imageData must be valid base64.") from exc
         return await service.upscale(
             image_url=str(payload.image_url),
             model_name=payload.model,
             tile_size=payload.tile_size,
             enhance_level=payload.enhance_level,
             mode=payload.mode,
+            image_bytes=image_bytes,
         )
     except FileNotFoundError as exc:
         raise HTTPException(

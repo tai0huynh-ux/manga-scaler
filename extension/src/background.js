@@ -259,6 +259,7 @@ class BackendUpscaleProvider {
     const signal = this.combineSignals(abortSignal, timeoutController.signal);
 
     try {
+      const imageData = options.imageData || (await this.readBrowserImage(imageUrl, options.pageUrl, signal));
       const response = await fetch(`${this.baseUrl}/upscale`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -266,6 +267,7 @@ class BackendUpscaleProvider {
           imageUrl,
           mode: options.mode,
           enhanceLevel: options.enhanceLevel,
+          imageData,
         }),
         signal,
       });
@@ -290,6 +292,35 @@ class BackendUpscaleProvider {
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  async readBrowserImage(imageUrl, pageUrl, signal) {
+    const response = await fetch(imageUrl, {
+      method: "GET",
+      cache: "force-cache",
+      credentials: "include",
+      referrer: pageUrl || undefined,
+      referrerPolicy: "unsafe-url",
+      signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Browser could not read displayed image (${response.status})`);
+    }
+    const buffer = await response.arrayBuffer();
+    if (!buffer.byteLength) {
+      throw new Error("Browser returned an empty displayed image");
+    }
+    return this.arrayBufferToBase64(buffer);
+  }
+
+  arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return btoa(binary);
   }
 
   combineSignals(primarySignal, timeoutSignal) {
@@ -406,7 +437,12 @@ class QueueScheduler {
 
       const result = await this.upscaleProvider.upscale(
         job.imageUrl,
-        { mode: job.mode, enhanceLevel: job.enhanceLevel },
+        {
+          mode: job.mode,
+          enhanceLevel: job.enhanceLevel,
+          pageUrl: job.pageUrl,
+          imageData: job.imageData,
+        },
         job.abortController.signal,
       );
       if (job.abortController.signal.aborted) {
@@ -506,6 +542,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         tabId: sender.tab.id,
         imageId: message.imageId,
         imageUrl: message.imageUrl,
+        pageUrl: sender.tab.url,
+        imageData: message.imageData || null,
         viewportDistance: message.viewportDistance,
         mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
         enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),

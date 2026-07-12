@@ -21,6 +21,11 @@ class UpscaleRequest(BaseModel):
     """Payload sent by the extension when it discovers an image."""
 
     image_url: HttpUrl = Field(alias="imageUrl", description="Absolute source image URL.")
+    image_data: str | None = Field(
+        default=None,
+        alias="imageData",
+        description="Base64-encoded bytes supplied by the browser that already loaded the image.",
+    )
     mode: Literal["auto", "manga", "artwork", "photo"] = Field(
         default="auto", description="Universal enhancement mode."
     )
