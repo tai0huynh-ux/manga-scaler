@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "AI Manga Upscaler",
+  "description": "Local manga image upscaling pipeline for pages viewed in Chrome or Edge.",
+  "version": "0.1.0",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Manga Upscaler"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/config.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "permissions": ["storage", "tabs"]
+}

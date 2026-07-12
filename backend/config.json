@@ -1,0 +1,69 @@
+{
+  "app": {
+    "name": "AI Manga Upscaler",
+    "host": "127.0.0.1",
+    "port": 8765,
+    "publicBaseUrl": "http://127.0.0.1:8765"
+  },
+  "paths": {
+    "cacheDir": "./cache/images",
+    "modelsDir": "./models",
+    "logsDir": "./logs"
+  },
+  "download": {
+    "timeoutSeconds": 15.0,
+    "maxBytes": 26214400,
+    "allowedImageContentTypes": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "image/avif"
+    ]
+  },
+  "inference": {
+    "enabled": true,
+    "defaultModel": "anime_x4",
+    "models": {
+      "anime_x2": {
+        "file": "anime_x2.onnx",
+        "scale": 2
+      },
+      "anime_x4": {
+        "file": "anime_x4.onnx",
+        "scale": 4
+      },
+      "general_x4": {
+        "file": "general_x4.onnx",
+        "scale": 4
+      }
+    },
+    "providerPreference": [
+      "DmlExecutionProvider",
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "tileSize": 512,
+    "allowedTileSizes": [256, 512, 1024],
+    "tileOverlap": 32,
+    "batchSize": 4,
+    "warmup": true,
+    "workerCount": 1,
+    "maxConcurrentInferences": 1,
+    "queueMaxSize": 64,
+    "dynamicBatchWindowMs": 8
+  },
+  "encoding": {
+    "format": "WEBP",
+    "quality": 95,
+    "lossless": false,
+    "method": 6
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "backend.jsonl",
+    "maxBytes": 5242880,
+    "backupCount": 5
+  }
+}
+

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI Manga Upscaler</title>
+    <link rel="stylesheet" href="styles/popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="header">
+        <div>
+          <h1>AI Manga Upscaler</h1>
+          <p id="backendStatus" class="status status-muted">Checking backend</p>
+        </div>
+        <label class="switch" title="Enable or disable image processing">
+          <input id="enabledToggle" type="checkbox">
+          <span class="switch-track"></span>
+        </label>
+      </header>
+
+      <section class="stats-grid" aria-label="Extension statistics">
+        <article class="stat">
+          <span class="stat-label">Processed</span>
+          <strong id="processedCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Cache Hits</span>
+          <strong id="cacheHitCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Errors</span>
+          <strong id="errorCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Queue</span>
+          <strong id="queueSizeCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Processing</span>
+          <strong id="processingCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Waiting</span>
+          <strong id="waitingCount">0</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Avg Latency</span>
+          <strong id="averageLatency">0 ms</strong>
+        </article>
+        <article class="stat">
+          <span class="stat-label">Cache Ratio</span>
+          <strong id="cacheHitRatio">0%</strong>
+        </article>
+      </section>
+    </main>
+    <script src="src/config.js"></script>
+    <script src="src/popup.js"></script>
+  </body>
+</html>
