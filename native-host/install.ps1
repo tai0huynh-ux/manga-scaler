@@ -5,7 +5,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $hostName = "com.universal_ai_image_enhancer.launcher"
-$hostPath = (Resolve-Path (Join-Path $PSScriptRoot "run-host.cmd")).Path
+$sourcePath = Join-Path $PSScriptRoot "NativeHost.cs"
+$hostPath = Join-Path $PSScriptRoot "UniversalAiEnhancerNativeHost.exe"
+if (Test-Path $hostPath) {
+  Remove-Item -LiteralPath $hostPath -Force
+}
+Add-Type -TypeDefinition ([System.IO.File]::ReadAllText($sourcePath)) `
+  -Language CSharp `
+  -OutputAssembly $hostPath `
+  -OutputType WindowsApplication
+$hostPath = (Resolve-Path $hostPath).Path
 $manifestPath = Join-Path $PSScriptRoot "$hostName.json"
 $manifest = @{
   name = $hostName
@@ -24,4 +33,4 @@ foreach ($target in $targets) {
   New-Item -Path $target -Force | Out-Null
   Set-Item -Path $target -Value $manifestPath
 }
-Write-Host "Native host installed for extension $ExtensionId"
+Write-Host "Hidden native host installed for extension $ExtensionId"

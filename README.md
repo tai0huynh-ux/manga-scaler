@@ -183,6 +183,8 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId 
 
 Reload the extension afterward. When its enable switch is turned on, it checks `/health` and starts the backend through the registered native host when needed. The popup displays `Backend start failed` with the native error in its tooltip if registration, the virtual environment, or startup fails.
 
+The installer compiles a small native launcher that runs without a PowerShell or Command Prompt window. Backend output continues to use the configured rotating JSON log file; no terminal window is required while the extension is enabled.
+
 Per-image processing timeout is configurable from 5 to 300 seconds in both popup and Dashboard. Timed-out work is cancelled, moved behind normal images, and retried after other work. Closing a tab or navigating that tab to another page cancels queued, active, and delayed-retry jobs belonging to the old page.
 
 Every eligible page image has a `Block AI` button. Blocking stores the normalized image URL without its temporary query token, cancels current work, and prevents that image from being enhanced on later visits. Dashboard settings list blacklist entries and allow removing them.
