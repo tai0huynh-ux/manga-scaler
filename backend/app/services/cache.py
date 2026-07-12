@@ -1,7 +1,9 @@
 """SHA256-addressed image cache implementation."""
 
 import asyncio
+import os
 from pathlib import Path
+from uuid import uuid4
 
 from app.utils.hashing import sha256_bytes
 
@@ -21,7 +23,7 @@ class ImageCache:
         if target.exists():
             return digest, target, True
 
-        await asyncio.to_thread(target.write_bytes, image_bytes)
+        await asyncio.to_thread(self._atomic_write, target, image_bytes)
         return digest, target, False
 
     async def save_named(self, key: str, image_bytes: bytes, extension: str) -> tuple[Path, bool]:
@@ -30,9 +32,18 @@ class ImageCache:
         if target.exists():
             return target, True
 
-        await asyncio.to_thread(target.write_bytes, image_bytes)
+        await asyncio.to_thread(self._atomic_write, target, image_bytes)
         return target, False
 
     def public_filename(self, path: Path) -> str:
         """Return a cache filename suitable for the static cache route."""
         return path.name
+
+    def _atomic_write(self, target: Path, content: bytes) -> None:
+        """Write and atomically publish a cache artifact."""
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(content)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)

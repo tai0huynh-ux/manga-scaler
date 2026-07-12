@@ -4,7 +4,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AppConfig(BaseModel):
@@ -56,13 +56,23 @@ class InferenceConfig(BaseModel):
     queue_max_size: int = Field(alias="queueMaxSize")
     dynamic_batch_window_ms: int = Field(alias="dynamicBatchWindowMs")
 
-    @field_validator("tile_size")
-    @classmethod
-    def validate_tile_size(cls, value: int) -> int:
-        """Accept only production-tested tile sizes."""
-        if value not in {256, 512, 1024}:
-            raise ValueError("tileSize must be one of 256, 512, or 1024.")
-        return value
+    @model_validator(mode="after")
+    def validate_inference_settings(self) -> "InferenceConfig":
+        """Validate related inference limits from the JSON configuration."""
+        if self.default_model not in self.models:
+            raise ValueError("defaultModel must reference a configured model.")
+        if self.tile_size not in self.allowed_tile_sizes:
+            raise ValueError("tileSize must be included in allowedTileSizes.")
+        if not self.allowed_tile_sizes or any(size <= 0 for size in self.allowed_tile_sizes):
+            raise ValueError("allowedTileSizes must contain positive values.")
+        if self.tile_overlap < 0 or self.tile_overlap * 2 >= min(self.allowed_tile_sizes):
+            raise ValueError("tileOverlap must be non-negative and smaller than half a tile.")
+        for field_name in ("batch_size", "worker_count", "max_concurrent_inferences", "queue_max_size"):
+            if getattr(self, field_name) <= 0:
+                raise ValueError(f"{field_name} must be positive.")
+        if self.dynamic_batch_window_ms < 0:
+            raise ValueError("dynamicBatchWindowMs cannot be negative.")
+        return self
 
 
 class EncodingConfig(BaseModel):

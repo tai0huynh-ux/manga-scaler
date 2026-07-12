@@ -100,10 +100,8 @@ async def switch_model(
 @router.post("/models/reload", response_model=ModelStatusResponse)
 async def reload_active_model(manager: ModelManager = Depends(get_model_manager)) -> ModelStatusResponse:
     """Force hot reload of the active model."""
-    active = manager.active_model_name
-    manager.loaded.pop(active, None)
     try:
-        manager.load_model(active)
+        manager.reload_active_model()
         return ModelStatusResponse(**manager.status())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

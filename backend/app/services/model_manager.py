@@ -75,6 +75,12 @@ class ModelManager:
             LOGGER.info("Switched active model", extra={"_model": model_name})
             return model
 
+    def reload_active_model(self) -> LoadedModel:
+        """Force a thread-safe reload of the active model."""
+        with self.lock:
+            self.loaded.pop(self.active_model_name, None)
+            return self.load_model(self.active_model_name)
+
     def get_active_model(self) -> LoadedModel:
         """Return the active model, hot reloading if the file changed."""
         return self.get_model(self.active_model_name)
@@ -136,8 +142,16 @@ class ModelManager:
         return loaded
 
     def warmup(self, model: LoadedModel) -> None:
-        """Run a small warmup inference to initialize provider kernels."""
-        sample = np.zeros((1, 3, 16, 16), dtype=np.float32)
+        """Warm provider kernels using concrete model dimensions when available."""
+        input_shape = model.session.get_inputs()[0].shape
+        if len(input_shape) != 4:
+            raise ValueError(f"Model {model.name} must expose a four-dimensional NCHW input.")
+        fallback = (1, 3, self.config.tile_size, self.config.tile_size)
+        shape = tuple(
+            dimension if isinstance(dimension, int) and dimension > 0 else fallback[index]
+            for index, dimension in enumerate(input_shape)
+        )
+        sample = np.zeros(shape, dtype=np.float32)
         model.session.run([model.output_name], {model.input_name: sample})
         LOGGER.info("Completed model warmup", extra={"_model": model.name})
 
@@ -156,4 +170,4 @@ class ModelManager:
 
     def _is_stale(self, model: LoadedModel) -> bool:
         """Return whether the model file has changed since loading."""
-        return model.path.exists() and model.path.stat().st_mtime != model.mtime
+        return not model.path.exists() or model.path.stat().st_mtime != model.mtime

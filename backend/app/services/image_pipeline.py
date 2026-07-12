@@ -95,6 +95,7 @@ class ImagePipeline:
         height, width, _ = source.shape
         scale = model.scale
         output = np.zeros((height * scale, width * scale, 3), dtype=np.float32)
+        weights = np.zeros((height * scale, width * scale, 1), dtype=np.float32)
 
         tiles = list(self._tiles(width, height, tile_size, overlap))
         gpu_time_ms = 0.0
@@ -113,10 +114,11 @@ class ImagePipeline:
 
             prediction = np.transpose(prediction, (0, 2, 3, 1))
             for tile_output, spec in zip(prediction, batch_specs, strict=True):
-                self._merge_tile(output, tile_output, spec, scale)
+                self._merge_tile(output, weights, tile_output, spec, scale)
 
+        output /= np.maximum(weights, 1.0)
         output = np.clip(output * 255.0, 0, 255).astype(np.uint8)
-        return Image.fromarray(output, mode="RGB"), round(gpu_time_ms, 3)
+        return Image.fromarray(output), round(gpu_time_ms, 3)
 
     def _tiles(self, width: int, height: int, tile_size: int, overlap: int) -> list[tuple[int, int, int, int]]:
         """Create overlapping tile rectangles as x0, y0, x1, y1."""
@@ -157,16 +159,15 @@ class ImagePipeline:
     def _merge_tile(
         self,
         output: np.ndarray,
+        weights: np.ndarray,
         tile_output: np.ndarray,
         spec: tuple[int, int, int, int],
         scale: int,
     ) -> None:
-        """Copy the valid region of a tile output into the final image."""
+        """Merge a tile by averaging every valid overlapping prediction."""
         x0, y0, x1, y1 = spec
-        out_x0 = x0 * scale
-        out_y0 = y0 * scale
-        out_x1 = x1 * scale
-        out_y1 = y1 * scale
-        valid_width = out_x1 - out_x0
-        valid_height = out_y1 - out_y0
-        output[out_y0:out_y1, out_x0:out_x1, :] = tile_output[:valid_height, :valid_width, :]
+        out_x0, out_y0 = x0 * scale, y0 * scale
+        out_x1, out_y1 = x1 * scale, y1 * scale
+        valid_width, valid_height = out_x1 - out_x0, out_y1 - out_y0
+        output[out_y0:out_y1, out_x0:out_x1, :] += tile_output[:valid_height, :valid_width, :]
+        weights[out_y0:out_y1, out_x0:out_x1, :] += 1.0

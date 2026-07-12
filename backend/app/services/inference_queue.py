@@ -89,11 +89,15 @@ class InferenceQueue:
                 except asyncio.QueueEmpty:
                     break
 
-            async with self.semaphore:
-                await asyncio.gather(*(self._process_job(item, worker_id) for item in batch))
+            await asyncio.gather(*(self._process_with_limit(item, worker_id) for item in batch))
 
             for _ in batch:
                 self.queue.task_done()
+
+    async def _process_with_limit(self, job: InferenceJob, worker_id: int) -> None:
+        """Process one dynamically collected job under the global limit."""
+        async with self.semaphore:
+            await self._process_job(job, worker_id)
 
     async def _process_job(self, job: InferenceJob, worker_id: int) -> None:
         """Process one job and settle its future."""

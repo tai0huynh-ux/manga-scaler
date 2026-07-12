@@ -4,4 +4,6 @@ numpy==2.2.6
 onnxruntime-directml==1.22.0
 pillow==11.3.0
 psutil==7.0.0
+pytest==8.4.1
+pytest-asyncio==1.1.0
 uvicorn[standard]==0.35.0

@@ -77,13 +77,14 @@ class UpscalerService:
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
         if final_path.exists():
+            cached = await self.pipeline.decode(final_path.read_bytes())
             timings.total_since(total_started)
             return self._response(
                 output=EncodedImage(
                     content=final_path.read_bytes(),
                     content_type="image/webp",
-                    width=None,
-                    height=None,
+                    width=cached.width,
+                    height=cached.height,
                     gpu_time_ms=0.0,
                 ),
                 output_path=final_path,
@@ -179,5 +180,6 @@ class UpscalerService:
         """Validate and return the effective tile size."""
         tile_size = requested_tile_size or self.settings.inference.tile_size
         if tile_size not in self.settings.inference.allowed_tile_sizes:
-            raise ValueError("tileSize must be one of 256, 512, or 1024.")
+            allowed = ", ".join(str(size) for size in self.settings.inference.allowed_tile_sizes)
+            raise ValueError(f"tileSize must be one of: {allowed}.")
         return tile_size

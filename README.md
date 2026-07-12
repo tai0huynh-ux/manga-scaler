@@ -1,6 +1,6 @@
 # AI Manga Upscaler
 
-AI Manga Upscaler is a local-first image upscaling architecture for manga pages. This milestone intentionally does not run AI inference. The backend downloads discovered images, stores them in a SHA256-addressed cache, and returns the original URL. The extension already has viewport-aware scheduling, layered browser caching, abortable processing, Blob URL rendering, and status reporting needed for a future Real-ESRGAN ONNX Runtime implementation.
+AI Manga Upscaler is a local-first image upscaling service for manga pages. Phase 2 runs production-oriented ONNX Runtime inference with automatic DirectML, CUDA, or CPU provider selection. Images are downloaded, decoded with Pillow, processed in overlapping tiles, merged, encoded as WebP, cached, and returned to the existing browser extension.
 
 ## Project Layout
 
@@ -40,6 +40,8 @@ Requirements:
 - FastAPI
 - Uvicorn
 - HTTPX
+- ONNX Runtime DirectML
+- Pillow and NumPy
 
 Install and run:
 
@@ -58,7 +60,7 @@ Health check:
 Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
-Upscale placeholder:
+Upscale an image:
 
 ```powershell
 Invoke-RestMethod `
@@ -68,40 +70,13 @@ Invoke-RestMethod `
   -Body '{"imageUrl":"https://example.com/image.jpg"}'
 ```
 
-Expected health response:
+The health response includes the active provider/model, GPU diagnostics, queue and cache state, and uptime. The `/upscale` response retains its Phase 1 fields and adds model, provider, scale, output dimensions, per-stage timings, memory, and queue statistics.
 
-```json
-{
-  "status": "ok"
-}
-```
-
-The `/upscale` endpoint returns:
-
-```json
-{
-  "imageUrl": "https://example.com/image.jpg",
-  "cacheKey": "sha256-hex-digest",
-  "cacheHit": false,
-  "contentType": "image/jpeg",
-  "bytesWritten": 123456
-}
-```
+Place compatible NCHW RGB float32 ONNX models in `backend/models/` before sending inference requests. Required configured filenames are `anime_x2.onnx`, `anime_x4.onnx`, and `general_x4.onnx`. The service starts without model files so `/health` remains available, while inference returns HTTP 503 until the requested model is installed.
 
 ## Configuration
 
-Backend environment variables use the `AI_MANGA_UPSCALER_` prefix. Start from `.env.example`:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Important settings:
-
-- `AI_MANGA_UPSCALER_CACHE_DIR`: cache directory for downloaded image bytes.
-- `AI_MANGA_UPSCALER_REQUEST_TIMEOUT_SECONDS`: backend download timeout.
-- `AI_MANGA_UPSCALER_MAX_DOWNLOAD_BYTES`: maximum accepted image size.
-- `AI_MANGA_UPSCALER_LOG_LEVEL`: logging verbosity.
+Backend runtime settings live in `backend/config.json`. This includes paths, download limits, model registry, provider preference, tile/batch/worker limits, WebP encoding, and rotating JSON logs. Relative paths are resolved from the backend directory.
 
 Shared defaults live in `shared/config/defaults.json`. The extension currently reads its browser-safe defaults from `extension/src/config.js`; keep both aligned when changing ports, retry settings, or image thresholds.
 
@@ -162,16 +137,15 @@ The backend also defines provider protocols in `backend/app/services/providers.p
 - `CacheProvider`
 - `UpscaleProvider`
 
-## Future ONNX Runtime Path
+## Phase 2 inference architecture
 
-The intended integration point is `backend/app/services/upscaler.py`. Replace the milestone-one passthrough with a Real-ESRGAN inference adapter that accepts cached image bytes or paths and returns a generated cache artifact. The browser extension should not need structural changes because it already consumes the stable `/upscale` response contract and renders whatever bytes the active `UpscaleProvider` returns.
+- `gpu_provider.py` selects DirectML, CUDA, then CPU according to configuration and runtime availability.
+- `model_manager.py` owns the process singleton, lazy loading, warmup, switching, and file-mtime hot reload.
+- `image_pipeline.py` implements RGB decode, padded overlapping tiles, ONNX batch inference, overlap averaging, and WebP encoding.
+- `inference_queue.py` provides a bounded async queue, dynamic collection window, worker pool, and global inference semaphore.
+- `statistics.py` reports download, decode, inference, GPU, encode, total latency, and process memory.
 
-Recommended next files for the AI milestone:
-
-- `backend/app/services/inference.py`
-- `backend/app/services/model_registry.py`
-- `backend/app/models/inference.py`
-- `backend/models/`
+Run backend tests with `cd backend; ..\.venv\Scripts\python.exe -m pytest -q`.
 
 ## Notes
 

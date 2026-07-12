@@ -21,8 +21,10 @@
     "fadeMs": 180
   },
   "inference": {
-    "enabled": false,
-    "provider": "none",
-    "futureProvider": "onnxruntime-real-esrgan"
+    "enabled": true,
+    "provider": "auto",
+    "runtime": "onnxruntime",
+    "defaultModel": "anime_x4",
+    "tileSize": 512
   }
 }
