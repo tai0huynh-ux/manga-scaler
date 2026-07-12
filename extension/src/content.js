@@ -360,6 +360,8 @@ class ViewportImageProvider {
   displayMetrics(image) {
     const rect = image.getBoundingClientRect();
     return {
+      sourceWidth: image.naturalWidth || image.width || 0,
+      sourceHeight: image.naturalHeight || image.height || 0,
       renderedWidth: Math.max(rect.width, image.clientWidth || 0),
       renderedHeight: Math.max(rect.height, image.clientHeight || 0),
       viewportWidth: window.innerWidth,

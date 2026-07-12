@@ -935,7 +935,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         maxOutputWidth: outputLimits.width,
         maxOutputHeight: outputLimits.height,
         outputQuality: Number(settings.outputQuality),
-        tileSize: settings.performanceBoost ? 512 : 256,
+        tileSize: settings.performanceBoost && Math.max(
+          Number(message.displayMetrics?.sourceWidth) || 0,
+          Number(message.displayMetrics?.sourceHeight) || 0,
+        ) >= 384 ? 512 : 256,
       });
       sendResponse({ accepted: true });
     });
