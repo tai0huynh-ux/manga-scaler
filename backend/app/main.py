@@ -44,6 +44,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     pipeline = ImagePipeline(settings.encoding, settings.enhancement)
     classifier = ImageTypeClassifier(settings.auto_detection)
+    quality_analyzer = QualityAnalyzer()
+    app.state.pipeline = pipeline
+    app.state.quality_analyzer = quality_analyzer
 
     app.state.runtime = AppRuntime()
     app.state.settings = settings
@@ -57,7 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model_manager=model_manager,
         pipeline=pipeline,
         classifier=classifier,
-        quality_analyzer=QualityAnalyzer(),
+        quality_analyzer=quality_analyzer,
     )
     await app.state.upscaler_service.start()
     yield

@@ -97,6 +97,7 @@ class UpscalerService:
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
         model = self.model_manager.get_model(job.model_name or profile.model)
+        inference_image = await self.pipeline.fit_for_model_scale(image, model.scale)
         requested_tile_size = self._resolve_tile_size(job.tile_size)
         tile_size = model.fixed_tile_size or requested_tile_size
         overlap = min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
@@ -136,7 +137,7 @@ class UpscalerService:
 
         inference_started = time.perf_counter()
         output = await self.pipeline.infer_tiled(
-            image=image,
+            image=inference_image,
             model=model,
             tile_size=tile_size,
             overlap=overlap,

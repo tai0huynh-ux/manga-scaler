@@ -59,6 +59,15 @@ class ImagePipeline:
         """Apply configurable, bounded post-processing at the requested strength."""
         return await asyncio.to_thread(self._enhance_sync, image, level)
 
+    async def fit_for_model_scale(self, image: Image.Image, scale: int) -> Image.Image:
+        """Bound source dimensions so the encoded result fits the WebP format."""
+        maximum_source_dimension = self.encoding.max_output_dimension // scale
+        if max(image.size) <= maximum_source_dimension:
+            return image
+        fitted = image.copy()
+        fitted.thumbnail((maximum_source_dimension, maximum_source_dimension), Image.Resampling.LANCZOS)
+        return fitted
+
     def _enhance_sync(self, image: Image.Image, level: float) -> Image.Image:
         level = min(max(level, 0.0), 1.0)
         if level == 0:

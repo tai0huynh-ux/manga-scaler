@@ -80,6 +80,7 @@
   },
   "encoding": {
     "format": "WEBP",
+    "maxOutputDimension": 16383,
     "quality": 95,
     "lossless": false,
     "method": 6

@@ -12,6 +12,30 @@ from app.services.upscaler import UpscalerService
 router = APIRouter()
 
 
+@router.get("/comparisons/latest")
+async def latest_comparison(request: Request) -> dict[str, object]:
+    """Return the newest complete original/enhanced cache pair."""
+    cache_dir = request.app.state.settings.cache_dir
+    originals = sorted(cache_dir.glob("*-original.png"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for original in originals:
+        source_key = original.name.removesuffix("-original.png")
+        outputs = sorted(
+            cache_dir.glob(f"{source_key}-*.webp"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not outputs:
+            continue
+        enhanced = outputs[0]
+        original_url = f"{request.app.state.settings.app.public_base_url}/cache/images/{original.name}"
+        enhanced_url = f"{request.app.state.settings.app.public_base_url}/cache/images/{enhanced.name}"
+        source_image = await request.app.state.pipeline.decode(original.read_bytes())
+        enhanced_image = await request.app.state.pipeline.decode(enhanced.read_bytes())
+        quality = request.app.state.quality_analyzer.analyze(source_image, enhanced_image)
+        return {"originalImageUrl": original_url, "enhancedImageUrl": enhanced_url, "quality": quality}
+    raise HTTPException(status_code=404, detail="No complete comparison is available yet.")
+
+
 def get_upscaler_service(request: Request) -> UpscalerService:
     """Resolve the singleton upscaler service stored on the FastAPI app."""
     return request.app.state.upscaler_service

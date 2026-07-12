@@ -6,9 +6,22 @@ async function refresh() {
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
   document.getElementById("status").textContent = stats.processing ? `${stats.processing} processing` : "Ready";
-  renderComparison(stats.lastComparison);
-  renderQuality(stats.lastQuality);
+  let comparison = stats.lastComparison;
+  if (!comparison?.originalImageUrl) {
+    comparison = await fetchLatestComparison();
+  }
+  renderComparison(comparison);
+  renderQuality(comparison?.quality || stats.lastQuality);
   renderScopes(stats.scopes || {});
+}
+
+async function fetchLatestComparison() {
+  try {
+    const response = await fetch("http://127.0.0.1:8765/comparisons/latest");
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 function renderComparison(comparison) {

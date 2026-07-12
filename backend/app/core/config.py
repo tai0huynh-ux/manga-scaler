@@ -82,6 +82,7 @@ class EncodingConfig(BaseModel):
     """Output image encoding settings."""
 
     format: str
+    max_output_dimension: int = Field(default=16383, alias="maxOutputDimension", ge=256, le=16383)
     quality: int
     lossless: bool
     method: int
