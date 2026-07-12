@@ -87,6 +87,24 @@ class ModelManager:
             self.loaded.pop(self.active_model_name, None)
             return self.load_model(self.active_model_name)
 
+    def recover_after_provider_failure(self, failed_provider: str, model_name: str) -> LoadedModel:
+        """Drop sessions for a failed provider and reload on the next available provider."""
+        with self.lock:
+            selection = self.provider_selector.disable_provider(
+                failed_provider,
+                "Execution provider failed during inference.",
+            )
+            self.loaded = {
+                name: model
+                for name, model in self.loaded.items()
+                if model.provider != failed_provider
+            }
+            LOGGER.warning(
+                "Recovering ONNX sessions after provider failure",
+                extra={"_failed_provider": failed_provider, "_new_provider": selection.provider, "_model": model_name},
+            )
+            return self.load_model(model_name)
+
     def get_active_model(self) -> LoadedModel:
         """Return the active model, hot reloading if the file changed."""
         return self.get_model(self.active_model_name)

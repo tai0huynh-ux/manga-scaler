@@ -22,15 +22,29 @@ class GpuProviderSelector:
 
     def __init__(self, preferred_providers: tuple[str, ...]) -> None:
         self.preferred_providers = preferred_providers
+        self.disabled_providers: set[str] = set()
         self.selection = self._select_provider()
 
     def current(self) -> ProviderSelection:
         """Return the current provider selection."""
         return self.selection
 
+    def disable_provider(self, provider: str, reason: str) -> ProviderSelection:
+        """Temporarily remove a failing provider and choose the next best one."""
+        if provider != "CPUExecutionProvider":
+            self.disabled_providers.add(provider)
+        LOGGER.warning(
+            "Disabled ONNX Runtime provider after runtime failure",
+            extra={"_provider": provider, "_reason": reason},
+        )
+        self.selection = self._select_provider()
+        return self.selection
+
     def _select_provider(self) -> ProviderSelection:
         available = tuple(ort.get_available_providers())
         for provider in self.preferred_providers:
+            if provider in self.disabled_providers:
+                continue
             if provider in available:
                 LOGGER.info(
                     "Selected ONNX Runtime provider",

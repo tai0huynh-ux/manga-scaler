@@ -200,13 +200,12 @@ class UpscalerService:
             )
 
         inference_started = time.perf_counter()
-        output = await self.pipeline.infer_tiled(
+        output, model = await self._infer_with_provider_recovery(
             image=inference_image,
             model=model,
             tile_size=tile_size,
             overlap=overlap,
-            batch_size=self.settings.inference.batch_size,
-            cancellation_check=job.cancel_event.is_set,
+            job=job,
         )
         self._ensure_active(job)
         timings.set("inference", inference_started)
@@ -334,6 +333,47 @@ class UpscalerService:
             allowed = ", ".join(str(size) for size in self.settings.inference.allowed_tile_sizes)
             raise ValueError(f"tileSize must be one of: {allowed}.")
         return tile_size
+
+    async def _infer_with_provider_recovery(self, image, model, tile_size: int, overlap: int, job: InferenceJob):
+        """Run tiled inference and recover from DirectML device loss once."""
+        try:
+            output = await self.pipeline.infer_tiled(
+                image=image,
+                model=model,
+                tile_size=tile_size,
+                overlap=overlap,
+                batch_size=self.settings.inference.batch_size,
+                cancellation_check=job.cancel_event.is_set,
+            )
+            return output, model
+        except Exception as exc:
+            if not self._is_provider_device_lost(exc):
+                raise
+            LOGGER.warning(
+                "Inference provider failed; reloading model on fallback provider",
+                extra={"_provider": model.provider, "_model": model.name, "_error": str(exc)},
+            )
+            recovered_model = self.model_manager.recover_after_provider_failure(model.provider, model.name)
+            recovered_tile_size = recovered_model.fixed_tile_size or tile_size
+            recovered_overlap = min(self.settings.inference.tile_overlap, max(recovered_tile_size // 8, 1))
+            output = await self.pipeline.infer_tiled(
+                image=image,
+                model=recovered_model,
+                tile_size=recovered_tile_size,
+                overlap=recovered_overlap,
+                batch_size=1,
+                cancellation_check=job.cancel_event.is_set,
+            )
+            return output, recovered_model
+
+    def _is_provider_device_lost(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "887a0005" in message
+            or "device instance has been suspended" in message
+            or "device removed" in message
+            or "getdeviceremovedreason" in message
+        )
 
     def _text_key(self, options: TextProcessingOptions) -> str:
         if not options.enabled:

@@ -464,7 +464,6 @@ class ViewportImageProvider {
   }
 
   async scheduleSegments(image, metadata, imageId, baseKey) {
-    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0 });
     await this.acquirePreprocessingSlot();
     let segments = [];
     try {
@@ -488,6 +487,8 @@ class ViewportImageProvider {
 
     const rawImages = this.renderer.installRawSlices(image, metadata, segments);
     await Promise.all(rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
+    chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId }).catch(() => {});
+    trackedImageKeys.delete(baseKey);
     for (const segment of segments) {
       const segmentId = `${imageId}-seg-${segment.index}`;
       const rawImage = rawImages[segment.index];
