@@ -4,6 +4,7 @@ const DEFAULT_STATE = Object.freeze({
   enabled: true,
   mode: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
   enhanceLevel: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
+  seen: 0,
   processed: 0,
   errors: 0,
   cacheHits: 0,
@@ -11,6 +12,7 @@ const DEFAULT_STATE = Object.freeze({
   totalLatencyMs: 0,
   lastQuality: null,
   lastDetectedMode: null,
+  lastComparison: null,
 });
 
 /**
@@ -19,6 +21,20 @@ const DEFAULT_STATE = Object.freeze({
 class StatisticsTracker {
   constructor(storageArea) {
     this.storageArea = storageArea;
+    this.tabStats = new Map();
+  }
+
+  tab(tabId) {
+    if (!this.tabStats.has(tabId)) {
+      this.tabStats.set(tabId, { seen: 0, fixed: 0, errors: 0, cache: 0 });
+    }
+    return this.tabStats.get(tabId);
+  }
+
+  async recordSeen(tabId) {
+    this.tab(tabId).seen += 1;
+    const current = await this.storageArea.get({ seen: 0 });
+    await this.storageArea.set({ seen: Number(current.seen ?? 0) + 1 });
   }
 
   async ensureDefaults() {
@@ -26,7 +42,10 @@ class StatisticsTracker {
     await this.storageArea.set({ ...DEFAULT_STATE, ...current });
   }
 
-  async recordSuccess({ latencyMs, cacheHit, quality = null, detectedMode = null }) {
+  async recordSuccess({ tabId, latencyMs, cacheHit, quality = null, detectedMode = null, comparison = null }) {
+    const tab = this.tab(tabId);
+    tab.fixed += 1;
+    tab.cache += cacheHit ? 1 : 0;
     const current = await this.storageArea.get(DEFAULT_STATE);
     await this.storageArea.set({
       processed: Number(current.processed ?? 0) + 1,
@@ -35,23 +54,35 @@ class StatisticsTracker {
       totalLatencyMs: Number(current.totalLatencyMs ?? 0) + latencyMs,
       lastQuality: quality || current.lastQuality || null,
       lastDetectedMode: detectedMode || current.lastDetectedMode || null,
+      lastComparison: comparison || current.lastComparison || null,
     });
   }
 
-  async recordError() {
+  async recordError(tabId) {
+    this.tab(tabId).errors += 1;
     const current = await this.storageArea.get(DEFAULT_STATE);
     await this.storageArea.set({
       errors: Number(current.errors ?? 0) + 1,
     });
   }
 
-  async snapshot(queueSnapshot) {
+  async snapshot(queueSnapshot, activeTabId) {
     const current = await this.storageArea.get(DEFAULT_STATE);
     const processed = Number(current.processed ?? 0);
     const cacheHits = Number(current.cacheHits ?? 0);
     const cacheMisses = Number(current.cacheMisses ?? 0);
     const cacheTotal = cacheHits + cacheMisses;
 
+    const currentTab = this.tabStats.get(activeTabId) || { seen: 0, fixed: 0, errors: 0, cache: 0 };
+    const openTabs = [...this.tabStats.values()].reduce(
+      (sum, item) => ({
+        seen: sum.seen + item.seen,
+        fixed: sum.fixed + item.fixed,
+        errors: sum.errors + item.errors,
+        cache: sum.cache + item.cache,
+      }),
+      { seen: 0, fixed: 0, errors: 0, cache: 0 },
+    );
     return {
       enabled: Boolean(current.enabled),
       mode: current.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
@@ -67,7 +98,23 @@ class StatisticsTracker {
       cacheHitRatio: cacheTotal > 0 ? cacheHits / cacheTotal : 0,
       lastQuality: current.lastQuality || null,
       lastDetectedMode: current.lastDetectedMode || null,
+      lastComparison: current.lastComparison || null,
+      scopes: {
+        currentPage: { ...currentTab, processing: queueSnapshot.byTab[activeTabId] ?? 0 },
+        openPages: { ...openTabs, processing: queueSnapshot.queueSize },
+        lifetime: {
+          seen: Number(current.seen ?? 0),
+          fixed: processed,
+          processing: queueSnapshot.queueSize,
+          errors: Number(current.errors ?? 0),
+          cache: cacheHits,
+        },
+      },
     };
+  }
+
+  removeTab(tabId) {
+    this.tabStats.delete(tabId);
   }
 }
 
@@ -130,6 +177,8 @@ class IndexedDBCacheProvider {
       cacheKey: record.cacheKey,
       detectedMode: record.detectedMode,
       quality: record.quality,
+      originalImageUrl: record.originalImageUrl,
+      enhancedImageUrl: record.enhancedImageUrl,
     };
   }
 
@@ -143,6 +192,8 @@ class IndexedDBCacheProvider {
       cacheKey: value.cacheKey,
       detectedMode: value.detectedMode,
       quality: value.quality,
+      originalImageUrl: value.originalImageUrl,
+      enhancedImageUrl: value.enhancedImageUrl,
       byteLength: value.buffer.byteLength,
       lastAccessedAt: Date.now(),
     });
@@ -298,6 +349,8 @@ class BackendUpscaleProvider {
         backendCacheHit: Boolean(metadata.cacheHit),
         detectedMode: metadata.detectedMode,
         quality: metadata.quality,
+        originalImageUrl: metadata.originalImageUrl,
+        enhancedImageUrl: metadata.imageUrl,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -436,10 +489,15 @@ class QueueScheduler {
   }
 
   snapshot() {
+    const byTab = {};
+    [...this.pending.values(), ...this.active.values()].forEach((job) => {
+      byTab[job.tabId] = (byTab[job.tabId] || 0) + 1;
+    });
     return {
       queueSize: this.pending.size + this.active.size,
       processing: this.active.size,
       waiting: this.pending.size,
+      byTab,
     };
   }
 
@@ -475,10 +533,18 @@ class QueueScheduler {
       }
       if (cached) {
         await this.statisticsTracker.recordSuccess({
+          tabId: job.tabId,
           latencyMs: performance.now() - startedAt,
           cacheHit: true,
           quality: cached.quality,
           detectedMode: cached.detectedMode,
+          comparison: {
+            originalImageUrl: cached.originalImageUrl,
+            enhancedImageUrl: cached.enhancedImageUrl,
+            imageUrl: job.imageUrl,
+            quality: cached.quality,
+            detectedMode: cached.detectedMode,
+          },
         });
         this.sendComplete(job, cached, true);
         return;
@@ -499,10 +565,18 @@ class QueueScheduler {
       }
       await this.cacheProvider.set(cacheIdentity, result);
       await this.statisticsTracker.recordSuccess({
+        tabId: job.tabId,
         latencyMs: performance.now() - startedAt,
         cacheHit: false,
         quality: result.quality,
         detectedMode: result.detectedMode,
+        comparison: {
+          originalImageUrl: result.originalImageUrl,
+          enhancedImageUrl: result.enhancedImageUrl,
+          imageUrl: job.imageUrl,
+          quality: result.quality,
+          detectedMode: result.detectedMode,
+        },
       });
       this.sendComplete(job, result, false);
     } catch (error) {
@@ -518,7 +592,7 @@ class QueueScheduler {
         return;
       }
 
-      await this.statisticsTracker.recordError();
+      await this.statisticsTracker.recordError(job.tabId);
       chrome.tabs.sendMessage(job.tabId, {
         type: "UPSCALE_FAILED",
         imageId: job.imageId,
@@ -554,6 +628,7 @@ class QueueScheduler {
 }
 
 const statisticsTracker = new StatisticsTracker(chrome.storage.local);
+let lastContentTabId = null;
 const cacheProvider = new CompositeCacheProvider(
   new MemoryCacheProvider(AI_MANGA_UPSCALER_CONFIG.cache.memoryMaxEntries),
   new IndexedDBCacheProvider(
@@ -582,6 +657,15 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "IMAGE_SEEN") {
+    if (sender.tab?.id) {
+      lastContentTabId = sender.tab.id;
+      statisticsTracker.recordSeen(sender.tab.id).then(() => sendResponse({ recorded: true }));
+      return true;
+    }
+    return false;
+  }
+
   if (message.type === "ENQUEUE_IMAGE") {
     if (!sender.tab?.id) {
       sendResponse({ accepted: false, reason: "Missing sender tab." });
@@ -589,6 +673,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+      lastContentTabId = sender.tab.id;
       scheduler.enqueue({
         tabId: sender.tab.id,
         imageId: message.imageId,
@@ -617,7 +702,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "GET_STATS") {
-    statisticsTracker.snapshot(scheduler.snapshot()).then(sendResponse);
+    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      const activeTabId = tab?.url?.startsWith(chrome.runtime.getURL("")) ? lastContentTabId : tab?.id;
+      statisticsTracker.snapshot(scheduler.snapshot(), activeTabId).then(sendResponse);
+    });
     return true;
   }
 
@@ -650,5 +738,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+chrome.tabs.onRemoved.addListener((tabId) => statisticsTracker.removeTab(tabId));
 
 statisticsTracker.ensureDefaults();

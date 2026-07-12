@@ -168,6 +168,43 @@ select {
   display: block;
 }
 
+.dashboard-button {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #216e8f;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scope-stats {
+  overflow-x: auto;
+  margin-bottom: 12px;
+  border: 1px solid #d7d2c8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.scope-stats table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.scope-stats th,
+.scope-stats td {
+  padding: 7px 5px;
+  border-bottom: 1px solid #ebe7df;
+  text-align: center;
+}
+
+.scope-stats tbody th {
+  text-align: left;
+}
+
 .quality-panel strong {
   color: #174f67;
   font-size: 14px;

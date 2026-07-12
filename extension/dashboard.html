@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Universal AI Enhancer Dashboard</title>
+    <link rel="stylesheet" href="styles/dashboard.css">
+  </head>
+  <body>
+    <main>
+      <header><div><h1>Universal AI Image Enhancer</h1><p>Original versus AI verification</p></div><span id="status">Loading…</span></header>
+      <section class="settings card">
+        <label>Mode<select id="mode"><option value="auto">Auto</option><option value="manga">Manga</option><option value="artwork">Anime / Artwork</option><option value="photo">Photo</option></select></label>
+        <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"></label>
+      </section>
+      <section class="comparison">
+        <figure class="card"><figcaption>Original</figcaption><img id="original" alt="Original browser image"><p id="originalEmpty">Process an image to create a comparison.</p></figure>
+        <figure class="card"><figcaption>AI enhanced</figcaption><img id="enhanced" alt="AI enhanced image"><p id="enhancedEmpty">No enhanced image yet.</p></figure>
+      </section>
+      <section class="card"><h2>Quality</h2><div id="quality" class="metrics"></div></section>
+      <section class="card"><h2>Image counters</h2><div id="scopes" class="scope-cards"></div></section>
+    </main>
+    <script src="src/dashboard.js"></script>
+  </body>
+</html>

@@ -13,6 +13,7 @@ class PopupController {
     this.previewOriginal = this.document.getElementById("previewOriginal");
     this.qualitySummary = this.document.getElementById("qualitySummary");
     this.qualityDetails = this.document.getElementById("qualityDetails");
+    this.openDashboard = this.document.getElementById("openDashboard");
     this.processedCount = this.document.getElementById("processedCount");
     this.cacheHitCount = this.document.getElementById("cacheHitCount");
     this.errorCount = this.document.getElementById("errorCount");
@@ -31,6 +32,7 @@ class PopupController {
     this.previewOriginal.addEventListener("change", () => {
       chrome.runtime.sendMessage({ type: "SET_PREVIEW_ORIGINAL", enabled: this.previewOriginal.checked });
     });
+    this.openDashboard.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }));
     this.refresh();
   }
 
@@ -70,6 +72,18 @@ class PopupController {
     if (quality) {
       this.qualitySummary.textContent = `${quality.changedPixelPercent}% pixels changed`;
       this.qualityDetails.textContent = `Sharpness ×${quality.sharpnessGain} · ${stats.lastDetectedMode || "unknown"} mode`;
+    }
+    this.renderScopes(stats.scopes || {});
+  }
+
+  renderScopes(scopes) {
+    for (const [name, values] of Object.entries(scopes)) {
+      const row = this.document.querySelector(`[data-scope="${name}"]`);
+      if (!row) continue;
+      const cells = row.querySelectorAll("td");
+      [values.seen, values.fixed, values.processing, values.errors, values.cache].forEach((value, index) => {
+        cells[index].textContent = String(value ?? 0);
+      });
     }
   }
 

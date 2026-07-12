@@ -45,6 +45,19 @@
         <small id="qualityDetails"></small>
       </section>
 
+      <button id="openDashboard" class="dashboard-button" type="button">Open comparison dashboard</button>
+
+      <section class="scope-stats">
+        <table>
+          <thead><tr><th>Scope</th><th>Seen</th><th>Fixed</th><th>Working</th><th>Error</th><th>Cache</th></tr></thead>
+          <tbody>
+            <tr data-scope="currentPage"><th>Current</th><td></td><td></td><td></td><td></td><td></td></tr>
+            <tr data-scope="openPages"><th>Open tabs</th><td></td><td></td><td></td><td></td><td></td></tr>
+            <tr data-scope="lifetime"><th>All time</th><td></td><td></td><td></td><td></td><td></td></tr>
+          </tbody>
+        </table>
+      </section>
+
       <section class="stats-grid" aria-label="Extension statistics">
         <article class="stat">
           <span class="stat-label">Processed</span>

@@ -252,6 +252,14 @@ class ViewportImageProvider {
     }
 
     image.dataset.aiMangaUpscalerObserved = "true";
+    const reportSeen = () => {
+      if (image.dataset.aiEnhancerSeen !== "true" && this.imageProvider.canProcess(image)) {
+        image.dataset.aiEnhancerSeen = "true";
+        chrome.runtime.sendMessage({ type: "IMAGE_SEEN" });
+      }
+    };
+    reportSeen();
+    image.addEventListener("load", reportSeen, { once: true });
     this.intersectionObserver.observe(image);
   }
 
