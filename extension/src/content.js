@@ -1,5 +1,6 @@
 const trackedImages = new Map();
-const processedImageUrls = new Set();
+const trackedImageKeys = new Map();
+const completedImageKeys = new Set();
 
 /**
  * Extracts stable image metadata from normal images and picture elements.
@@ -229,6 +230,8 @@ class ViewportImageProvider {
     this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
+    this.pageGeneration = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.pageOrder = 0;
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
     this.intersectionObserver = new IntersectionObserver(
       (entries) => this.handleIntersections(entries),
@@ -282,7 +285,8 @@ class ViewportImageProvider {
   }
 
   reprocessVisibleImages() {
-    processedImageUrls.clear();
+    trackedImageKeys.clear();
+    completedImageKeys.clear();
     document.querySelectorAll("img").forEach((image) => this.schedule(image));
   }
 
@@ -298,6 +302,9 @@ class ViewportImageProvider {
     for (const mutation of mutations) {
       for (const node of mutation.addedNodes) {
         this.observeNode(node);
+      }
+      for (const node of mutation.removedNodes) {
+        this.cleanupRemovedNode(node);
       }
     }
   }
@@ -323,24 +330,47 @@ class ViewportImageProvider {
 
     image.dataset.aiMangaUpscalerObserved = "true";
     const reportSeen = () => {
-      if (image.dataset.aiEnhancerSeen !== "true" && this.imageProvider.canProcess(image)) {
-        const imageId = image.dataset.aiEnhancerImageId || `ai-image-${Date.now()}-${this.sequence++}`;
-        image.dataset.aiEnhancerImageId = imageId;
-        image.dataset.aiEnhancerSeen = "true";
-        const metadata = this.imageProvider.read(image);
-        if (this.isBlacklisted(metadata.imageUrl)) return;
-        chrome.runtime.sendMessage({
-          type: "IMAGE_SEEN",
-          imageId,
-          imageUrl: metadata.imageUrl,
-          width: metadata.width,
-          height: metadata.height,
-        });
-        this.schedule(image);
+      if (image.dataset.aiMangaOriginalSrc || image.dataset.aiEnhancerSliced === "true") {
+        return;
       }
+      if (!this.imageProvider.canProcess(image)) {
+        return;
+      }
+      const metadata = this.imageProvider.read(image);
+      if (this.isBlacklisted(metadata.imageUrl)) return;
+      const imageKey = this.imageKey(metadata, image);
+      if (image.dataset.aiEnhancerSeen === "true" && image.dataset.aiEnhancerKey === imageKey) {
+        return;
+      }
+      if (image.dataset.aiEnhancerImageId && image.dataset.aiEnhancerKey && image.dataset.aiEnhancerKey !== imageKey) {
+        const oldEntry = trackedImages.get(image.dataset.aiEnhancerImageId);
+        if (oldEntry) this.cancel(oldEntry);
+        trackedImageKeys.delete(image.dataset.aiEnhancerKey);
+      }
+      const existing = trackedImageKeys.get(imageKey);
+      if (existing && existing.image !== image && document.documentElement.contains(existing.image)) {
+        image.dataset.aiEnhancerSeen = "true";
+        image.dataset.aiEnhancerImageId = existing.imageId;
+        image.dataset.aiEnhancerKey = imageKey;
+        return;
+      }
+      const imageId = existing?.imageId || this.createImageId(imageKey);
+      image.dataset.aiEnhancerImageId = imageId;
+      image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
+      image.dataset.aiEnhancerKey = imageKey;
+      image.dataset.aiEnhancerSeen = "true";
+      chrome.runtime.sendMessage({
+        type: "IMAGE_SEEN",
+        imageId,
+        imageUrl: metadata.imageUrl,
+        width: metadata.width,
+        height: metadata.height,
+        pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
+      });
+      this.schedule(image);
     };
     reportSeen();
-    image.addEventListener("load", reportSeen, { once: true });
+    image.addEventListener("load", reportSeen);
     this.intersectionObserver.observe(image);
   }
 
@@ -374,13 +404,28 @@ class ViewportImageProvider {
     }
 
     const existing = this.findByImage(image);
-    const imageId = existing?.imageId || image.dataset.aiEnhancerImageId || `ai-image-${Date.now()}-${this.sequence++}`;
-    const baseKey = this.processingKey(metadata.imageUrl);
-    if (processedImageUrls.has(baseKey)) {
+    const baseKey = this.imageKey(metadata, image);
+    const existingByKey = trackedImageKeys.get(baseKey);
+    if (existingByKey && existingByKey.image !== image && document.documentElement.contains(existingByKey.image)) {
       return;
     }
+    if (completedImageKeys.has(baseKey)) {
+      return;
+    }
+    const imageId = existing?.imageId || existingByKey?.imageId || image.dataset.aiEnhancerImageId || this.createImageId(baseKey);
     image.dataset.aiEnhancerImageId = imageId;
-    processedImageUrls.add(baseKey);
+    image.dataset.aiEnhancerKey = baseKey;
+    image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
+    const pageOrder = Number(image.dataset.aiEnhancerPageOrder) || 0;
+    trackedImageKeys.set(baseKey, {
+      imageId,
+      image,
+      metadata,
+      state: "preprocessing",
+      baseKey,
+      isSegment: false,
+      pageOrder,
+    });
     if (allowSegments && this.shouldSliceImage(image)) {
       await this.scheduleSegments(image, metadata, imageId, baseKey);
       return;
@@ -391,8 +436,11 @@ class ViewportImageProvider {
       image,
       metadata,
       state: "waiting",
+      baseKey,
+      isSegment: false,
+      pageOrder,
     });
-    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId });
+    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, pageOrder });
 
     await this.acquirePreprocessingSlot();
     let imageData = null;
@@ -409,20 +457,21 @@ class ViewportImageProvider {
       imageUrl: metadata.imageUrl,
       imageData,
       cacheVariant: "full",
+      pageOrder,
       viewportDistance: this.viewportDistance(image),
       displayMetrics: this.displayMetrics(image),
     });
   }
 
   async scheduleSegments(image, metadata, imageId, baseKey) {
-    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId });
+    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0 });
     await this.acquirePreprocessingSlot();
     let segments = [];
     try {
-      if (!processedImageUrls.has(baseKey)) return;
+      if (!trackedImageKeys.has(baseKey)) return;
       const imageData = await this.readDisplayedImage(metadata.imageUrl);
       if (!imageData) {
-        processedImageUrls.delete(baseKey);
+        trackedImageKeys.delete(baseKey);
         await this.schedule(image, false);
         return;
       }
@@ -432,7 +481,7 @@ class ViewportImageProvider {
     }
 
     if (!segments.length) {
-      processedImageUrls.delete(baseKey);
+      trackedImageKeys.delete(baseKey);
       await this.schedule(image, false);
       return;
     }
@@ -442,6 +491,8 @@ class ViewportImageProvider {
     for (const segment of segments) {
       const segmentId = `${imageId}-seg-${segment.index}`;
       const rawImage = rawImages[segment.index];
+      const segmentKey = `${baseKey}#segment:${segment.index}:${segment.sourceY}:${segment.sourceHeight}`;
+      const segmentOrder = (Number(image.dataset.aiEnhancerPageOrder) || 0) + (segment.index / 1000);
       const segmentMetadata = {
         ...metadata,
         imageUrl: `${metadata.imageUrl}#ai-segment-${segment.index}`,
@@ -452,15 +503,30 @@ class ViewportImageProvider {
         height: segment.renderedHeight,
         pictureSources: [],
       };
+      trackedImageKeys.set(segmentKey, {
+        imageId: segmentId,
+        image: rawImage,
+        metadata: segmentMetadata,
+        state: "waiting",
+        baseKey: segmentKey,
+        parentKey: baseKey,
+        isSegment: true,
+        pageOrder: segmentOrder,
+      });
       trackedImages.set(segmentId, {
         imageId: segmentId,
         image: rawImage,
         metadata: segmentMetadata,
         state: "waiting",
+        baseKey: segmentKey,
+        parentKey: baseKey,
+        isSegment: true,
+        pageOrder: segmentOrder,
       });
       chrome.runtime.sendMessage({
         type: "PREPROCESSING_STARTED",
         imageId: segmentId,
+        pageOrder: segmentOrder,
       });
       chrome.runtime.sendMessage({
         type: "ENQUEUE_IMAGE",
@@ -468,6 +534,7 @@ class ViewportImageProvider {
         imageUrl: metadata.imageUrl,
         imageData: segment.imageData,
         cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
+        pageOrder: segmentOrder,
         viewportDistance: this.viewportDistance(rawImage) + segment.index,
         displayMetrics: {
           ...this.displayMetrics(rawImage),
@@ -559,6 +626,24 @@ class ViewportImageProvider {
     } catch {
       return imageUrl;
     }
+  }
+
+  imageKey(metadata, image) {
+    const normalizedUrl = this.processingKey(metadata.imageUrl);
+    const rect = image.getBoundingClientRect();
+    const width = Math.round(metadata.width || rect.width || image.naturalWidth || 0);
+    const height = Math.round(metadata.height || rect.height || image.naturalHeight || 0);
+    const sourceWidth = image.naturalWidth || width;
+    const sourceHeight = image.naturalHeight || height;
+    return `${this.pageGeneration}|${normalizedUrl}|${sourceWidth}x${sourceHeight}|render:${width}x${height}`;
+  }
+
+  createImageId(imageKey) {
+    let hash = 0;
+    for (let index = 0; index < imageKey.length; index += 1) {
+      hash = ((hash << 5) - hash + imageKey.charCodeAt(index)) | 0;
+    }
+    return `ai-image-${Math.abs(hash).toString(36)}-${this.sequence++}`;
   }
 
   acquirePreprocessingSlot() {
@@ -677,13 +762,18 @@ class ViewportImageProvider {
     entry.state = "processing";
     await this.renderer.render(entry.image, message);
     trackedImages.delete(message.imageId);
+    if (entry.baseKey) {
+      trackedImageKeys.delete(entry.baseKey);
+      completedImageKeys.add(entry.baseKey);
+    }
   }
 
   fail(imageId, permanent = false) {
     const entry = trackedImages.get(imageId);
     if (entry && !permanent) {
-      processedImageUrls.delete(this.processingKey(entry.metadata.imageUrl));
+      trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
     }
+    if (entry && permanent && entry.baseKey) completedImageKeys.add(entry.baseKey);
     trackedImages.delete(imageId);
   }
 
@@ -692,8 +782,37 @@ class ViewportImageProvider {
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
     });
-    processedImageUrls.delete(this.processingKey(entry.metadata.imageUrl));
+    trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
     trackedImages.delete(entry.imageId);
+  }
+
+  cleanupRemovedNode(node) {
+    if (!(node instanceof Node)) return;
+    const removedImages = [];
+    if (node instanceof HTMLImageElement) removedImages.push(node);
+    if (node instanceof HTMLElement) {
+      removedImages.push(...node.querySelectorAll("img"));
+    }
+    for (const image of removedImages) {
+      const entry = this.findByImage(image);
+      if (entry) {
+        this.cancel(entry);
+      }
+      for (const [key, keyedEntry] of trackedImageKeys.entries()) {
+        if (keyedEntry.image === image) {
+          chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId: keyedEntry.imageId }).catch(() => {});
+          trackedImageKeys.delete(key);
+          completedImageKeys.delete(key);
+        }
+      }
+      if (image.dataset?.aiEnhancerKey) {
+        completedImageKeys.delete(image.dataset.aiEnhancerKey);
+      }
+      if (image.dataset?.aiEnhancerImageId) {
+        const byId = trackedImages.get(image.dataset.aiEnhancerImageId);
+        if (byId) this.cancel(byId);
+      }
+    }
   }
 
   findByImage(image) {

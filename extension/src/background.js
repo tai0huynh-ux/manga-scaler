@@ -190,7 +190,7 @@ class PageImageRegistry {
       ...image,
       tabId,
       status: existing?.status || "seen",
-      order: existing?.order ?? this.sequence++,
+      order: existing?.order ?? (Number.isFinite(image.pageOrder) ? image.pageOrder : this.sequence++),
       seenAt: existing?.seenAt ?? performance.now(),
     });
     await this.ensureDomainAccess(image.imageUrl, image.pageUrl);
@@ -204,7 +204,7 @@ class PageImageRegistry {
       imageId,
       tabId,
       ...patch,
-      order: existing?.order ?? this.sequence++,
+      order: existing?.order ?? (Number.isFinite(patch.pageOrder) ? patch.pageOrder : this.sequence++),
       updatedAt: performance.now(),
     });
   }
@@ -218,11 +218,16 @@ class PageImageRegistry {
       .flatMap((page) => [...page.values()])
       .sort((left, right) => {
         const statusRank = { processing: 0, preprocessing: 1, waiting: 2, seen: 3, timeout: 4, error: 5, fixed: 6, cache: 7 };
+        if ((left.order ?? 0) !== (right.order ?? 0)) return (left.order ?? 0) - (right.order ?? 0);
         const leftRank = statusRank[left.status] ?? 8;
         const rightRank = statusRank[right.status] ?? 8;
         if (leftRank !== rightRank) return leftRank - rightRank;
-        return (left.order ?? 0) - (right.order ?? 0);
+        return String(left.imageId || "").localeCompare(String(right.imageId || ""));
       });
+  }
+
+  removeImage(tabId, imageId) {
+    this.pages.get(tabId)?.delete(imageId);
   }
 
   remove(tabId) {
@@ -630,10 +635,11 @@ class QueueScheduler {
       ...job,
       attempt: existing?.attempt ?? 1,
       queuedAt: existing?.queuedAt ?? performance.now(),
+      pageOrder: Number.isFinite(job.pageOrder) ? job.pageOrder : existing?.pageOrder ?? Number.MAX_SAFE_INTEGER,
       viewportDistance: Number.isFinite(job.viewportDistance) ? job.viewportDistance : Number.MAX_SAFE_INTEGER,
     });
     if (!job.deferred) this.preemptDeferredActiveJobs();
-    pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting" });
+    pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting", pageOrder: job.pageOrder });
     this.drain();
   }
 
@@ -707,6 +713,7 @@ class QueueScheduler {
           ...job,
           abortController: undefined,
           queuedAt: performance.now(),
+          pageOrder: job.pageOrder ?? Number.MAX_SAFE_INTEGER,
           viewportDistance: Number.MAX_SAFE_INTEGER,
           deferred: true,
         });
@@ -735,7 +742,12 @@ class QueueScheduler {
       const abortController = new AbortController();
       const startedAt = performance.now();
       this.active.set(job.imageId, { ...job, abortController, startedAt });
-      pageImageRegistry.update(job.tabId, job.imageId, { status: "processing", startedAt, deferred: Boolean(job.deferred) });
+      pageImageRegistry.update(job.tabId, job.imageId, {
+        status: "processing",
+        startedAt,
+        deferred: Boolean(job.deferred),
+        pageOrder: job.pageOrder,
+      });
       this.process({ ...job, abortController }).finally(() => {
         this.active.delete(job.imageId);
         this.drain();
@@ -746,8 +758,8 @@ class QueueScheduler {
   nextJob() {
     return [...this.pending.values()].sort((left, right) => {
       if (Boolean(left.deferred) !== Boolean(right.deferred)) return left.deferred ? 1 : -1;
-      if (left.viewportDistance !== right.viewportDistance) {
-        return left.viewportDistance - right.viewportDistance;
+      if ((left.pageOrder ?? Number.MAX_SAFE_INTEGER) !== (right.pageOrder ?? Number.MAX_SAFE_INTEGER)) {
+        return (left.pageOrder ?? Number.MAX_SAFE_INTEGER) - (right.pageOrder ?? Number.MAX_SAFE_INTEGER);
       }
       return left.queuedAt - right.queuedAt;
     })[0];
@@ -1085,7 +1097,12 @@ chrome.alarms.create("ai-enhancer-watchdog", { periodInMinutes: 0.5 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PREPROCESSING_STARTED") {
-    if (sender.tab?.id) pageImageRegistry.update(sender.tab.id, message.imageId, { status: "preprocessing" });
+    if (sender.tab?.id) {
+      pageImageRegistry.update(sender.tab.id, message.imageId, {
+        status: "preprocessing",
+        pageOrder: Number(message.pageOrder),
+      });
+    }
     sendResponse({ recorded: true });
     return false;
   }
@@ -1106,6 +1123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             pageUrl: sender.tab.url,
             width: message.width,
             height: message.height,
+            pageOrder: Number(message.pageOrder),
           }),
         ]).then(() => sendResponse({ recorded: true }));
       });
@@ -1134,6 +1152,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pageUrl: sender.tab.url,
         imageData: message.imageData || null,
         cacheVariant: message.cacheVariant || "full",
+        pageOrder: Number(message.pageOrder),
         viewportDistance: message.viewportDistance,
         mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
         enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
@@ -1167,7 +1186,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "CANCEL_IMAGE") {
     scheduler.cancel(message.imageId);
+    if (sender.tab?.id) pageImageRegistry.removeImage(sender.tab.id, message.imageId);
     sendResponse({ canceled: true });
+    return false;
+  }
+
+  if (message.type === "REMOVE_IMAGE") {
+    if (sender.tab?.id) pageImageRegistry.removeImage(sender.tab.id, message.imageId);
+    scheduler.cancel(message.imageId);
+    sendResponse({ removed: true });
     return false;
   }
 
