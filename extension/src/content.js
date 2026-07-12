@@ -5,14 +5,19 @@ const processedImageUrls = new Set();
  * Extracts stable image metadata from normal images and picture elements.
  */
 class ImageProvider {
-  constructor(minDimensionPx) {
-    this.minDimensionPx = minDimensionPx;
+  constructor(limits) {
+    this.updateLimits(limits);
+  }
+
+  updateLimits(limits) {
+    this.limits = limits;
   }
 
   canProcess(image) {
     const width = image.naturalWidth || image.width || image.clientWidth;
     const height = image.naturalHeight || image.height || image.clientHeight;
-    return width >= this.minDimensionPx || height >= this.minDimensionPx;
+    return width >= this.limits.minInputWidth && height >= this.limits.minInputHeight &&
+      width <= this.limits.maxInputWidth && height <= this.limits.maxInputHeight;
   }
 
   read(image) {
@@ -206,9 +211,16 @@ class ViewportImageProvider {
   }
 
   async start() {
-    const stored = await chrome.storage.local.get({ enabled: true, blacklistRules: [] });
+    const stored = await chrome.storage.local.get({
+      enabled: true, blacklistRules: [],
+      minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
+      minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
+      maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
+      maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+    });
     this.enabled = stored.enabled;
     this.blacklist = new Set(stored.blacklistRules || []);
+    this.imageProvider.updateLimits(stored);
     this.observeExistingImages();
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
@@ -341,7 +353,25 @@ class ViewportImageProvider {
       imageUrl: metadata.imageUrl,
       imageData,
       viewportDistance: this.viewportDistance(image),
+      displayMetrics: this.displayMetrics(image),
     });
+  }
+
+  displayMetrics(image) {
+    const rect = image.getBoundingClientRect();
+    return {
+      renderedWidth: Math.max(rect.width, image.clientWidth || 0),
+      renderedHeight: Math.max(rect.height, image.clientHeight || 0),
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      screenWidth: window.screen?.availWidth || window.innerWidth,
+      screenHeight: window.screen?.availHeight || window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      left: rect.left,
+      top: rect.top,
+      rightMargin: window.innerWidth - rect.right,
+      bottomMargin: window.innerHeight - rect.bottom,
+    };
   }
 
   normalizeBlacklistUrl(imageUrl) {
@@ -509,7 +539,12 @@ class ViewportImageProvider {
 
 const renderer = new Renderer();
 const viewportProvider = new ViewportImageProvider({
-  imageProvider: new ImageProvider(AI_MANGA_UPSCALER_CONFIG.images.minDimensionPx),
+  imageProvider: new ImageProvider({
+    minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
+    minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
+    maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
+    maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+  }),
   renderer,
 });
 
@@ -522,6 +557,17 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   if (areaName === "local" && changes.blacklistRules) {
     viewportProvider.blacklist = new Set(changes.blacklistRules.newValue || []);
+  }
+  if (areaName === "local" && (changes.minInputWidth || changes.minInputHeight || changes.maxInputWidth || changes.maxInputHeight)) {
+    chrome.storage.local.get({
+      minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
+      minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
+      maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
+      maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+    }).then((limits) => {
+      viewportProvider.imageProvider.updateLimits(limits);
+      viewportProvider.reprocessVisibleImages();
+    });
   }
 });
 

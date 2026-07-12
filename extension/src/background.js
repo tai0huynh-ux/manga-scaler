@@ -5,6 +5,17 @@ const DEFAULT_STATE = Object.freeze({
   mode: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
   enhanceLevel: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
   maxProcessingSeconds: AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds,
+  minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
+  minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
+  maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
+  maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+  maxOutputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxOutputWidthPx,
+  maxOutputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxOutputHeightPx,
+  outputQuality: AI_MANGA_UPSCALER_CONFIG.images.outputQuality,
+  sizingMode: "auto",
+  resolutionPreset: "fhd",
+  screenOrientation: "auto",
+  performanceBoost: true,
   seen: 0,
   processed: 0,
   errors: 0,
@@ -90,6 +101,14 @@ class StatisticsTracker {
       mode: current.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
       enhanceLevel: Number(current.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
       maxProcessingSeconds: Number(current.maxProcessingSeconds ?? AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds),
+      minInputWidth: Number(current.minInputWidth), minInputHeight: Number(current.minInputHeight),
+      maxInputWidth: Number(current.maxInputWidth), maxInputHeight: Number(current.maxInputHeight),
+      maxOutputWidth: Number(current.maxOutputWidth), maxOutputHeight: Number(current.maxOutputHeight),
+      outputQuality: Number(current.outputQuality),
+      sizingMode: current.sizingMode || "auto",
+      resolutionPreset: current.resolutionPreset || "fhd",
+      screenOrientation: current.screenOrientation || "auto",
+      performanceBoost: Boolean(current.performanceBoost),
       processed,
       errors: Number(current.errors ?? 0),
       cacheHits,
@@ -384,6 +403,10 @@ class BackendUpscaleProvider {
           enhanceLevel: options.enhanceLevel,
           imageData,
           jobId: options.jobId,
+          maxOutputWidth: options.maxOutputWidth,
+          maxOutputHeight: options.maxOutputHeight,
+          outputQuality: options.outputQuality,
+          tileSize: options.tileSize,
         }),
         signal,
       });
@@ -624,7 +647,7 @@ class QueueScheduler {
     const startedAt = performance.now();
     try {
       const cacheUrl = this.normalizeCacheUrl(job.imageUrl);
-      const cacheIdentity = `${cacheUrl}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}`;
+      const cacheIdentity = `${cacheUrl}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (job.abortController.signal.aborted) {
         return;
@@ -664,6 +687,10 @@ class QueueScheduler {
           imageData: job.imageData,
           jobId: job.imageId,
           maxProcessingSeconds: job.maxProcessingSeconds,
+          maxOutputWidth: job.maxOutputWidth,
+          maxOutputHeight: job.maxOutputHeight,
+          outputQuality: job.outputQuality,
+          tileSize: job.tileSize,
         },
         job.abortController.signal,
       );
@@ -830,6 +857,31 @@ async function ensureBackendStarted() {
   });
 }
 
+function resolveOutputLimits(settings, metrics = {}) {
+  const clamp = (value, minimum, maximum) => Math.min(Math.max(Math.round(value), minimum), maximum);
+  if (settings.sizingMode === "pixel") {
+    return { width: Number(settings.maxOutputWidth), height: Number(settings.maxOutputHeight) };
+  }
+  const presets = { hd: [1280, 720], fhd: [1920, 1080], "2k": [2560, 1440], "4k": [3840, 2160] };
+  if (settings.sizingMode === "screen") {
+    let [width, height] = presets[settings.resolutionPreset] || presets.fhd;
+    const orientation = settings.screenOrientation === "auto"
+      ? ((metrics.screenHeight || 0) > (metrics.screenWidth || 0) ? "portrait" : "landscape")
+      : settings.screenOrientation;
+    if (orientation === "portrait") [width, height] = [height, width];
+    return { width, height };
+  }
+  const ratio = clamp(Number(metrics.devicePixelRatio) || 1, 1, 3);
+  const visibleWidth = Math.min(Number(metrics.renderedWidth) || 512, Number(metrics.viewportWidth) || 1920);
+  const visibleHeight = Math.min(Number(metrics.renderedHeight) || 512, Number(metrics.viewportHeight) || 1080);
+  const screenWidth = (Number(metrics.screenWidth) || 1920) * ratio;
+  const screenHeight = (Number(metrics.screenHeight) || 1080) * ratio;
+  return {
+    width: clamp(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), 256, Number(settings.maxOutputWidth)),
+    height: clamp(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), 256, Number(settings.maxOutputHeight)),
+  };
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
   const settings = await chrome.storage.local.get({ enabled: true });
@@ -869,6 +921,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
       lastContentTabId = sender.tab.id;
+      const outputLimits = resolveOutputLimits(settings, message.displayMetrics);
       scheduler.enqueue({
         tabId: sender.tab.id,
         imageId: message.imageId,
@@ -879,6 +932,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
         enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
         maxProcessingSeconds: Number(settings.maxProcessingSeconds ?? AI_MANGA_UPSCALER_CONFIG.backend.defaultProcessingTimeoutSeconds),
+        maxOutputWidth: outputLimits.width,
+        maxOutputHeight: outputLimits.height,
+        outputQuality: Number(settings.outputQuality),
+        tileSize: settings.performanceBoost ? 512 : 256,
       });
       sendResponse({ accepted: true });
     });
@@ -936,6 +993,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_PROCESSING_TIMEOUT") {
     const maxProcessingSeconds = Math.min(Math.max(Number(message.seconds) || 60, 5), 300);
     chrome.storage.local.set({ maxProcessingSeconds }).then(() => sendResponse({ maxProcessingSeconds }));
+    return true;
+  }
+
+  if (message.type === "SET_IMAGE_LIMITS") {
+    const clamp = (value, minimum, maximum, fallback) => Math.min(Math.max(Number(value) || fallback, minimum), maximum);
+    const limits = {
+      minInputWidth: clamp(message.minInputWidth, 1, 16383, 128),
+      minInputHeight: clamp(message.minInputHeight, 1, 16383, 128),
+      maxInputWidth: clamp(message.maxInputWidth, 1, 32768, 8000),
+      maxInputHeight: clamp(message.maxInputHeight, 1, 32768, 12000),
+      maxOutputWidth: clamp(message.maxOutputWidth, 256, 16383, 2048),
+      maxOutputHeight: clamp(message.maxOutputHeight, 256, 16383, 8192),
+      outputQuality: clamp(message.outputQuality, 50, 100, 90),
+      sizingMode: ["pixel", "auto", "screen"].includes(message.sizingMode) ? message.sizingMode : "auto",
+      resolutionPreset: ["hd", "fhd", "2k", "4k"].includes(message.resolutionPreset) ? message.resolutionPreset : "fhd",
+      screenOrientation: ["auto", "landscape", "portrait"].includes(message.screenOrientation) ? message.screenOrientation : "auto",
+      performanceBoost: Boolean(message.performanceBoost),
+    };
+    limits.maxInputWidth = Math.max(limits.maxInputWidth, limits.minInputWidth);
+    limits.maxInputHeight = Math.max(limits.maxInputHeight, limits.minInputHeight);
+    chrome.storage.local.set(limits).then(() => sendResponse(limits));
     return true;
   }
 

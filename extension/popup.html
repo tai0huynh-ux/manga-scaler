@@ -34,6 +34,20 @@
         <input id="enhanceLevel" type="range" min="0" max="100" step="5" value="35">
         <label class="control-label" for="processingTimeout">Maximum seconds per image</label>
         <input id="processingTimeout" type="number" min="5" max="300" step="5" value="60">
+        <label class="control-label" for="sizingMode">Output size mode</label>
+        <select id="sizingMode"><option value="auto">Auto for image and screen</option><option value="pixel">Manual pixels</option><option value="screen">Screen preset</option></select>
+        <div class="compact-grid">
+          <label>Preset<select id="resolutionPreset"><option value="hd">HD</option><option value="fhd">Full HD</option><option value="2k">2K</option><option value="4k">4K</option></select></label>
+          <label>Orientation<select id="screenOrientation"><option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+          <label>Max output width<input id="maxOutputWidth" type="number" min="256" max="16383"></label>
+          <label>Max output height<input id="maxOutputHeight" type="number" min="256" max="16383"></label>
+          <label>Min input width<input id="minInputWidth" type="number" min="1" max="16383"></label>
+          <label>Min input height<input id="minInputHeight" type="number" min="1" max="16383"></label>
+          <label>Max input width<input id="maxInputWidth" type="number" min="1" max="32768"></label>
+          <label>Max input height<input id="maxInputHeight" type="number" min="1" max="32768"></label>
+          <label>WebP quality<input id="outputQuality" type="number" min="50" max="100"></label>
+        </div>
+        <label class="preview-control"><input id="performanceBoost" type="checkbox"><span>Performance boost (larger GPU tiles)</span></label>
         <p id="modeDescription" class="mode-description"></p>
         <label class="preview-control">
           <input id="previewOriginal" type="checkbox">

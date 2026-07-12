@@ -20,6 +20,9 @@ class InferenceJob:
     model_name: str | None
     tile_size: int | None
     enhance_level: float | None
+    max_output_width: int | None
+    max_output_height: int | None
+    output_quality: int | None
     future: asyncio.Future
     cancel_event: threading.Event = field(default_factory=threading.Event)
     created_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
@@ -73,6 +76,9 @@ class InferenceQueue:
         mode: str = "auto",
         image_bytes: bytes | None = None,
         client_job_id: str | None = None,
+        max_output_width: int | None = None,
+        max_output_height: int | None = None,
+        output_quality: int | None = None,
     ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
@@ -85,6 +91,9 @@ class InferenceQueue:
             model_name=model_name,
             tile_size=tile_size,
             enhance_level=enhance_level,
+            max_output_width=max_output_width,
+            max_output_height=max_output_height,
+            output_quality=output_quality,
             future=future,
         )
         if client_job_id:

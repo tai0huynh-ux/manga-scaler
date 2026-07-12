@@ -2,6 +2,7 @@
 
 import numpy as np
 import threading
+import asyncio
 from PIL import Image
 
 from app.core.config import EncodingConfig, EnhancementConfig
@@ -54,3 +55,15 @@ def test_enhancement_level_zero_is_identity() -> None:
         EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
     )
     assert pipeline._enhance_sync(source, 0) is source
+
+
+def test_fit_for_model_scale_respects_independent_output_bounds() -> None:
+    source = Image.new("RGB", (1600, 2400))
+    pipeline = ImagePipeline(
+        EncodingConfig(format="WEBP", quality=90, lossless=False, method=4),
+        EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
+    )
+    fitted = asyncio.run(pipeline.fit_for_model_scale(source, 4, 1920, 1080))
+    assert fitted.width * 4 <= 1920
+    assert fitted.height * 4 <= 1080
+    assert fitted.width / fitted.height == source.width / source.height

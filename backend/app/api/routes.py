@@ -90,6 +90,9 @@ async def upscale(
             mode=payload.mode,
             image_bytes=image_bytes,
             client_job_id=payload.job_id,
+            max_output_width=payload.max_output_width,
+            max_output_height=payload.max_output_height,
+            output_quality=payload.output_quality,
         )
     except FileNotFoundError as exc:
         raise HTTPException(

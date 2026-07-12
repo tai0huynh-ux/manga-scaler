@@ -39,6 +39,9 @@ class UpscaleRequest(BaseModel):
         le=1.0,
         description="Post-processing strength from 0 (off) to 1 (configured maximum).",
     )
+    max_output_width: int | None = Field(default=None, alias="maxOutputWidth", ge=256, le=16383)
+    max_output_height: int | None = Field(default=None, alias="maxOutputHeight", ge=256, le=16383)
+    output_quality: int | None = Field(default=None, alias="outputQuality", ge=50, le=100)
 
 
 class UpscaleResponse(BaseModel):

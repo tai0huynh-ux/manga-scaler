@@ -10,6 +10,7 @@ class PopupController {
     this.enhanceLevel = this.document.getElementById("enhanceLevel");
     this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
     this.processingTimeout = this.document.getElementById("processingTimeout");
+    this.imageSettingIds = ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "performanceBoost"];
     this.modeDescription = this.document.getElementById("modeDescription");
     this.previewOriginal = this.document.getElementById("previewOriginal");
     this.qualitySummary = this.document.getElementById("qualitySummary");
@@ -33,6 +34,7 @@ class PopupController {
     this.processingTimeout.addEventListener("change", () => chrome.runtime.sendMessage({
       type: "SET_PROCESSING_TIMEOUT", seconds: Number(this.processingTimeout.value),
     }));
+    this.imageSettingIds.forEach((id) => this.document.getElementById(id).addEventListener("change", () => this.saveImageSettings()));
     this.previewOriginal.addEventListener("change", () => {
       chrome.runtime.sendMessage({ type: "SET_PREVIEW_ORIGINAL", enabled: this.previewOriginal.checked });
     });
@@ -67,6 +69,12 @@ class PopupController {
     this.modeSelect.value = stats.mode || "auto";
     this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
     this.processingTimeout.value = String(stats.maxProcessingSeconds ?? 60);
+    this.imageSettingIds.forEach((id) => {
+      const element = this.document.getElementById(id);
+      if (element.type === "checkbox") element.checked = Boolean(stats[id]);
+      else element.value = String(stats[id] ?? "");
+    });
+    this.renderSizeSettings();
     this.renderEnhancementSettings();
     this.processedCount.textContent = String(stats.processed ?? 0);
     this.cacheHitCount.textContent = String(stats.cacheHits ?? 0);
@@ -108,6 +116,27 @@ class PopupController {
     const enhanceLevel = Number(this.enhanceLevel.value) / 100;
     await chrome.runtime.sendMessage({ type: "SET_ENHANCEMENT", mode, enhanceLevel });
     this.renderEnhancementSettings();
+  }
+
+  async saveImageSettings() {
+    const value = (id) => this.document.getElementById(id).value;
+    await chrome.runtime.sendMessage({
+      type: "SET_IMAGE_LIMITS",
+      sizingMode: value("sizingMode"), resolutionPreset: value("resolutionPreset"),
+      screenOrientation: value("screenOrientation"),
+      maxOutputWidth: Number(value("maxOutputWidth")), maxOutputHeight: Number(value("maxOutputHeight")),
+      minInputWidth: Number(value("minInputWidth")), minInputHeight: Number(value("minInputHeight")),
+      maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
+      outputQuality: Number(value("outputQuality")),
+      performanceBoost: this.document.getElementById("performanceBoost").checked,
+    });
+    this.renderSizeSettings();
+  }
+
+  renderSizeSettings() {
+    const mode = this.document.getElementById("sizingMode").value;
+    ["maxOutputWidth", "maxOutputHeight"].forEach((id) => { this.document.getElementById(id).disabled = mode !== "pixel"; });
+    ["resolutionPreset", "screenOrientation"].forEach((id) => { this.document.getElementById(id).disabled = mode !== "screen"; });
   }
 
   renderEnhancementSettings() {

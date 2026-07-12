@@ -13,6 +13,17 @@
         <label>Mode<select id="mode"><option value="auto">Auto</option><option value="manga">Manga</option><option value="artwork">Anime / Artwork</option><option value="photo">Photo</option></select></label>
         <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"></label>
         <label>Maximum seconds per image<input id="timeout" type="number" min="5" max="300" step="5" value="60"></label>
+        <label>Size mode<select id="sizingMode"><option value="auto">Auto</option><option value="pixel">Manual pixels</option><option value="screen">Screen preset</option></select></label>
+        <label>Quality preset<select id="resolutionPreset"><option value="hd">HD 1280×720</option><option value="fhd">Full HD 1920×1080</option><option value="2k">2K 2560×1440</option><option value="4k">4K 3840×2160</option></select></label>
+        <label>Screen orientation<select id="screenOrientation"><option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+        <label>Max output width<input id="maxOutputWidth" type="number" min="256" max="16383"></label>
+        <label>Max output height<input id="maxOutputHeight" type="number" min="256" max="16383"></label>
+        <label>Min input width<input id="minInputWidth" type="number" min="1" max="16383"></label>
+        <label>Min input height<input id="minInputHeight" type="number" min="1" max="16383"></label>
+        <label>Max input width<input id="maxInputWidth" type="number" min="1" max="32768"></label>
+        <label>Max input height<input id="maxInputHeight" type="number" min="1" max="32768"></label>
+        <label>WebP quality<input id="outputQuality" type="number" min="50" max="100"></label>
+        <label><span>Performance boost</span><input id="performanceBoost" type="checkbox"></label>
       </section>
       <section class="card image-section"><div class="section-heading"><h2>Images on current page</h2><span id="imageCount">0 images</span></div><div id="imageList" class="image-list"></div></section>
       <section class="card"><h2>Quality</h2><div id="quality" class="metrics"></div></section>

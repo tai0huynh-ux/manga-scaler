@@ -43,9 +43,9 @@ class ImagePipeline:
         """Decode image bytes and convert to RGB."""
         return await asyncio.to_thread(self._decode_sync, image_bytes)
 
-    async def encode_webp(self, image: Image.Image) -> bytes:
+    async def encode_webp(self, image: Image.Image, quality: int | None = None) -> bytes:
         """Encode an RGB image to WebP bytes."""
-        return await asyncio.to_thread(self._encode_webp_sync, image)
+        return await asyncio.to_thread(self._encode_webp_sync, image, quality)
 
     async def encode_png(self, image: Image.Image) -> bytes:
         """Encode a lossless verification copy of the browser input."""
@@ -60,13 +60,16 @@ class ImagePipeline:
         """Apply configurable, bounded post-processing at the requested strength."""
         return await asyncio.to_thread(self._enhance_sync, image, level)
 
-    async def fit_for_model_scale(self, image: Image.Image, scale: int) -> Image.Image:
+    async def fit_for_model_scale(
+        self, image: Image.Image, scale: int, max_output_width: int | None = None, max_output_height: int | None = None
+    ) -> Image.Image:
         """Bound source dimensions so the encoded result fits the WebP format."""
-        maximum_source_dimension = self.encoding.max_output_dimension // scale
-        if max(image.size) <= maximum_source_dimension:
+        maximum_source_width = min(max_output_width or self.encoding.max_output_dimension, self.encoding.max_output_dimension) // scale
+        maximum_source_height = min(max_output_height or self.encoding.max_output_dimension, self.encoding.max_output_dimension) // scale
+        if image.width <= maximum_source_width and image.height <= maximum_source_height:
             return image
         fitted = image.copy()
-        fitted.thumbnail((maximum_source_dimension, maximum_source_dimension), Image.Resampling.LANCZOS)
+        fitted.thumbnail((maximum_source_width, maximum_source_height), Image.Resampling.LANCZOS)
         return fitted
 
     def _enhance_sync(self, image: Image.Image, level: float) -> Image.Image:
@@ -118,13 +121,13 @@ class ImagePipeline:
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Browser-supplied data is not a supported image.") from exc
 
-    def _encode_webp_sync(self, image: Image.Image) -> bytes:
+    def _encode_webp_sync(self, image: Image.Image, quality: int | None = None) -> bytes:
         """Encode an image using configured WebP settings."""
         output = io.BytesIO()
         image.save(
             output,
             format=self.encoding.format,
-            quality=self.encoding.quality,
+            quality=quality if quality is not None else self.encoding.quality,
             lossless=self.encoding.lossless,
             method=self.encoding.method,
         )

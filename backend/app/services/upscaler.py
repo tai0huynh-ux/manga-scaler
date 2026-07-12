@@ -65,10 +65,14 @@ class UpscalerService:
         mode: str = "auto",
         image_bytes: bytes | None = None,
         client_job_id: str | None = None,
+        max_output_width: int | None = None,
+        max_output_height: int | None = None,
+        output_quality: int | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
         result = await self.queue.submit(
-            str(image_url), model_name, tile_size, enhance_level, mode, image_bytes, client_job_id
+            str(image_url), model_name, tile_size, enhance_level, mode, image_bytes, client_job_id,
+            max_output_width, max_output_height, output_quality
         )
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
@@ -109,14 +113,20 @@ class UpscalerService:
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
         model = self.model_manager.get_model(job.model_name or profile.model)
-        inference_image = await self.pipeline.fit_for_model_scale(image, model.scale)
+        inference_image = await self.pipeline.fit_for_model_scale(
+            image, model.scale, job.max_output_width, job.max_output_height
+        )
         requested_tile_size = self._resolve_tile_size(job.tile_size)
         tile_size = model.fixed_tile_size or requested_tile_size
         overlap = min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
         enhance_level = profile.enhance_level if job.enhance_level is None else job.enhance_level
         enhancement_key = round(enhance_level, 3)
+        output_quality = job.output_quality or self.settings.encoding.quality
+        output_width = job.max_output_width or self.settings.encoding.max_output_dimension
+        output_height = job.max_output_height or self.settings.encoding.max_output_dimension
         output_key = (
-            f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}-webp"
+            f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}"
+            f"-w{output_width}-h{output_height}-q{output_quality}-webp"
         )
 
         final_path = self.settings.cache_dir / f"{output_key}.webp"
@@ -195,7 +205,7 @@ class UpscalerService:
         timings.set("enhance", enhance_started)
 
         encode_started = time.perf_counter()
-        encoded = await self.pipeline.encode_webp(enhanced_image)
+        encoded = await self.pipeline.encode_webp(enhanced_image, output_quality)
         self._ensure_active(job)
         timings.set("encode", encode_started)
         output_artifact = EncodedImage(
