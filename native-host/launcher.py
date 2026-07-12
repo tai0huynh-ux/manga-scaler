@@ -39,12 +39,15 @@ def healthy() -> bool:
 def start_backend() -> dict:
     if healthy():
         return {"ok": True, "status": "already-running"}
-    python = ROOT / ".venv" / "Scripts" / "python.exe"
-    if not python.exists():
-        return {"ok": False, "error": f"Virtual environment not found: {python}"}
+    scripts = ROOT / ".venv" / "Scripts"
+    pythonw = scripts / "pythonw.exe"
+    python = scripts / "python.exe"
+    executable = pythonw if pythonw.exists() else python
+    if not executable.exists():
+        return {"ok": False, "error": f"Virtual environment not found: {executable}"}
     flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
     subprocess.Popen(
-        [str(python), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8765"],
+        [str(executable), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8765"],
         cwd=ROOT / "backend",
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

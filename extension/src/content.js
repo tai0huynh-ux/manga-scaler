@@ -60,6 +60,7 @@ class ImageProvider {
 class Renderer {
   constructor() {
     this.activeObjectUrls = new WeakMap();
+    this.segmentLayers = new WeakMap();
     this.installStyles();
   }
 
@@ -70,6 +71,11 @@ class Renderer {
 
     const metadata = trackedImages.get(payload.imageId)?.metadata;
     if (!metadata) {
+      return;
+    }
+
+    if (metadata.segment) {
+      await this.renderSegment(image, payload, metadata);
       return;
     }
 
@@ -90,9 +96,49 @@ class Renderer {
     await this.waitForImageLoad(image);
     image.classList.add("ai-manga-upscaler-ready");
 
-    if (previousObjectUrl) {
+    if (typeof previousObjectUrl === "string") {
       URL.revokeObjectURL(previousObjectUrl);
     }
+  }
+
+  async renderSegment(image, payload, metadata) {
+    const layer = this.ensureSegmentLayer(image, metadata);
+    const blob = new Blob([this.base64ToUint8Array(payload.imageBase64)], {
+      type: payload.contentType || "image/png",
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const segmentImage = new Image();
+    segmentImage.className = "ai-enhancer-segment";
+    segmentImage.alt = "";
+    segmentImage.style.top = `${metadata.segment.renderedTop}px`;
+    segmentImage.style.height = `${metadata.segment.renderedHeight}px`;
+    segmentImage.src = objectUrl;
+    await this.waitForImageLoad(segmentImage);
+    layer.appendChild(segmentImage);
+    const urls = this.activeObjectUrls.get(image) || [];
+    urls.push(objectUrl);
+    this.activeObjectUrls.set(image, urls);
+  }
+
+  ensureSegmentLayer(image, metadata) {
+    const existing = this.segmentLayers.get(image);
+    if (existing) return existing.layer;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "ai-enhancer-segment-wrapper";
+    wrapper.style.width = `${metadata.width}px`;
+    wrapper.style.height = `${metadata.height}px`;
+    image.parentNode.insertBefore(wrapper, image);
+    wrapper.appendChild(image);
+    image.style.width = "100%";
+    image.style.height = "100%";
+    image.style.display = "block";
+
+    const layer = document.createElement("div");
+    layer.className = "ai-enhancer-segment-layer";
+    wrapper.appendChild(layer);
+    this.segmentLayers.set(image, { wrapper, layer });
+    return layer;
   }
 
   freezeLayout(image, metadata) {
@@ -109,7 +155,7 @@ class Renderer {
       const enhancedUrl = this.activeObjectUrls.get(image);
       if (enabled) {
         image.src = image.dataset.aiMangaOriginalSrc;
-      } else if (enhancedUrl) {
+      } else if (typeof enhancedUrl === "string") {
         image.src = enhancedUrl;
       }
     });
@@ -177,6 +223,32 @@ class Renderer {
       }
 
       .ai-enhancer-blacklist-button:hover { opacity: 1 !important; }
+
+      .ai-enhancer-segment-wrapper {
+        position: relative !important;
+        overflow: hidden !important;
+        display: block !important;
+      }
+
+      .ai-enhancer-segment-layer {
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 2 !important;
+        pointer-events: none !important;
+      }
+
+      .ai-enhancer-segment {
+        position: absolute !important;
+        left: 0 !important;
+        width: 100% !important;
+        object-fit: fill !important;
+        opacity: 0;
+        animation: ai-enhancer-segment-in 160ms ease forwards;
+      }
+
+      @keyframes ai-enhancer-segment-in {
+        to { opacity: 1; }
+      }
     `;
     document.documentElement.appendChild(style);
   }
@@ -255,11 +327,7 @@ class ViewportImageProvider {
 
   reprocessVisibleImages() {
     processedImageUrls.clear();
-    document.querySelectorAll("img").forEach((image) => {
-      if (this.viewportDistance(image) <= AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx) {
-        this.schedule(image);
-      }
-    });
+    document.querySelectorAll("img").forEach((image) => this.schedule(image));
   }
 
   observeExistingImages() {
@@ -310,6 +378,7 @@ class ViewportImageProvider {
           width: metadata.width,
           height: metadata.height,
         });
+        this.schedule(image);
       }
     };
     reportSeen();
@@ -329,26 +398,33 @@ class ViewportImageProvider {
       }
 
       if (entry.isIntersecting) {
-        this.schedule(image);
+        this.updateImagePriority(image);
       } else {
         const existing = this.findByImage(image);
-        if (existing && this.viewportDistance(image) > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
-          this.cancel(existing);
-        }
+        if (existing) this.updateImagePriority(image);
       }
     }
   }
 
-  async schedule(image) {
+  async schedule(image, allowSegments = true) {
     const metadata = this.imageProvider.read(image);
-    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || processedImageUrls.has(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
+    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
       return;
     }
 
     const existing = this.findByImage(image);
     const imageId = existing?.imageId || image.dataset.aiEnhancerImageId || `ai-image-${Date.now()}-${this.sequence++}`;
+    const baseKey = this.processingKey(metadata.imageUrl);
+    if (processedImageUrls.has(baseKey)) {
+      return;
+    }
     image.dataset.aiEnhancerImageId = imageId;
-    processedImageUrls.add(metadata.imageUrl);
+    processedImageUrls.add(baseKey);
+    if (allowSegments && this.shouldSegmentImage(image)) {
+      await this.scheduleSegments(image, metadata, imageId, baseKey);
+      return;
+    }
+
     trackedImages.set(imageId, {
       imageId,
       image,
@@ -371,9 +447,140 @@ class ViewportImageProvider {
       imageId,
       imageUrl: metadata.imageUrl,
       imageData,
+      cacheVariant: "full",
       viewportDistance: this.viewportDistance(image),
       displayMetrics: this.displayMetrics(image),
     });
+  }
+
+  async scheduleSegments(image, metadata, imageId, baseKey) {
+    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId });
+    await this.acquirePreprocessingSlot();
+    let segments = [];
+    try {
+      if (!processedImageUrls.has(baseKey)) return;
+      const imageData = await this.readDisplayedImage(metadata.imageUrl);
+      if (!imageData) {
+        processedImageUrls.delete(baseKey);
+        await this.schedule(image, false);
+        return;
+      }
+      segments = await this.cropImageSegments(imageData, image);
+    } finally {
+      this.releasePreprocessingSlot();
+    }
+
+    if (!segments.length) {
+      processedImageUrls.delete(baseKey);
+      await this.schedule(image, false);
+      return;
+    }
+
+    for (const segment of segments) {
+      const segmentId = `${imageId}-seg-${segment.index}`;
+      const segmentMetadata = {
+        ...metadata,
+        imageUrl: `${metadata.imageUrl}#ai-segment-${segment.index}`,
+        segment,
+      };
+      trackedImages.set(segmentId, {
+        imageId: segmentId,
+        image,
+        metadata: segmentMetadata,
+        state: "waiting",
+      });
+      chrome.runtime.sendMessage({
+        type: "PREPROCESSING_STARTED",
+        imageId: segmentId,
+      });
+      chrome.runtime.sendMessage({
+        type: "ENQUEUE_IMAGE",
+        imageId: segmentId,
+        imageUrl: metadata.imageUrl,
+        imageData: segment.imageData,
+        cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
+        viewportDistance: this.viewportDistance(image) + segment.index,
+        displayMetrics: {
+          ...this.displayMetrics(image),
+          sourceHeight: segment.sourceHeight,
+          renderedHeight: segment.renderedHeight,
+        },
+      });
+    }
+  }
+
+  shouldSegmentImage(image) {
+    const sourceHeight = image.naturalHeight || 0;
+    const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || 0;
+    return sourceHeight >= 4096 || renderedHeight > window.innerHeight * 1.8;
+  }
+
+  async cropImageSegments(imageData, image) {
+    const source = await this.decodeBase64Image(imageData);
+    const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || source.height;
+    const sourcePerRenderedPixel = source.height / Math.max(renderedHeight, 1);
+    const screenSourceHeight = Math.round((window.innerHeight || 900) * 1.25 * sourcePerRenderedPixel);
+    const segmentSourceHeight = Math.min(Math.max(screenSourceHeight, 768), 3072);
+    const renderedPerSourcePixel = renderedHeight / source.height;
+    const segments = [];
+    for (let sourceY = 0, index = 0; sourceY < source.height; sourceY += segmentSourceHeight, index += 1) {
+      const sourceHeight = Math.min(segmentSourceHeight, source.height - sourceY);
+      const canvas = document.createElement("canvas");
+      canvas.width = source.width;
+      canvas.height = sourceHeight;
+      const context = canvas.getContext("2d", { alpha: false });
+      context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
+      segments.push({
+        index,
+        sourceY,
+        sourceHeight,
+        renderedTop: sourceY * renderedPerSourcePixel,
+        renderedHeight: sourceHeight * renderedPerSourcePixel,
+        imageData: await this.canvasToBase64(canvas),
+      });
+    }
+    return segments;
+  }
+
+  decodeBase64Image(imageData) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Unable to decode displayed image for segmentation."));
+      image.src = `data:${this.detectImageMime(imageData)};base64,${imageData}`;
+    });
+  }
+
+  detectImageMime(imageData) {
+    if (imageData.startsWith("/9j/")) return "image/jpeg";
+    if (imageData.startsWith("iVBOR")) return "image/png";
+    if (imageData.startsWith("UklGR")) return "image/webp";
+    if (imageData.startsWith("R0lG")) return "image/gif";
+    return "image/png";
+  }
+
+  canvasToBase64(canvas) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("Unable to encode image segment."));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+        reader.readAsDataURL(blob);
+      }, "image/png");
+    });
+  }
+
+  processingKey(imageUrl) {
+    try {
+      const url = new URL(imageUrl, document.baseURI);
+      const segment = url.hash.startsWith("#ai-segment-") ? url.hash : "";
+      return `${url.origin}${url.pathname}${segment}`;
+    } catch {
+      return imageUrl;
+    }
   }
 
   acquirePreprocessingSlot() {
@@ -499,17 +706,17 @@ class ViewportImageProvider {
     }
 
     trackedImages.forEach((entry) => {
-      const distance = this.viewportDistance(entry.image);
-      if (distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
-        this.cancel(entry);
-        return;
-      }
+      this.updateImagePriority(entry.image, entry.imageId);
+    });
+  }
 
-      chrome.runtime.sendMessage({
-        type: "UPDATE_PRIORITY",
-        imageId: entry.imageId,
-        viewportDistance: distance,
-      });
+  updateImagePriority(image, imageId = null) {
+    const targetId = imageId || image.dataset.aiEnhancerImageId;
+    if (!targetId) return;
+    chrome.runtime.sendMessage({
+      type: "UPDATE_PRIORITY",
+      imageId: targetId,
+      viewportDistance: this.viewportDistance(image),
     });
   }
 
@@ -527,7 +734,7 @@ class ViewportImageProvider {
   fail(imageId) {
     const entry = trackedImages.get(imageId);
     if (entry) {
-      processedImageUrls.delete(entry.metadata.imageUrl);
+      processedImageUrls.delete(this.processingKey(entry.metadata.imageUrl));
     }
     trackedImages.delete(imageId);
   }
@@ -537,7 +744,7 @@ class ViewportImageProvider {
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
     });
-    processedImageUrls.delete(entry.metadata.imageUrl);
+    processedImageUrls.delete(this.processingKey(entry.metadata.imageUrl));
     trackedImages.delete(entry.imageId);
   }
 

@@ -674,7 +674,8 @@ class QueueScheduler {
     const startedAt = performance.now();
     try {
       const cacheUrl = this.normalizeCacheUrl(job.imageUrl);
-      const cacheIdentity = `${cacheUrl}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}`;
+      const cacheVariant = job.cacheVariant || "full";
+      const cacheIdentity = `${cacheUrl}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (job.abortController.signal.aborted) {
         return;
@@ -1020,6 +1021,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         imageUrl: message.imageUrl,
         pageUrl: sender.tab.url,
         imageData: message.imageData || null,
+        cacheVariant: message.cacheVariant || "full",
         viewportDistance: message.viewportDistance,
         mode: settings.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode,
         enhanceLevel: Number(settings.enhanceLevel ?? AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel),
