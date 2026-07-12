@@ -23,5 +23,5 @@
     "http://*/*",
     "https://*/*"
   ],
-  "permissions": ["storage", "tabs", "declarativeNetRequestWithHostAccess", "nativeMessaging"]
+  "permissions": ["storage", "tabs", "scripting", "alarms", "declarativeNetRequestWithHostAccess", "nativeMessaging"]
 }

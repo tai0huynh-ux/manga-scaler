@@ -193,6 +193,8 @@ Output sizing supports Manual Pixel limits, automatic sizing from the rendered i
 
 Browser preprocessing and backend upscale-request concurrency are configured separately. Browser image reads time out instead of blocking the pipeline. Failed jobs are marked deferred and remain behind every normal image until ordinary work is exhausted, then retry with exponential delay.
 
+The extension watchdog checks the backend and content-script connection every 30 seconds. Every upscale also performs a just-in-time backend health/start check. After an unpacked-extension reload, stale content scripts in already-open HTTP(S) tabs are detected and replaced automatically, so those tabs can resume discovery without a manual page refresh.
+
 Every eligible page image has a `Block AI` button. Blocking stores the normalized image URL without its temporary query token, cancels current work, and prevents that image from being enhanced on later visits. Dashboard settings list blacklist entries and allow removing them.
 
 ## Notes

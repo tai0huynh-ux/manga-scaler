@@ -390,6 +390,8 @@ class BackendUpscaleProvider {
   }
 
   async upscale(imageUrl, options, abortSignal) {
+    const launch = await ensureBackendStarted();
+    if (!launch.ok) throw new Error(launch.error || "Backend could not be started");
     const timeoutController = new AbortController();
     let timedOut = false;
     const timeoutMs = Math.max(5, Number(options.maxProcessingSeconds) || 60) * 1000;
@@ -847,7 +849,9 @@ async function backendHealthy() {
   }
 }
 
-async function ensureBackendStarted() {
+let backendLaunchPromise = null;
+
+async function startBackendIfNeeded() {
   if (await backendHealthy()) {
     await chrome.storage.local.set({ backendLaunchStatus: "online", backendLaunchError: null });
     return { ok: true, status: "online" };
@@ -868,6 +872,47 @@ async function ensureBackendStarted() {
       },
     );
   });
+}
+
+function ensureBackendStarted() {
+  if (!backendLaunchPromise) {
+    backendLaunchPromise = startBackendIfNeeded().finally(() => { backendLaunchPromise = null; });
+  }
+  return backendLaunchPromise;
+}
+
+async function ensureContentScripts() {
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.allSettled(tabs.map(async (tab) => {
+    if (!tab.id) return;
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { type: "AI_ENHANCER_PING" });
+      if (response?.ok) return;
+    } catch {
+      // The tab predates the current extension service worker or has no content script.
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        document.querySelectorAll("img[data-ai-manga-upscaler-observed]").forEach((image) => {
+          delete image.dataset.aiMangaUpscalerObserved;
+          delete image.dataset.aiEnhancerSeen;
+        });
+        document.querySelectorAll(".ai-enhancer-blacklist-button").forEach((button) => button.remove());
+      },
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["src/config.js", "src/content.js"],
+    });
+  }));
+}
+
+async function maintainRuntime() {
+  const settings = await chrome.storage.local.get({ enabled: true });
+  if (!settings.enabled) return;
+  await ensureBackendStarted();
+  await ensureContentScripts();
 }
 
 function resolveOutputLimits(settings, metrics = {}) {
@@ -899,16 +944,27 @@ function resolveOutputLimits(settings, metrics = {}) {
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
   const settings = await chrome.storage.local.get({ enabled: true });
-  if (settings.enabled) await ensureBackendStarted();
+  if (settings.enabled) await maintainRuntime();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await statisticsTracker.ensureDefaults();
   const settings = await chrome.storage.local.get({ enabled: true });
-  if (settings.enabled) await ensureBackendStarted();
+  if (settings.enabled) await maintainRuntime();
 });
 
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "ai-enhancer-watchdog") maintainRuntime();
+});
+chrome.alarms.create("ai-enhancer-watchdog", { periodInMinutes: 0.5 });
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PREPROCESSING_STARTED") {
+    if (sender.tab?.id) pageImageRegistry.update(sender.tab.id, message.imageId, { status: "preprocessing" });
+    sendResponse({ recorded: true });
+    return false;
+  }
+
   if (message.type === "IMAGE_SEEN") {
     if (sender.tab?.id) {
       lastContentTabId = sender.tab.id;
@@ -1069,5 +1125,5 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 statisticsTracker.ensureDefaults();
 chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
-  if (settings.enabled) ensureBackendStarted();
+  if (settings.enabled) maintainRuntime();
 });

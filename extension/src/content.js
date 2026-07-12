@@ -347,6 +347,7 @@ class ViewportImageProvider {
       metadata,
       state: "waiting",
     });
+    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId });
 
     await this.acquirePreprocessingSlot();
     let imageData = null;
@@ -605,7 +606,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "AI_ENHANCER_PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message.type === "UPSCALE_COMPLETE") {
     viewportProvider.complete(message);
   }
