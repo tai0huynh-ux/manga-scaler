@@ -586,7 +586,7 @@ class QueueScheduler {
   }
 
   setMaxConcurrentRequests(value) {
-    this.maxConcurrentRequests = Math.min(Math.max(Number(value) || 1, 1), 8);
+    this.maxConcurrentRequests = Math.min(Math.max(Number(value) || 1, 1), 2);
     this.drain();
   }
 
@@ -1028,7 +1028,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       screenOrientation: ["auto", "landscape", "portrait"].includes(message.screenOrientation) ? message.screenOrientation : "auto",
       performanceBoost: Boolean(message.performanceBoost),
       preprocessingConcurrency: clamp(message.preprocessingConcurrency, 1, 12, AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency),
-      upscaleConcurrency: clamp(message.upscaleConcurrency, 1, 8, AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests),
+      upscaleConcurrency: clamp(message.upscaleConcurrency, 1, 2, AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests),
     };
     limits.maxInputWidth = Math.max(limits.maxInputWidth, limits.minInputWidth);
     limits.maxInputHeight = Math.max(limits.maxInputHeight, limits.minInputHeight);
