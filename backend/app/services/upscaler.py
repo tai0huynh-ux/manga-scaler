@@ -63,17 +63,24 @@ class UpscalerService:
         enhance_level: float | None = None,
         mode: str = "auto",
         image_bytes: bytes | None = None,
+        client_job_id: str | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
-        result = await self.queue.submit(str(image_url), model_name, tile_size, enhance_level, mode, image_bytes)
+        result = await self.queue.submit(
+            str(image_url), model_name, tile_size, enhance_level, mode, image_bytes, client_job_id
+        )
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
         return result
+
+    def cancel(self, client_job_id: str) -> bool:
+        return self.queue.cancel(client_job_id)
 
     async def _process_job(self, job: InferenceJob) -> UpscaleResponse:
         """Process a queued image through the full inference pipeline."""
         total_started = time.perf_counter()
         timings = StageTimings()
+        self._ensure_active(job)
 
         download_started = time.perf_counter()
         if job.image_bytes is not None:
@@ -86,10 +93,12 @@ class UpscalerService:
             downloaded = await self.downloader.download(job.image_url)
             image_content = downloaded.content
         timings.set("download", download_started)
+        self._ensure_active(job)
 
         source_key = sha256_bytes(image_content)
         decode_started = time.perf_counter()
         image = await self.pipeline.decode(image_content)
+        self._ensure_active(job)
         timings.set("decode", decode_started)
         original_png = await self.pipeline.encode_png(image)
         original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
@@ -142,18 +151,22 @@ class UpscalerService:
             tile_size=tile_size,
             overlap=overlap,
             batch_size=self.settings.inference.batch_size,
+            cancellation_check=job.cancel_event.is_set,
         )
+        self._ensure_active(job)
         timings.set("inference", inference_started)
         timings.values["gpu"] = output.gpu_time_ms
 
         enhance_started = time.perf_counter()
         enhanced_image = await self.pipeline.enhance(output.image, enhance_level)
+        self._ensure_active(job)
         if profile.preserve_grayscale:
             enhanced_image = enhanced_image.convert("L").convert("RGB")
         timings.set("enhance", enhance_started)
 
         encode_started = time.perf_counter()
         encoded = await self.pipeline.encode_webp(enhanced_image)
+        self._ensure_active(job)
         timings.set("encode", encode_started)
         output_artifact = EncodedImage(
             content=encoded,
@@ -246,6 +259,10 @@ class UpscalerService:
         if requested_mode not in self.settings.modes:
             raise ValueError(f"Unknown enhancement mode: {requested_mode}")
         return ClassificationResult(requested_mode, 1.0, {})
+
+    def _ensure_active(self, job: InferenceJob) -> None:
+        if job.cancel_event.is_set() or job.future.cancelled():
+            raise InterruptedError("Inference job was cancelled by the browser.")
 
     def _resolve_tile_size(self, requested_tile_size: int | None) -> int:
         """Validate and return the effective tile size."""

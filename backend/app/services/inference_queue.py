@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -13,12 +14,14 @@ class InferenceJob:
     """A queued image inference job."""
 
     image_url: str
+    client_job_id: str | None
     image_bytes: bytes | None
     mode: str
     model_name: str | None
     tile_size: int | None
     enhance_level: float | None
     future: asyncio.Future
+    cancel_event: threading.Event = field(default_factory=threading.Event)
     created_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
 
 
@@ -43,6 +46,8 @@ class InferenceQueue:
         self.accepted = 0
         self.completed = 0
         self.failed = 0
+        self.cancelled = 0
+        self.jobs: dict[str, InferenceJob] = {}
         self.running = False
 
     async def start(self) -> None:
@@ -67,12 +72,14 @@ class InferenceQueue:
         enhance_level: float | None = None,
         mode: str = "auto",
         image_bytes: bytes | None = None,
+        client_job_id: str | None = None,
     ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         job = InferenceJob(
             image_url=image_url,
+            client_job_id=client_job_id,
             image_bytes=image_bytes,
             mode=mode,
             model_name=model_name,
@@ -80,6 +87,8 @@ class InferenceQueue:
             enhance_level=enhance_level,
             future=future,
         )
+        if client_job_id:
+            self.jobs[client_job_id] = job
         await self.queue.put(job)
         self.accepted += 1
         return await future
@@ -93,8 +102,19 @@ class InferenceQueue:
             "accepted": self.accepted,
             "completed": self.completed,
             "failed": self.failed,
+            "cancelled": self.cancelled,
             "workers": len(self.workers),
         }
+
+    def cancel(self, client_job_id: str) -> bool:
+        """Signal a queued or active client job to stop."""
+        job = self.jobs.get(client_job_id)
+        if not job:
+            return False
+        job.cancel_event.set()
+        if not job.future.done():
+            job.future.cancel()
+        return True
 
     async def _worker(self, worker_id: int) -> None:
         """Run one queue worker loop."""
@@ -120,7 +140,10 @@ class InferenceQueue:
 
     async def _process_job(self, job: InferenceJob, worker_id: int) -> None:
         """Process one job and settle its future."""
-        if job.future.cancelled():
+        if job.future.cancelled() or job.cancel_event.is_set():
+            self.cancelled += 1
+            if job.client_job_id:
+                self.jobs.pop(job.client_job_id, None)
             return
         self.processing += 1
         try:
@@ -128,6 +151,10 @@ class InferenceQueue:
             if not job.future.cancelled():
                 job.future.set_result(result)
             self.completed += 1
+        except InterruptedError:
+            self.cancelled += 1
+            if not job.future.done():
+                job.future.cancel()
         except Exception as exc:
             LOGGER.exception("Inference job failed", extra={"_worker": worker_id, "_image_url": job.image_url})
             if not job.future.cancelled():
@@ -135,3 +162,5 @@ class InferenceQueue:
             self.failed += 1
         finally:
             self.processing -= 1
+            if job.client_job_id:
+                self.jobs.pop(job.client_job_id, None)

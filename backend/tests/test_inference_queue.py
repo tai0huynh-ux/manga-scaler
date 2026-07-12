@@ -35,3 +35,22 @@ async def test_global_semaphore_limits_dynamic_batch() -> None:
 
     assert results == ["0", "1", "2", "3"]
     assert maximum == 1
+
+
+@pytest.mark.asyncio
+async def test_client_job_can_cancel_active_processing() -> None:
+    async def processor(job):
+        while not job.cancel_event.is_set():
+            await asyncio.sleep(0.005)
+        raise InterruptedError("cancelled")
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    task = asyncio.create_task(queue.submit("image", None, None, client_job_id="tab-image"))
+    await asyncio.sleep(0.02)
+    assert queue.cancel("tab-image") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.02)
+    assert queue.snapshot()["cancelled"] == 1
+    await queue.stop()

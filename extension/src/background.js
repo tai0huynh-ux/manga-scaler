@@ -377,6 +377,7 @@ class BackendUpscaleProvider {
           mode: options.mode,
           enhanceLevel: options.enhanceLevel,
           imageData,
+          jobId: options.jobId,
         }),
         signal,
       });
@@ -402,7 +403,18 @@ class BackendUpscaleProvider {
         enhancedImageUrl: metadata.imageUrl,
       };
     } finally {
+      if (signal.aborted && options.jobId) {
+        await this.cancel(options.jobId);
+      }
       clearTimeout(timeoutId);
+    }
+  }
+
+  async cancel(jobId) {
+    try {
+      await fetch(`${this.baseUrl}/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+    } catch {
+      // Backend may already be stopped or the job may have completed.
     }
   }
 
@@ -533,9 +545,24 @@ class QueueScheduler {
     const activeJob = this.active.get(imageId);
     if (activeJob) {
       activeJob.abortController.abort();
+      this.upscaleProvider.cancel(activeJob.imageId);
       this.active.delete(imageId);
       this.drain();
     }
+  }
+
+  cancelTab(tabId) {
+    [...this.pending.values()]
+      .filter((job) => job.tabId === tabId)
+      .forEach((job) => this.pending.delete(job.imageId));
+    [...this.active.values()]
+      .filter((job) => job.tabId === tabId)
+      .forEach((job) => {
+        job.abortController.abort();
+        this.upscaleProvider.cancel(job.imageId);
+        this.active.delete(job.imageId);
+      });
+    this.drain();
   }
 
   snapshot() {
@@ -615,6 +642,7 @@ class QueueScheduler {
           enhanceLevel: job.enhanceLevel,
           pageUrl: job.pageUrl,
           imageData: job.imageData,
+          jobId: job.imageId,
         },
         job.abortController.signal,
       );
@@ -824,6 +852,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  scheduler.cancelTab(tabId);
   statisticsTracker.removeTab(tabId);
   pageImageRegistry.remove(tabId);
 });

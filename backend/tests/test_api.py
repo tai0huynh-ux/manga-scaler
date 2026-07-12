@@ -40,3 +40,10 @@ def test_upscale_rejects_base64_encoded_html() -> None:
         )
     assert response.status_code == 400
     assert "not a supported image" in response.json()["detail"]
+
+
+def test_cancel_unknown_job_is_idempotent() -> None:
+    with TestClient(app) as client:
+        response = client.delete("/jobs/not-running")
+    assert response.status_code == 200
+    assert response.json()["cancelled"] is False

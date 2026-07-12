@@ -26,6 +26,7 @@ class UpscaleRequest(BaseModel):
         alias="imageData",
         description="Base64-encoded bytes supplied by the browser that already loaded the image.",
     )
+    job_id: str | None = Field(default=None, alias="jobId", max_length=200)
     mode: Literal["auto", "manga", "artwork", "photo"] = Field(
         default="auto", description="Universal enhancement mode."
     )

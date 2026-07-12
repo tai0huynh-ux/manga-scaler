@@ -89,6 +89,7 @@ async def upscale(
             enhance_level=payload.enhance_level,
             mode=payload.mode,
             image_bytes=image_bytes,
+            client_job_id=payload.job_id,
         )
     except FileNotFoundError as exc:
         raise HTTPException(
@@ -110,6 +111,12 @@ async def upscale(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to process image.",
         ) from exc
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str, service: UpscalerService = Depends(get_upscaler_service)) -> dict[str, object]:
+    """Cancel work whose browser tab or image is no longer active."""
+    return {"jobId": job_id, "cancelled": service.cancel(job_id)}
 
 
 @router.get("/models", response_model=ModelStatusResponse)

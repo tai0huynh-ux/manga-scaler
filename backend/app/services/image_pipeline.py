@@ -3,6 +3,7 @@
 import asyncio
 import io
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -87,6 +88,7 @@ class ImagePipeline:
         tile_size: int,
         overlap: int,
         batch_size: int,
+        cancellation_check: Callable[[], bool] | None = None,
     ) -> InferenceImage:
         """Run tiled model inference and merge the output tiles."""
         result, gpu_time_ms = await asyncio.to_thread(
@@ -96,6 +98,7 @@ class ImagePipeline:
             tile_size,
             overlap,
             batch_size,
+            cancellation_check,
         )
         return InferenceImage(image=result, gpu_time_ms=gpu_time_ms)
 
@@ -127,6 +130,7 @@ class ImagePipeline:
         tile_size: int,
         overlap: int,
         batch_size: int,
+        cancellation_check: Callable[[], bool] | None = None,
     ) -> tuple[Image.Image, float]:
         """Run synchronous tile inference and merge tile outputs."""
         source = np.asarray(image, dtype=np.float32) / 255.0
@@ -139,6 +143,8 @@ class ImagePipeline:
         gpu_time_ms = 0.0
 
         for start in range(0, len(tiles), batch_size):
+            if cancellation_check and cancellation_check():
+                raise InterruptedError("Tiled inference was cancelled.")
             batch_specs = tiles[start : start + batch_size]
             batch = np.stack(
                 [self._extract_tile(source, spec, tile_size) for spec in batch_specs],
