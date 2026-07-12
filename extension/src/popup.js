@@ -69,11 +69,13 @@ class PopupController {
     this.modeSelect.value = stats.mode || "auto";
     this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
     this.processingTimeout.value = String(stats.maxProcessingSeconds ?? 60);
-    this.imageSettingIds.forEach((id) => {
-      const element = this.document.getElementById(id);
-      if (element.type === "checkbox") element.checked = Boolean(stats[id]);
-      else element.value = String(stats[id] ?? "");
-    });
+    if (!this.imageSettingIds.includes(this.document.activeElement?.id)) {
+      this.imageSettingIds.forEach((id) => {
+        const element = this.document.getElementById(id);
+        if (element.type === "checkbox") element.checked = Boolean(stats[id]);
+        else element.value = String(stats[id] ?? "");
+      });
+    }
     this.renderSizeSettings();
     this.renderEnhancementSettings();
     this.processedCount.textContent = String(stats.processed ?? 0);
@@ -120,6 +122,7 @@ class PopupController {
 
   async saveImageSettings() {
     const value = (id) => this.document.getElementById(id).value;
+    this.renderSizeSettings();
     await chrome.runtime.sendMessage({
       type: "SET_IMAGE_LIMITS",
       sizingMode: value("sizingMode"), resolutionPreset: value("resolutionPreset"),
@@ -130,13 +133,13 @@ class PopupController {
       outputQuality: Number(value("outputQuality")),
       performanceBoost: this.document.getElementById("performanceBoost").checked,
     });
-    this.renderSizeSettings();
   }
 
   renderSizeSettings() {
     const mode = this.document.getElementById("sizingMode").value;
-    ["maxOutputWidth", "maxOutputHeight"].forEach((id) => { this.document.getElementById(id).disabled = mode !== "pixel"; });
-    ["resolutionPreset", "screenOrientation"].forEach((id) => { this.document.getElementById(id).disabled = mode !== "screen"; });
+    this.document.getElementById("autoSizePanel").hidden = mode !== "auto";
+    this.document.getElementById("pixelSizePanel").hidden = mode !== "pixel";
+    this.document.getElementById("screenSizePanel").hidden = mode !== "screen";
   }
 
   renderEnhancementSettings() {

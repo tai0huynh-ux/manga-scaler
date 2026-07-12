@@ -36,11 +36,16 @@
         <input id="processingTimeout" type="number" min="5" max="300" step="5" value="60">
         <label class="control-label" for="sizingMode">Output size mode</label>
         <select id="sizingMode"><option value="auto">Auto for image and screen</option><option value="pixel">Manual pixels</option><option value="screen">Screen preset</option></select>
-        <div class="compact-grid">
+        <div id="autoSizePanel" class="mode-panel"><small>Automatically calculates output size from the displayed image, viewport, screen, margins and device pixel ratio.</small></div>
+        <div id="screenSizePanel" class="compact-grid mode-panel">
           <label>Preset<select id="resolutionPreset"><option value="hd">HD</option><option value="fhd">Full HD</option><option value="2k">2K</option><option value="4k">4K</option></select></label>
           <label>Orientation<select id="screenOrientation"><option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label>
+        </div>
+        <div id="pixelSizePanel" class="compact-grid mode-panel">
           <label>Max output width<input id="maxOutputWidth" type="number" min="256" max="16383"></label>
           <label>Max output height<input id="maxOutputHeight" type="number" min="256" max="16383"></label>
+        </div>
+        <div class="compact-grid">
           <label>Min input width<input id="minInputWidth" type="number" min="1" max="16383"></label>
           <label>Min input height<input id="minInputHeight" type="number" min="1" max="16383"></label>
           <label>Max input width<input id="maxInputWidth" type="number" min="1" max="32768"></label>

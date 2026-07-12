@@ -9,10 +9,12 @@ async function refresh() {
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
   document.getElementById("timeout").value = stats.maxProcessingSeconds ?? 60;
-  ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality"].forEach((id) => {
-    document.getElementById(id).value = stats[id] ?? "";
-  });
-  document.getElementById("performanceBoost").checked = Boolean(stats.performanceBoost);
+  if (!document.querySelector(".settings").contains(document.activeElement)) {
+    ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality"].forEach((id) => {
+      document.getElementById(id).value = stats[id] ?? "";
+    });
+    document.getElementById("performanceBoost").checked = Boolean(stats.performanceBoost);
+  }
   renderSizeMode();
   document.getElementById("status").textContent = stats.processing ? `${stats.processing} processing` : "Ready";
   const images = page?.images || [];
@@ -139,6 +141,7 @@ async function saveSettings() {
 
 async function saveImageSettings() {
   const value = (id) => document.getElementById(id).value;
+  renderSizeMode();
   await chrome.runtime.sendMessage({
     type: "SET_IMAGE_LIMITS", sizingMode: value("sizingMode"),
     resolutionPreset: value("resolutionPreset"), screenOrientation: value("screenOrientation"),
@@ -147,13 +150,13 @@ async function saveImageSettings() {
     maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
     outputQuality: Number(value("outputQuality")), performanceBoost: document.getElementById("performanceBoost").checked,
   });
-  renderSizeMode();
 }
 
 function renderSizeMode() {
   const mode = document.getElementById("sizingMode").value;
-  ["maxOutputWidth", "maxOutputHeight"].forEach((id) => { document.getElementById(id).disabled = mode !== "pixel"; });
-  ["resolutionPreset", "screenOrientation"].forEach((id) => { document.getElementById(id).disabled = mode !== "screen"; });
+  document.getElementById("autoSizePanel").hidden = mode !== "auto";
+  document.getElementById("pixelSizePanel").hidden = mode !== "pixel";
+  document.getElementById("screenSizePanel").hidden = mode !== "screen";
 }
 
 document.getElementById("mode").addEventListener("change", saveSettings);
