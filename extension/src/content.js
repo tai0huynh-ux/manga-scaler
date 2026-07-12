@@ -198,6 +198,9 @@ class ViewportImageProvider {
     this.sequence = 0;
     this.blacklist = new Set();
     this.blacklistButtons = new WeakMap();
+    this.preprocessingActive = 0;
+    this.preprocessingWaiters = [];
+    this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
     this.intersectionObserver = new IntersectionObserver(
       (entries) => this.handleIntersections(entries),
@@ -217,10 +220,12 @@ class ViewportImageProvider {
       minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
       maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
       maxInputHeight: AI_MANGA_UPSCALER_CONFIG.images.maxHeightPx,
+      preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
     });
     this.enabled = stored.enabled;
     this.blacklist = new Set(stored.blacklistRules || []);
     this.imageProvider.updateLimits(stored);
+    this.preprocessingConcurrency = Number(stored.preprocessingConcurrency) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.observeExistingImages();
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
@@ -343,10 +348,15 @@ class ViewportImageProvider {
       state: "waiting",
     });
 
-    const imageData = await this.readDisplayedImage(metadata.imageUrl);
-    if (!trackedImages.has(imageId)) {
-      return;
+    await this.acquirePreprocessingSlot();
+    let imageData = null;
+    try {
+      if (!trackedImages.has(imageId)) return;
+      imageData = await this.readDisplayedImage(metadata.imageUrl);
+    } finally {
+      this.releasePreprocessingSlot();
     }
+    if (!trackedImages.has(imageId)) return;
     chrome.runtime.sendMessage({
       type: "ENQUEUE_IMAGE",
       imageId,
@@ -355,6 +365,20 @@ class ViewportImageProvider {
       viewportDistance: this.viewportDistance(image),
       displayMetrics: this.displayMetrics(image),
     });
+  }
+
+  acquirePreprocessingSlot() {
+    if (this.preprocessingActive < this.preprocessingConcurrency) {
+      this.preprocessingActive += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.preprocessingWaiters.push(resolve));
+  }
+
+  releasePreprocessingSlot() {
+    const next = this.preprocessingWaiters.shift();
+    if (next) next();
+    else this.preprocessingActive = Math.max(0, this.preprocessingActive - 1);
   }
 
   displayMetrics(image) {
@@ -420,10 +444,13 @@ class ViewportImageProvider {
   }
 
   async readDisplayedImage(imageUrl) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
     try {
       const response = await fetch(imageUrl, {
         cache: "force-cache",
         credentials: "include",
+        signal: controller.signal,
       });
       if (!response.ok) {
         return null;
@@ -441,6 +468,8 @@ class ViewportImageProvider {
       return btoa(binary);
     } catch {
       return null;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -570,6 +599,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       viewportProvider.imageProvider.updateLimits(limits);
       viewportProvider.reprocessVisibleImages();
     });
+  }
+  if (areaName === "local" && changes.preprocessingConcurrency) {
+    viewportProvider.preprocessingConcurrency = Number(changes.preprocessingConcurrency.newValue) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
   }
 });
 

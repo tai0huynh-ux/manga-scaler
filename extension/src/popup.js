@@ -10,7 +10,7 @@ class PopupController {
     this.enhanceLevel = this.document.getElementById("enhanceLevel");
     this.enhanceLevelValue = this.document.getElementById("enhanceLevelValue");
     this.processingTimeout = this.document.getElementById("processingTimeout");
-    this.imageSettingIds = ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "performanceBoost"];
+    this.imageSettingIds = ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost"];
     this.modeDescription = this.document.getElementById("modeDescription");
     this.previewOriginal = this.document.getElementById("previewOriginal");
     this.qualitySummary = this.document.getElementById("qualitySummary");
@@ -131,6 +131,8 @@ class PopupController {
       minInputWidth: Number(value("minInputWidth")), minInputHeight: Number(value("minInputHeight")),
       maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
       outputQuality: Number(value("outputQuality")),
+      preprocessingConcurrency: Number(value("preprocessingConcurrency")),
+      upscaleConcurrency: Number(value("upscaleConcurrency")),
       performanceBoost: this.document.getElementById("performanceBoost").checked,
     });
   }

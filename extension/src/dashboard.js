@@ -10,7 +10,7 @@ async function refresh() {
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
   document.getElementById("timeout").value = stats.maxProcessingSeconds ?? 60;
   if (!document.querySelector(".settings").contains(document.activeElement)) {
-    ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality"].forEach((id) => {
+    ["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency"].forEach((id) => {
       document.getElementById(id).value = stats[id] ?? "";
     });
     document.getElementById("performanceBoost").checked = Boolean(stats.performanceBoost);
@@ -149,6 +149,7 @@ async function saveImageSettings() {
     minInputWidth: Number(value("minInputWidth")), minInputHeight: Number(value("minInputHeight")),
     maxInputWidth: Number(value("maxInputWidth")), maxInputHeight: Number(value("maxInputHeight")),
     outputQuality: Number(value("outputQuality")), performanceBoost: document.getElementById("performanceBoost").checked,
+    preprocessingConcurrency: Number(value("preprocessingConcurrency")), upscaleConcurrency: Number(value("upscaleConcurrency")),
   });
 }
 
@@ -165,7 +166,7 @@ document.getElementById("level").addEventListener("change", saveSettings);
 document.getElementById("timeout").addEventListener("change", () => chrome.runtime.sendMessage({
   type: "SET_PROCESSING_TIMEOUT", seconds: Number(document.getElementById("timeout").value),
 }));
-["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "performanceBoost"].forEach((id) => {
+["sizingMode", "resolutionPreset", "screenOrientation", "maxOutputWidth", "maxOutputHeight", "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight", "outputQuality", "preprocessingConcurrency", "upscaleConcurrency", "performanceBoost"].forEach((id) => {
   document.getElementById(id).addEventListener("change", saveImageSettings);
 });
 refresh();

@@ -191,6 +191,8 @@ Per-image processing timeout is configurable from 5 to 300 seconds in both popup
 
 Output sizing supports Manual Pixel limits, automatic sizing from the rendered image/viewport/screen/DPR, and HD, Full HD, 2K, or 4K screen presets with automatic, landscape, or portrait orientation. Input minimum and maximum width/height filters reject unsuitable images before their bytes are sent to the backend. WebP quality is adjustable from 50 to 100. Performance Boost uses larger inference tiles on models that support them; disable it if GPU memory is constrained.
 
+Browser preprocessing and backend upscale-request concurrency are configured separately. Browser image reads time out instead of blocking the pipeline. Failed jobs are marked deferred and remain behind every normal image until ordinary work is exhausted, then retry with exponential delay.
+
 Every eligible page image has a `Block AI` button. Blocking stores the normalized image URL without its temporary query token, cancels current work, and prevents that image from being enhanced on later visits. Dashboard settings list blacklist entries and allow removing them.
 
 ## Notes

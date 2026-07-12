@@ -16,6 +16,8 @@ const DEFAULT_STATE = Object.freeze({
   resolutionPreset: "fhd",
   screenOrientation: "auto",
   performanceBoost: true,
+  preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
+  upscaleConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests,
   seen: 0,
   processed: 0,
   errors: 0,
@@ -109,6 +111,8 @@ class StatisticsTracker {
       resolutionPreset: current.resolutionPreset || "fhd",
       screenOrientation: current.screenOrientation || "auto",
       performanceBoost: Boolean(current.performanceBoost),
+      preprocessingConcurrency: Number(current.preprocessingConcurrency),
+      upscaleConcurrency: Number(current.upscaleConcurrency),
       processed,
       errors: Number(current.errors ?? 0),
       cacheHits,
@@ -456,6 +460,9 @@ class BackendUpscaleProvider {
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
     const ruleId = this.nextHeaderRuleId++;
+    const readController = new AbortController();
+    const timeout = setTimeout(() => readController.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
+    const readSignal = this.combineSignals(signal, readController.signal);
     try {
       if (pageUrl) {
         await chrome.declarativeNetRequest.updateSessionRules({
@@ -478,7 +485,7 @@ class BackendUpscaleProvider {
         method: "GET",
         cache: "force-cache",
         credentials: "include",
-        signal,
+        signal: readSignal,
       });
       if (!response.ok) {
         throw new Error(`Browser could not read displayed image (${response.status})`);
@@ -489,6 +496,7 @@ class BackendUpscaleProvider {
       }
       return this.arrayBufferToBase64(buffer);
     } finally {
+      clearTimeout(timeout);
       if (pageUrl) {
         await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }).catch(() => {});
       }
@@ -575,6 +583,11 @@ class QueueScheduler {
     if (pendingJob) {
       pendingJob.viewportDistance = viewportDistance;
     }
+  }
+
+  setMaxConcurrentRequests(value) {
+    this.maxConcurrentRequests = Math.min(Math.max(Number(value) || 1, 1), 8);
+    this.drain();
   }
 
   cancel(imageId) {
@@ -732,7 +745,7 @@ class QueueScheduler {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
         setTimeout(() => {
           if (job.generation === (this.tabGenerations.get(job.tabId) || 0)) {
-            this.enqueue({ ...job, attempt: job.attempt + 1, deferred: error?.code === "PROCESSING_TIMEOUT" });
+            this.enqueue({ ...job, attempt: job.attempt + 1, deferred: true });
           }
         }, delay);
         return;
@@ -876,9 +889,10 @@ function resolveOutputLimits(settings, metrics = {}) {
   const visibleHeight = Math.min(Number(metrics.renderedHeight) || 512, Number(metrics.viewportHeight) || 1080);
   const screenWidth = (Number(metrics.screenWidth) || 1920) * ratio;
   const screenHeight = (Number(metrics.screenHeight) || 1080) * ratio;
+  const snap = (value, maximum) => clamp(Math.ceil(value / 256) * 256, 256, maximum);
   return {
-    width: clamp(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), 256, Number(settings.maxOutputWidth)),
-    height: clamp(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), 256, Number(settings.maxOutputHeight)),
+    width: snap(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), Number(settings.maxOutputWidth)),
+    height: snap(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), Number(settings.maxOutputHeight)),
   };
 }
 
@@ -1013,9 +1027,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resolutionPreset: ["hd", "fhd", "2k", "4k"].includes(message.resolutionPreset) ? message.resolutionPreset : "fhd",
       screenOrientation: ["auto", "landscape", "portrait"].includes(message.screenOrientation) ? message.screenOrientation : "auto",
       performanceBoost: Boolean(message.performanceBoost),
+      preprocessingConcurrency: clamp(message.preprocessingConcurrency, 1, 12, AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency),
+      upscaleConcurrency: clamp(message.upscaleConcurrency, 1, 8, AI_MANGA_UPSCALER_CONFIG.queue.maxConcurrentRequests),
     };
     limits.maxInputWidth = Math.max(limits.maxInputWidth, limits.minInputWidth);
     limits.maxInputHeight = Math.max(limits.maxInputHeight, limits.minInputHeight);
+    scheduler.setMaxConcurrentRequests(limits.upscaleConcurrency);
     chrome.storage.local.set(limits).then(() => sendResponse(limits));
     return true;
   }
@@ -1050,6 +1067,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 statisticsTracker.ensureDefaults();
-chrome.storage.local.get({ enabled: true }).then((settings) => {
+chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+  scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
   if (settings.enabled) ensureBackendStarted();
 });
