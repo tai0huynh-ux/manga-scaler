@@ -166,6 +166,7 @@ class PageImageRegistry {
     this.pages = new Map();
     this.domainRules = new Map();
     this.nextDomainRuleId = 100000;
+    this.sequence = 0;
   }
 
   page(tabId) {
@@ -175,17 +176,45 @@ class PageImageRegistry {
 
   async seen(tabId, image) {
     const page = this.page(tabId);
-    page.set(image.imageId, { ...page.get(image.imageId), ...image, status: page.get(image.imageId)?.status || "seen" });
+    const existing = page.get(image.imageId);
+    page.set(image.imageId, {
+      ...existing,
+      ...image,
+      tabId,
+      status: existing?.status || "seen",
+      order: existing?.order ?? this.sequence++,
+      seenAt: existing?.seenAt ?? performance.now(),
+    });
     await this.ensureDomainAccess(image.imageUrl, image.pageUrl);
   }
 
   update(tabId, imageId, patch) {
     const page = this.page(tabId);
-    page.set(imageId, { ...page.get(imageId), imageId, ...patch });
+    const existing = page.get(imageId);
+    page.set(imageId, {
+      ...existing,
+      imageId,
+      tabId,
+      ...patch,
+      order: existing?.order ?? this.sequence++,
+      updatedAt: performance.now(),
+    });
   }
 
   list(tabId) {
     return [...(this.pages.get(tabId)?.values() || [])];
+  }
+
+  listAll() {
+    return [...this.pages.values()]
+      .flatMap((page) => [...page.values()])
+      .sort((left, right) => {
+        const statusRank = { processing: 0, preprocessing: 1, waiting: 2, seen: 3, timeout: 4, error: 5, fixed: 6, cache: 7 };
+        const leftRank = statusRank[left.status] ?? 8;
+        const rightRank = statusRank[right.status] ?? 8;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return (left.order ?? 0) - (right.order ?? 0);
+      });
   }
 
   remove(tabId) {
@@ -573,9 +602,11 @@ class QueueScheduler {
     this.pending = new Map();
     this.active = new Map();
     this.tabGenerations = new Map();
+    this.paused = false;
   }
 
   enqueue(job) {
+    if (this.paused) return;
     const generation = this.tabGenerations.get(job.tabId) || 0;
     if (job.generation !== undefined && job.generation !== generation) return;
     job.generation = generation;
@@ -592,6 +623,7 @@ class QueueScheduler {
       queuedAt: existing?.queuedAt ?? performance.now(),
       viewportDistance: Number.isFinite(job.viewportDistance) ? job.viewportDistance : Number.MAX_SAFE_INTEGER,
     });
+    if (!job.deferred) this.preemptDeferredActiveJobs();
     pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting" });
     this.drain();
   }
@@ -605,6 +637,15 @@ class QueueScheduler {
 
   setMaxConcurrentRequests(value) {
     this.maxConcurrentRequests = Math.min(Math.max(Number(value) || 1, 1), 2);
+    this.drain();
+  }
+
+  setPaused(paused) {
+    this.paused = Boolean(paused);
+    if (this.paused) {
+      this.cancelAll();
+      return;
+    }
     this.drain();
   }
 
@@ -637,6 +678,33 @@ class QueueScheduler {
     this.drain();
   }
 
+  cancelAll() {
+    this.pending.clear();
+    [...this.active.values()].forEach((job) => {
+      job.abortController.abort();
+      this.upscaleProvider.cancel(job.imageId);
+    });
+    this.active.clear();
+  }
+
+  preemptDeferredActiveJobs() {
+    [...this.active.values()]
+      .filter((job) => job.deferred)
+      .forEach((job) => {
+        job.abortController.abort();
+        this.upscaleProvider.cancel(job.imageId);
+        this.active.delete(job.imageId);
+        this.pending.set(job.imageId, {
+          ...job,
+          abortController: undefined,
+          queuedAt: performance.now(),
+          viewportDistance: Number.MAX_SAFE_INTEGER,
+          deferred: true,
+        });
+        pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting", deferred: true });
+      });
+  }
+
   snapshot() {
     const byTab = {};
     [...this.pending.values(), ...this.active.values()].forEach((job) => {
@@ -651,12 +719,14 @@ class QueueScheduler {
   }
 
   drain() {
+    if (this.paused) return;
     while (this.active.size < this.maxConcurrentRequests && this.pending.size > 0) {
       const job = this.nextJob();
       this.pending.delete(job.imageId);
       const abortController = new AbortController();
-      this.active.set(job.imageId, { ...job, abortController, startedAt: performance.now() });
-      pageImageRegistry.update(job.tabId, job.imageId, { status: "processing" });
+      const startedAt = performance.now();
+      this.active.set(job.imageId, { ...job, abortController, startedAt });
+      pageImageRegistry.update(job.tabId, job.imageId, { status: "processing", startedAt, deferred: Boolean(job.deferred) });
       this.process({ ...job, abortController }).finally(() => {
         this.active.delete(job.imageId);
         this.drain();
@@ -758,7 +828,8 @@ class QueueScheduler {
       }
 
       if (error?.code === "PROCESSING_TIMEOUT") {
-        pageImageRegistry.update(job.tabId, job.imageId, { status: "timeout", error: error.message });
+        await this.failJob(job, error, "timeout");
+        return;
       }
       if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
@@ -770,17 +841,25 @@ class QueueScheduler {
         return;
       }
 
-      await this.statisticsTracker.recordError(job.tabId);
-      pageImageRegistry.update(job.tabId, job.imageId, {
-        status: "error",
-        error: error instanceof Error ? error.message : "Unknown upscale error",
-      });
-      chrome.tabs.sendMessage(job.tabId, {
-        type: "UPSCALE_FAILED",
-        imageId: job.imageId,
-        message: error instanceof Error ? error.message : "Unknown upscale error",
-      });
+      await this.failJob(job, error, "error");
     }
+  }
+
+  async failJob(job, error, status = "error") {
+    const message = error instanceof Error ? error.message : "Unknown upscale error";
+    await this.statisticsTracker.recordError(job.tabId);
+    pageImageRegistry.update(job.tabId, job.imageId, {
+      status,
+      error: message,
+      failedAt: performance.now(),
+    });
+    chrome.tabs.sendMessage(job.tabId, {
+      type: "UPSCALE_FAILED",
+      imageId: job.imageId,
+      message,
+      status,
+      permanent: status === "timeout",
+    }).catch(() => {});
   }
 
   normalizeCacheUrl(imageUrl) {
@@ -931,6 +1010,13 @@ async function maintainRuntime() {
   await ensureContentScripts();
 }
 
+async function notifyContentEnabled(enabled) {
+  const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  await Promise.allSettled(tabs.map((tab) => (
+    tab.id ? chrome.tabs.sendMessage(tab.id, { type: "SET_ENABLED", enabled }).catch(() => {}) : Promise.resolve()
+  )));
+}
+
 function resolveOutputLimits(settings, metrics = {}) {
   const clamp = (value, minimum, maximum) => Math.min(Math.max(Math.round(value), minimum), maximum);
   const outputWidthEnabled = settings.maxOutputWidthEnabled !== false;
@@ -993,17 +1079,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "IMAGE_SEEN") {
     if (sender.tab?.id) {
-      lastContentTabId = sender.tab.id;
-      Promise.all([
-        statisticsTracker.recordSeen(sender.tab.id),
-        pageImageRegistry.seen(sender.tab.id, {
-          imageId: message.imageId,
-          imageUrl: message.imageUrl,
-          pageUrl: sender.tab.url,
-          width: message.width,
-          height: message.height,
-        }),
-      ]).then(() => sendResponse({ recorded: true }));
+      chrome.storage.local.get({ enabled: true }).then((settings) => {
+        if (!settings.enabled) {
+          sendResponse({ recorded: false, disabled: true });
+          return;
+        }
+        lastContentTabId = sender.tab.id;
+        Promise.all([
+          statisticsTracker.recordSeen(sender.tab.id),
+          pageImageRegistry.seen(sender.tab.id, {
+            imageId: message.imageId,
+            imageUrl: message.imageUrl,
+            pageUrl: sender.tab.url,
+            width: message.width,
+            height: message.height,
+          }),
+        ]).then(() => sendResponse({ recorded: true }));
+      });
       return true;
     }
     return false;
@@ -1016,6 +1108,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+      if (!settings.enabled) {
+        sendResponse({ accepted: false, reason: "Extension disabled." });
+        return;
+      }
       lastContentTabId = sender.tab.id;
       const outputLimits = resolveOutputLimits(settings, message.displayMetrics);
       scheduler.enqueue({
@@ -1063,15 +1159,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "GET_PAGE_IMAGES") {
-    sendResponse({ tabId: lastContentTabId, images: pageImageRegistry.list(lastContentTabId) });
+    sendResponse({ tabId: lastContentTabId, images: pageImageRegistry.listAll() });
     return false;
   }
 
   if (message.type === "SET_ENABLED") {
     chrome.storage.local.set({ enabled: Boolean(message.enabled) }).then(() => {
       if (message.enabled) {
-        ensureBackendStarted().then((launch) => sendResponse({ enabled: true, launch }));
+        scheduler.setPaused(false);
+        maintainRuntime().then(() => ensureBackendStarted()).then((launch) => {
+          notifyContentEnabled(true);
+          sendResponse({ enabled: true, launch });
+        });
       } else {
+        scheduler.setPaused(true);
+        notifyContentEnabled(false);
         sendResponse({ enabled: false });
       }
     });
@@ -1160,5 +1262,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 statisticsTracker.ensureDefaults();
 chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
+  scheduler.setPaused(!settings.enabled);
   if (settings.enabled) maintainRuntime();
 });

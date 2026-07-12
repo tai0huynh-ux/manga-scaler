@@ -679,9 +679,9 @@ class ViewportImageProvider {
     trackedImages.delete(message.imageId);
   }
 
-  fail(imageId) {
+  fail(imageId, permanent = false) {
     const entry = trackedImages.get(imageId);
-    if (entry) {
+    if (entry && !permanent) {
       processedImageUrls.delete(this.processingKey(entry.metadata.imageUrl));
     }
     trackedImages.delete(imageId);
@@ -800,11 +800,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "UPSCALE_FAILED") {
-    viewportProvider.fail(message.imageId);
+    viewportProvider.fail(message.imageId, Boolean(message.permanent));
   }
 
   if (message.type === "SET_PREVIEW_ORIGINAL") {
     renderer.setPreviewOriginal(Boolean(message.enabled));
+  }
+
+  if (message.type === "SET_ENABLED") {
+    viewportProvider.setEnabled(Boolean(message.enabled));
+    sendResponse({ enabled: Boolean(message.enabled) });
+    return false;
   }
 });
 
