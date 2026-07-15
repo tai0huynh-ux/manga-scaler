@@ -292,6 +292,7 @@ function loadContentClasses(options = {}) {
     Number,
     String,
     console,
+    performance,
     crypto: options.crypto || webcrypto,
     MutationObserver: FakeObserver,
     IntersectionObserver: FakeObserver,
@@ -476,19 +477,20 @@ function instrumentPreprocessingSlots(viewportProvider) {
     minActive: 0,
   };
   const acquire = viewportProvider.acquirePreprocessingSlot.bind(viewportProvider);
-  const release = viewportProvider.releasePreprocessingSlot.bind(viewportProvider);
-  viewportProvider.acquirePreprocessingSlot = async () => {
-    await acquire();
+  viewportProvider.acquirePreprocessingSlot = async (operation) => {
+    const release = await acquire(operation);
+    if (!release) return null;
     stats.acquired += 1;
     stats.maxActive = Math.max(stats.maxActive, viewportProvider.preprocessingActive);
     assert.ok(viewportProvider.preprocessingActive <= viewportProvider.preprocessingConcurrency);
-  };
-  viewportProvider.releasePreprocessingSlot = () => {
-    release();
-    stats.released += 1;
-    stats.minActive = Math.min(stats.minActive, viewportProvider.preprocessingActive);
-    assert.ok(viewportProvider.preprocessingActive >= 0);
-    assert.ok(viewportProvider.preprocessingActive <= viewportProvider.preprocessingConcurrency);
+    return () => {
+      const didRelease = release();
+      if (didRelease) stats.released += 1;
+      stats.minActive = Math.min(stats.minActive, viewportProvider.preprocessingActive);
+      assert.ok(viewportProvider.preprocessingActive >= 0);
+      assert.ok(viewportProvider.preprocessingActive <= viewportProvider.preprocessingConcurrency);
+      return didRelease;
+    };
   };
   return stats;
 }
@@ -1786,7 +1788,7 @@ test("intersection prefetch schedules offscreen images inside root margin", asyn
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
 });
 
-test("initial discovery registers and schedules eligible offscreen page images", async () => {
+test("initial discovery registers but does not preprocess images outside the prefetch margin", async () => {
   const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
   const image = new HTMLImageElement();
   image.src = "https://example.com/offscreen-discovery.png";
@@ -1804,7 +1806,126 @@ test("initial discovery registers and schedules eligible offscreen page images",
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1);
-  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+});
+
+test("preprocessing started is emitted only after an operation owns a slot", async () => {
+  const firstRead = deferred();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    readDisplayedImage: (imageUrl) => imageUrl.includes("first") ? firstRead.promise : "second-data",
+  });
+  const first = makeTallImage("first");
+  const second = makeTallImage("second");
+  first.naturalHeight = second.naturalHeight = 900;
+  first.clientHeight = second.clientHeight = 900;
+  first.height = second.height = 900;
+  first.getBoundingClientRect = second.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+
+  const firstScheduled = viewportProvider.schedule(first);
+  const secondScheduled = viewportProvider.schedule(second);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 1);
+
+  firstRead.resolve("first-data");
+  await Promise.all([firstScheduled, secondScheduled]);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 2);
+});
+
+test("preprocessing queue prioritizes the nearest viewport waiter", async () => {
+  const activeRead = deferred();
+  const readOrder = [];
+  const { viewportProvider } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    readDisplayedImage: (imageUrl) => {
+      readOrder.push(imageUrl);
+      return imageUrl.includes("active") ? activeRead.promise : "image-data";
+    },
+  });
+  const active = makeTallImage("active");
+  const far = makeTallImage("far");
+  const near = makeTallImage("near");
+  for (const image of [active, far, near]) {
+    image.naturalHeight = image.clientHeight = image.height = 900;
+  }
+  active.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  far.getBoundingClientRect = () => ({ width: 900, height: 900, top: 3000, bottom: 3900, left: 0, right: 900 });
+  near.getBoundingClientRect = () => ({ width: 900, height: 900, top: 1000, bottom: 1900, left: 0, right: 900 });
+
+  const scheduled = [viewportProvider.schedule(active), viewportProvider.schedule(far, true, { allowPrefetch: true }), viewportProvider.schedule(near, true, { allowPrefetch: true })];
+  await new Promise((resolve) => setImmediate(resolve));
+  activeRead.resolve("active-data");
+  await Promise.all(scheduled);
+
+  assert.match(readOrder[0], /active/);
+  assert.match(readOrder[1], /near/);
+  assert.match(readOrder[2], /far/);
+});
+
+test("a detached queued operation is cancelled before it can acquire a slot", async () => {
+  const activeRead = deferred();
+  const readOrder = [];
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    readDisplayedImage: (imageUrl) => {
+      readOrder.push(imageUrl);
+      return imageUrl.includes("active") ? activeRead.promise : "queued-data";
+    },
+  });
+  const active = makeTallImage("active");
+  const queued = makeTallImage("queued-detached");
+  for (const image of [active, queued]) {
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  }
+
+  const first = viewportProvider.schedule(active);
+  const second = viewportProvider.schedule(queued);
+  await new Promise((resolve) => setImmediate(resolve));
+  viewportProvider.cancel(trackedImages.get(queued.dataset.aiEnhancerImageId));
+  activeRead.resolve("active-data");
+  await Promise.all([first, second]);
+
+  assert.equal(readOrder.some((url) => url.includes("queued-detached")), false);
+  assert.equal(viewportProvider.preprocessingWaiters.length, 0);
+  assert.equal(sentMessages.filter((message) => message.type === "CANCEL_IMAGE").length, 1);
+});
+
+test("twenty-three candidates expose only three active preprocessing operations", async () => {
+  const reads = [];
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    preprocessingConcurrency: 3,
+    readDisplayedImage: () => {
+      const pending = deferred();
+      reads.push(pending);
+      return pending.promise;
+    },
+  });
+  const images = Array.from({ length: 23 }, (_, index) => {
+    const image = makeTallImage(`chapter-${index}`);
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+    return image;
+  });
+
+  const schedules = images.map((image) => viewportProvider.schedule(image));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 23);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 3);
+  assert.equal(viewportProvider.preprocessingActive, 3);
+  assert.equal(viewportProvider.preprocessingWaiters.length, 20);
+
+  [...trackedImages.values()]
+    .filter((entry) => entry.state === "preprocessing_queued")
+    .forEach((entry) => viewportProvider.cancel(entry));
+  reads.forEach((read) => read.resolve("image-data"));
+  await Promise.all(schedules);
+
+  assert.equal(viewportProvider.preprocessingActive, 0);
+  assert.equal(viewportProvider.preprocessingWaiters.length, 0);
 });
 
 test("candidate evaluator rejects explicitly marked interface and advertising images", () => {

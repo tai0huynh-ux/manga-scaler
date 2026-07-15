@@ -593,6 +593,7 @@ class ViewportImageProvider {
       },
     );
     this.onScroll = this.throttle(() => this.refreshPriorities(), 250);
+    this.onPageHide = () => [...trackedImages.values()].forEach((entry) => this.cancel(entry));
   }
 
   async start() {
@@ -623,6 +624,7 @@ class ViewportImageProvider {
     });
     window.addEventListener("scroll", this.onScroll, { passive: true });
     window.addEventListener("resize", this.onScroll, { passive: true });
+    window.addEventListener("pagehide", this.onPageHide, { once: true });
   }
 
   setEnabled(enabled) {
@@ -751,7 +753,9 @@ class ViewportImageProvider {
         height: metadata.height,
         pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
       });
-      this.schedule(image, true, { allowPrefetch: true });
+      if (this.isWithinPrefetch(image)) {
+        this.schedule(image, true, { allowPrefetch: true });
+      }
     };
     reportSeen();
     image.addEventListener("load", reportSeen);
@@ -770,13 +774,16 @@ class ViewportImageProvider {
       }
 
       if (entry.isIntersecting) {
-        if (!this.findByImage(image) && !this.findKeyEntryByImage(image)) {
-          this.schedule(image, true, { allowPrefetch: true });
-        }
+        this.schedule(image, true, { allowPrefetch: true });
         this.updateImagePriority(image);
       } else {
         const existing = this.findByImage(image);
-        if (existing) this.updateImagePriority(image);
+        if (existing) {
+          this.updateImagePriority(image);
+          if (existing.state === "preprocessing_queued" && this.viewportDistance(image) > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
+            this.deferPreprocessingOperation(existing, "cancelled-outside-prefetch");
+          }
+        }
       }
     }
   }
@@ -813,7 +820,7 @@ class ViewportImageProvider {
     }
     if (
       existingByKey?.image === image &&
-      ["preprocessing", "waiting", "processing", "sliced"].includes(existingByKey.state)
+      ["preprocessing_queued", "preprocessing", "waiting", "processing", "sliced"].includes(existingByKey.state)
     ) {
       return;
     }
@@ -833,7 +840,7 @@ class ViewportImageProvider {
       operationId,
       sourceRevision: baseKey,
       metadata,
-      state: "preprocessing",
+      state: "seen",
       baseKey,
       isSegment: false,
       pageOrder,
@@ -845,53 +852,72 @@ class ViewportImageProvider {
       return;
     }
 
-    operationEntry.state = "waiting";
-    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, operationId, sourceRevision: baseKey, pageOrder });
-
-    await this.acquirePreprocessingSlot();
+    const signal = this.createPreprocessingSignal();
+    operationEntry.preprocessingSignal = signal;
+    operationEntry.state = "preprocessing_queued";
+    this.sendPreprocessingStatus(operationEntry, "PREPROCESSING_QUEUED", "preprocessing_queued");
+    const release = await this.acquirePreprocessingSlot(operationEntry);
+    if (!release) return;
     let readResult = { ok: false, imageData: null, reason: "read-fetch-error" };
+    let sourceFingerprint = null;
     try {
       if (!this.isCurrentImageEntry(operationEntry)) return;
+      operationEntry.state = "preprocessing";
+      await this.sendPreprocessingStatus(operationEntry, "PREPROCESSING_STARTED", "preprocessing");
       readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
+      if (!this.isCurrentImageEntry(operationEntry)) return;
+      sourceFingerprint = readResult.ok
+        ? await this.withTimeout(
+            Promise.resolve(this.sourceFingerprint(readResult.imageData)),
+            AI_MANGA_UPSCALER_CONFIG.images.sliceFingerprintTimeoutMs,
+            "slice-fingerprint-timeout",
+          )
+        : null;
+      if (!this.isCurrentImageEntry(operationEntry)) return;
+      operationEntry.sourceFingerprint = sourceFingerprint;
+      const enqueueResponse = await this.sendRuntimeMessage({
+        type: "ENQUEUE_IMAGE",
+        imageId,
+        operationId,
+        sourceRevision: baseKey,
+        sourceFingerprint,
+        imageUrl: metadata.imageUrl,
+        imageData: readResult.ok ? readResult.imageData : null,
+        cacheVariant: "full",
+        pageOrder,
+        viewportDistance: this.viewportDistance(image),
+        displayMetrics: this.displayMetrics(image),
+      }, "segment-enqueue-timeout").catch((error) => ({ accepted: false, error }));
+      if (enqueueResponse?.accepted === false && this.isCurrentImageEntry(operationEntry)) {
+        this.failPreprocessingOperation(operationEntry, this.reasonFromError(enqueueResponse.error, enqueueResponse.reason || "segment-enqueue-error"));
+        return;
+      }
+      if (this.isCurrentImageEntry(operationEntry)) operationEntry.state = "waiting";
+    } catch (error) {
+      if (this.isCurrentImageEntry(operationEntry)) {
+        this.failPreprocessingOperation(operationEntry, this.reasonFromError(error, "preprocessing-error"));
+      }
+      return;
     } finally {
-      this.releasePreprocessingSlot();
+      release();
     }
-    if (!this.isCurrentImageEntry(operationEntry)) return;
-    const sourceFingerprint = readResult.ok ? await this.sourceFingerprint(readResult.imageData) : null;
-    if (!this.isCurrentImageEntry(operationEntry)) return;
-    operationEntry.sourceFingerprint = sourceFingerprint;
-    chrome.runtime.sendMessage({
-      type: "ENQUEUE_IMAGE",
-      imageId,
-      operationId,
-      sourceRevision: baseKey,
-      sourceFingerprint,
-      imageUrl: metadata.imageUrl,
-      imageData: readResult.ok ? readResult.imageData : null,
-      cacheVariant: "full",
-      pageOrder,
-      viewportDistance: this.viewportDistance(image),
-      displayMetrics: this.displayMetrics(image),
-    });
   }
 
   async scheduleSegments(image, metadata, imageId, operationId, baseKey) {
     const operation = trackedImageKeys.get(baseKey);
     if (!operation || operation.operationId !== operationId || trackedImages.get(imageId) !== operation) return;
-    operation.state = "preprocessing";
-    await chrome.runtime.sendMessage({
-      type: "PREPROCESSING_STARTED",
-      imageId,
-      operationId,
-      sourceRevision: baseKey,
-      pageOrder: operation.pageOrder,
-    });
-    if (!this.isCurrentKeyOperation(baseKey, operation)) return;
     const signal = this.createPreprocessingSignal();
     operation.preprocessingSignal = signal;
-    await this.acquirePreprocessingSlot();
-    let outcome = { type: "cancel" };
+    operation.state = "preprocessing_queued";
+    this.sendPreprocessingStatus(operation, "PREPROCESSING_QUEUED", "preprocessing_queued");
+    const release = await this.acquirePreprocessingSlot(operation);
+    if (!release) return;
     try {
+      if (!this.isCurrentKeyOperation(baseKey, operation)) return;
+      operation.state = "preprocessing";
+      await this.sendPreprocessingStatus(operation, "PREPROCESSING_STARTED", "preprocessing");
+      let outcome = { type: "cancel" };
+      try {
       if (!this.isCurrentKeyOperation(baseKey, operation)) {
         this.cancelPreprocessingSignal(signal, "superseded");
         return;
@@ -906,21 +932,24 @@ class ViewportImageProvider {
         });
         outcome = { type: "fallback", reason: readResult.reason, imageData: null };
       } else {
-        const parentFingerprintPromise = Promise.resolve(this.sourceFingerprint(readResult.imageData));
+        const parentSourceFingerprint = await this.withTimeout(
+          Promise.resolve(this.sourceFingerprint(readResult.imageData)),
+          AI_MANGA_UPSCALER_CONFIG.images.sliceFingerprintTimeoutMs,
+          "slice-fingerprint-timeout",
+        );
         const segmentsPromise = Promise.resolve(this.cropImageSegments(readResult.imageData, image, signal));
         const segments = await this.withTimeout(
           segmentsPromise,
-          AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs * 3,
-          "slice-timeout",
+          AI_MANGA_UPSCALER_CONFIG.images.sliceCropTimeoutMs,
+          "slice-crop-timeout",
           () => {
-            this.cancelPreprocessingSignal(signal, "slice-timeout");
+            this.cancelPreprocessingSignal(signal, "slice-crop-timeout");
             segmentsPromise.then(
               (lateSegments) => this.discardSegments(lateSegments),
               () => {},
             );
           },
         );
-        const parentSourceFingerprint = await parentFingerprintPromise;
         if (!this.isCurrentKeyOperation(baseKey, operation)) {
           throw this.preprocessingError("superseded");
         }
@@ -928,7 +957,7 @@ class ViewportImageProvider {
           ? { type: "segments", segments, parentSourceFingerprint, imageData: readResult.imageData }
           : { type: "fallback", reason: "slice-encode-error", imageData: readResult.imageData, parentSourceFingerprint };
       }
-    } catch (error) {
+      } catch (error) {
       const reason = this.reasonFromError(error, "slice-encode-error");
       if (reason === "cancelled" || reason === "superseded") {
         outcome = { type: "cancel", reason };
@@ -942,9 +971,7 @@ class ViewportImageProvider {
         });
         outcome = { type: "fallback", reason, imageData: null };
       }
-    } finally {
-      this.releasePreprocessingSlot();
-    }
+      }
 
     if (!this.isCurrentKeyOperation(baseKey, operation)) {
       this.cancelPreprocessingSignal(signal, "superseded");
@@ -973,9 +1000,17 @@ class ViewportImageProvider {
           rollback: () => this.discardSegments(segments),
         };
     try {
-      await Promise.all(transaction.rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
+      await this.withTimeout(
+        Promise.all(transaction.rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage, signal))),
+        AI_MANGA_UPSCALER_CONFIG.images.sliceLoadTimeoutMs,
+        "slice-load-timeout",
+        () => this.cancelPreprocessingSignal(signal, "slice-load-timeout"),
+      );
     } catch (error) {
-      this.logSliceFailure("slice-load-error", {
+      const loadReason = /timed out|timeout/i.test(error?.message || "")
+        ? "slice-load-timeout"
+        : this.reasonFromError(error, "slice-load-error");
+      this.logSliceFailure(loadReason, {
         imageUrl: metadata.imageUrl,
         operationId,
         imageWidth: metadata.width,
@@ -985,7 +1020,7 @@ class ViewportImageProvider {
       });
       transaction.rollback();
       await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, {
-        reason: "slice-load-error",
+        reason: loadReason,
         imageData: outcome.imageData,
         parentSourceFingerprint: outcome.parentSourceFingerprint,
       });
@@ -1004,9 +1039,14 @@ class ViewportImageProvider {
 
     let segmentFingerprints;
     try {
-      segmentFingerprints = await Promise.all(segments.map((segment) => this.sourceFingerprint(segment.imageData)));
+      segmentFingerprints = await this.withTimeout(
+        Promise.all(segments.map((segment) => this.sourceFingerprint(segment.imageData))),
+        AI_MANGA_UPSCALER_CONFIG.images.sliceFingerprintTimeoutMs,
+        "slice-fingerprint-timeout",
+      );
     } catch (error) {
-      this.logSliceFailure("slice-encode-error", {
+      const fingerprintReason = this.reasonFromError(error, "slice-fingerprint-error");
+      this.logSliceFailure(fingerprintReason, {
         imageUrl: metadata.imageUrl,
         operationId,
         imageWidth: metadata.width,
@@ -1015,7 +1055,7 @@ class ViewportImageProvider {
         error,
       });
       transaction.rollback();
-      this.removeTrackedEntry(operation);
+      this.failPreprocessingOperation(operation, fingerprintReason);
       return;
     }
     if (!this.isCurrentKeyOperation(baseKey, operation)) {
@@ -1128,14 +1168,7 @@ class ViewportImageProvider {
         record.entry = segmentEntry;
         trackedImageKeys.set(segmentKey, segmentEntry);
         trackedImages.set(segmentId, segmentEntry);
-        await chrome.runtime.sendMessage({
-          type: "PREPROCESSING_STARTED",
-          imageId: segmentId,
-          operationId: segmentOperationId,
-          sourceRevision: segmentKey,
-          pageOrder: segmentOrder,
-        });
-        await chrome.runtime.sendMessage({
+        const enqueueResponse = await this.sendRuntimeMessage({
           type: "ENQUEUE_IMAGE",
           imageId: segmentId,
           operationId: segmentOperationId,
@@ -1152,7 +1185,10 @@ class ViewportImageProvider {
             sourceHeight: segment.sourceHeight,
             renderedHeight: segment.renderedHeight,
           },
-        });
+        }, "segment-enqueue-timeout");
+        if (enqueueResponse?.accepted === false) {
+          throw this.preprocessingError("segment-enqueue-error", enqueueResponse.reason || "Segment enqueue was rejected.");
+        }
       }
     } catch (error) {
       this.logSliceFailure("segment-enqueue-error", {
@@ -1167,6 +1203,9 @@ class ViewportImageProvider {
       return;
     }
     chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId, operationId }).catch(() => {});
+    } finally {
+      release();
+    }
   }
 
   isCurrentKeyOperation(baseKey, operation) {
@@ -1290,19 +1329,31 @@ class ViewportImageProvider {
     };
     trackedImageKeys.set(baseKey, fallbackEntry);
     trackedImages.set(imageId, fallbackEntry);
-    chrome.runtime.sendMessage({
+    await this.sendRuntimeMessage({
       type: "PREPROCESSING_FALLBACK",
       imageId,
       operationId,
       sourceRevision: baseKey,
       pageOrder,
       reason: outcome.reason || "read-fetch-error",
-    });
+    }, "extension-context-invalidated").catch(() => null);
     if (trackedImages.get(imageId) !== fallbackEntry || trackedImageKeys.get(baseKey) !== fallbackEntry) return;
-    const sourceFingerprint = outcome.parentSourceFingerprint || (outcome.imageData ? await this.sourceFingerprint(outcome.imageData) : null);
+    let sourceFingerprint = outcome.parentSourceFingerprint || null;
+    if (!sourceFingerprint && outcome.imageData) {
+      try {
+        sourceFingerprint = await this.withTimeout(
+          Promise.resolve(this.sourceFingerprint(outcome.imageData)),
+          AI_MANGA_UPSCALER_CONFIG.images.sliceFingerprintTimeoutMs,
+          "slice-fingerprint-timeout",
+        );
+      } catch (error) {
+        this.failPreprocessingOperation(fallbackEntry, this.reasonFromError(error, "slice-fingerprint-error"));
+        return;
+      }
+    }
     if (trackedImages.get(imageId) !== fallbackEntry || trackedImageKeys.get(baseKey) !== fallbackEntry) return;
     fallbackEntry.sourceFingerprint = sourceFingerprint;
-    chrome.runtime.sendMessage({
+    const enqueueResponse = await this.sendRuntimeMessage({
       type: "ENQUEUE_IMAGE",
       imageId,
       operationId,
@@ -1314,21 +1365,101 @@ class ViewportImageProvider {
       pageOrder,
       viewportDistance: this.viewportDistance(image),
       displayMetrics: this.displayMetrics(image),
-    });
+    }, "segment-enqueue-timeout").catch((error) => ({ accepted: false, error }));
+    if (enqueueResponse?.accepted === false) {
+      this.failPreprocessingOperation(fallbackEntry, this.reasonFromError(enqueueResponse.error, enqueueResponse.reason || "segment-enqueue-error"));
+      return;
+    }
+    if (this.isCurrentImageEntry(fallbackEntry)) fallbackEntry.state = "waiting";
   }
 
   createPreprocessingSignal() {
+    const listeners = new Set();
     return {
       cancelled: false,
+      aborted: false,
       reason: null,
       objectUrls: new Set(),
+      addEventListener(type, listener) {
+        if (type === "abort") listeners.add(listener);
+      },
+      removeEventListener(type, listener) {
+        if (type === "abort") listeners.delete(listener);
+      },
+      dispatchAbort() {
+        [...listeners].forEach((listener) => listener({ type: "abort" }));
+        listeners.clear();
+      },
     };
   }
 
   cancelPreprocessingSignal(signal, reason) {
     if (!signal || signal.cancelled) return;
     signal.cancelled = true;
+    signal.aborted = true;
     signal.reason = reason;
+    signal.dispatchAbort?.();
+  }
+
+  sendPreprocessingStatus(operation, type, state, reason = null) {
+    const message = {
+      type,
+      imageId: operation.imageId,
+      operationId: operation.operationId,
+      sourceRevision: operation.sourceRevision,
+      pageOrder: operation.pageOrder,
+      viewportDistance: this.viewportDistance(operation.image),
+      status: state,
+      reason,
+    };
+    this.logPreprocessing(state, operation, reason);
+    return this.sendRuntimeMessage(message, "extension-context-invalidated").catch(() => null);
+  }
+
+  sendRuntimeMessage(message, timeoutReason, timeoutMs = AI_MANGA_UPSCALER_CONFIG.images.segmentEnqueueTimeoutMs) {
+    let transport;
+    try {
+      transport = chrome.runtime.sendMessage(message);
+    } catch (error) {
+      return Promise.reject(this.preprocessingError("extension-context-invalidated", error?.message || "Extension context is unavailable."));
+    }
+    return this.withTimeout(Promise.resolve(transport), timeoutMs, timeoutReason);
+  }
+
+  failPreprocessingOperation(operation, reason, status = null) {
+    if (!operation || !this.isCurrentImageEntry(operation)) return false;
+    const terminalStatus = status || (String(reason).includes("timeout") ? "timeout" : "error");
+    operation.state = terminalStatus;
+    this.cancelPreprocessingSignal(operation.preprocessingSignal, reason);
+    this.sendPreprocessingStatus(operation, "PREPROCESSING_FAILED", terminalStatus, reason);
+    this.removeTrackedEntry(operation);
+    return true;
+  }
+
+  deferPreprocessingOperation(operation, reason = "cancelled-outside-prefetch") {
+    if (!operation || operation.state !== "preprocessing_queued") return false;
+    const waiter = operation.preprocessingWaiter;
+    if (waiter) this.cancelPreprocessingWaiter(waiter, reason);
+    if (!this.isCurrentImageEntry(operation)) return true;
+    operation.state = "seen";
+    operation.preprocessingSignal = null;
+    this.sendPreprocessingStatus(operation, "PREPROCESSING_DEFERRED", "seen", reason);
+    return true;
+  }
+
+  logPreprocessing(state, operation, reason = null) {
+    if (!reason && globalThis.__AI_MANGA_UPSCALER_DEBUG__ !== true) return;
+    console.debug("[AI Enhancer][preprocessing]", {
+      imageId: operation?.imageId,
+      operationId: operation?.operationId,
+      imageUrl: operation?.metadata?.imageUrl,
+      state,
+      reason,
+      pageOrder: operation?.pageOrder,
+      viewportDistance: operation?.image ? this.viewportDistance(operation.image) : null,
+      queueLength: this.preprocessingWaiters.length,
+      activeSlots: this.preprocessingActive,
+    });
   }
 
   isPreprocessingCancelled(signal) {
@@ -1374,10 +1505,14 @@ class ViewportImageProvider {
     if (result?.ok === true) {
       return { ok: true, imageData: result.imageData || "" };
     }
+    const rawReason = typeof result?.reason === "string" ? result.reason : "read-fetch-error";
+    const reason = rawReason === "read-timeout"
+      ? "browser-read-timeout"
+      : (rawReason === "read-fetch-error" ? "browser-read-error" : rawReason);
     return {
       ok: false,
       imageData: null,
-      reason: typeof result?.reason === "string" ? result.reason : "read-fetch-error",
+      reason,
     };
   }
 
@@ -1589,7 +1724,11 @@ class ViewportImageProvider {
   async cropImageSegments(imageData, image, signal = null) {
     let source;
     try {
-      source = await this.decodeBase64Image(imageData);
+      source = await this.withTimeout(
+        Promise.resolve(this.decodeBase64Image(imageData)),
+        AI_MANGA_UPSCALER_CONFIG.images.sliceDecodeTimeoutMs,
+        "slice-decode-timeout",
+      );
     } catch (error) {
       throw this.preprocessingError("slice-decode-error", error?.message || "Unable to decode displayed image for segmentation.");
     }
@@ -1620,7 +1759,11 @@ class ViewportImageProvider {
         } catch (error) {
           throw this.preprocessingError("slice-crop-error", error?.message || "Unable to crop image segment.");
         }
-        const payload = await this.canvasToSegmentPayload(canvas, signal);
+        const payload = await this.withTimeout(
+          Promise.resolve(this.canvasToSegmentPayload(canvas, signal)),
+          AI_MANGA_UPSCALER_CONFIG.images.sliceEncodeTimeoutMs,
+          "slice-encode-timeout",
+        );
         if (this.isPreprocessingCancelled(signal)) {
           this.discardSegments([payload]);
           throw this.preprocessingError(signal.reason || "cancelled");
@@ -1751,18 +1894,77 @@ class ViewportImageProvider {
     return `${imageId}-op-${this.sequence++}`;
   }
 
-  acquirePreprocessingSlot() {
-    if (this.preprocessingActive < this.preprocessingConcurrency) {
-      this.preprocessingActive += 1;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => this.preprocessingWaiters.push(resolve));
+  acquirePreprocessingSlot(operation) {
+    const waiter = {
+      imageId: operation.imageId,
+      operationId: operation.operationId,
+      image: operation.image,
+      operation,
+      pageOrder: Number(operation.pageOrder) || 0,
+      viewportDistance: this.viewportDistance(operation.image),
+      queuedAt: performance.now(),
+      resolve: null,
+      cancelled: false,
+      timeoutId: null,
+    };
+    operation.preprocessingWaiter = waiter;
+    const promise = new Promise((resolve) => { waiter.resolve = resolve; });
+    waiter.timeoutId = setTimeout(() => {
+      if (waiter.cancelled || waiter.acquired) return;
+      this.cancelPreprocessingWaiter(waiter, "preprocessing-queue-timeout");
+      if (this.isCurrentImageEntry(operation)) {
+        this.failPreprocessingOperation(operation, "preprocessing-queue-timeout", "timeout");
+      }
+    }, AI_MANGA_UPSCALER_CONFIG.images.preprocessingQueueTimeoutMs);
+    this.preprocessingWaiters.push(waiter);
+    this.drainPreprocessingQueue();
+    return promise;
   }
 
-  releasePreprocessingSlot() {
-    const next = this.preprocessingWaiters.shift();
-    if (next) next();
-    else this.preprocessingActive = Math.max(0, this.preprocessingActive - 1);
+  drainPreprocessingQueue() {
+    this.preprocessingWaiters.sort((left, right) => (
+      left.viewportDistance - right.viewportDistance ||
+      left.pageOrder - right.pageOrder ||
+      left.queuedAt - right.queuedAt
+    ));
+    while (this.preprocessingActive < this.preprocessingConcurrency && this.preprocessingWaiters.length) {
+      const waiter = this.preprocessingWaiters.shift();
+      if (!waiter || waiter.cancelled || !this.isCurrentImageEntry(waiter.operation)) {
+        if (waiter) {
+          clearTimeout(waiter.timeoutId);
+          waiter.resolve?.(null);
+        }
+        continue;
+      }
+      waiter.acquired = true;
+      clearTimeout(waiter.timeoutId);
+      waiter.operation.preprocessingWaiter = null;
+      this.preprocessingActive += 1;
+      let released = false;
+      waiter.resolve(() => {
+        if (released) return false;
+        released = true;
+        this.preprocessingActive = Math.max(0, this.preprocessingActive - 1);
+        this.drainPreprocessingQueue();
+        return true;
+      });
+    }
+  }
+
+  cancelPreprocessingWaiter(waiter, reason = "cancelled") {
+    if (!waiter || waiter.cancelled || waiter.acquired) return false;
+    waiter.cancelled = true;
+    waiter.reason = reason;
+    clearTimeout(waiter.timeoutId);
+    const index = this.preprocessingWaiters.indexOf(waiter);
+    if (index >= 0) this.preprocessingWaiters.splice(index, 1);
+    if (waiter.operation?.preprocessingWaiter === waiter) waiter.operation.preprocessingWaiter = null;
+    waiter.resolve?.(null);
+    return true;
+  }
+
+  releasePreprocessingSlot(release) {
+    return typeof release === "function" ? release() : false;
   }
 
   displayMetrics(image) {
@@ -1802,10 +2004,10 @@ class ViewportImageProvider {
       if (!chrome?.runtime?.sendMessage) {
         return { ok: false, imageData: null, reason: "read-fetch-error" };
       }
-      const response = await chrome.runtime.sendMessage({
+      const response = await this.sendRuntimeMessage({
         type: "READ_IMAGE_FOR_SLICING",
         imageUrl,
-      });
+      }, "browser-read-timeout", AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
       if (!response || typeof response !== "object") {
         return { ok: false, imageData: null, reason: "read-fetch-error" };
       }
@@ -1814,13 +2016,18 @@ class ViewportImageProvider {
         : {
             ok: false,
             imageData: null,
-            reason: typeof response.reason === "string" ? response.reason : "read-fetch-error",
+            reason: typeof response.reason === "string" ? response.reason : "browser-read-error",
           };
     } catch (error) {
       return {
         ok: false,
         imageData: null,
-        reason: /context invalidated|receiving end|message port closed/i.test(error?.message || "") ? "read-fetch-error" : "read-fetch-error",
+        reason: this.reasonFromError(
+          error,
+          /context invalidated|receiving end|message port closed/i.test(error?.message || "")
+            ? "extension-context-invalidated"
+            : "browser-read-error",
+        ),
       };
     }
   }
@@ -1843,7 +2050,15 @@ class ViewportImageProvider {
 
     trackedImages.forEach((entry) => {
       this.updateImagePriority(entry.image, entry.imageId);
+      if (entry.state === "preprocessing_queued") {
+        const distance = this.viewportDistance(entry.image);
+        if (entry.preprocessingWaiter) entry.preprocessingWaiter.viewportDistance = distance;
+        if (distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
+          this.deferPreprocessingOperation(entry, "cancelled-outside-prefetch");
+        }
+      }
     });
+    this.drainPreprocessingQueue();
   }
 
   updateImagePriority(image, imageId = null) {
@@ -1929,6 +2144,7 @@ class ViewportImageProvider {
       this.rollbackSliceGroup(parentGroup, "cancelled");
       return;
     }
+    if (entry.preprocessingWaiter) this.cancelPreprocessingWaiter(entry.preprocessingWaiter, "cancelled");
     chrome.runtime.sendMessage({
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
@@ -2001,6 +2217,10 @@ class ViewportImageProvider {
     return Math.abs(rect.bottom);
   }
 
+  isWithinPrefetch(image) {
+    return this.viewportDistance(image) <= AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
+  }
+
   throttle(callback, waitMs) {
     let lastRun = 0;
     let timeoutId = null;
@@ -2046,6 +2266,9 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   if (areaName === "local" && changes.blacklistRules) {
     viewportProvider.blacklist = new Set(changes.blacklistRules.newValue || []);
+    [...trackedImages.values()]
+      .filter((entry) => viewportProvider.isBlacklisted(entry.metadata?.imageUrl))
+      .forEach((entry) => viewportProvider.cancel(entry));
   }
   if (areaName === "local" && (
     changes.minInputWidth || changes.minInputHeight || changes.maxInputWidth || changes.maxInputHeight ||

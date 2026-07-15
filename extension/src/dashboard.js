@@ -19,6 +19,20 @@ const limitTogglePairs = {
 const requestedTabIdValue = new URLSearchParams(window.location.search).get("tabId");
 const requestedTabId = requestedTabIdValue === null ? null : Number(requestedTabIdValue);
 const contentTabId = Number.isInteger(requestedTabId) && requestedTabId >= 0 ? requestedTabId : null;
+const imageRows = new Map();
+const statusPresentation = {
+  seen: ["Detected", "Detected, not queued for preprocessing."],
+  preprocessing_queued: ["Waiting for preprocessing slot", "This image is queued behind images closer to the viewport."],
+  preprocessing: ["Preparing image", "Reading and preparing the image before AI processing."],
+  waiting: ["Waiting for AI worker", "Preprocessing completed and the backend job is queued."],
+  processing: ["Processing with AI", "The backend is enhancing this image."],
+  fixed: ["Completed", "Enhancement completed."],
+  cache: ["Loaded from cache", "A verified cached result was reused."],
+  error: ["Processing failed", "The image could not be processed."],
+  timeout: ["Timed out", "Processing exceeded the allowed stage timeout."],
+  cancelled: ["Cancelled", "This operation was cancelled."],
+  removed: ["No longer available", "The source image is no longer on the page."],
+};
 
 async function refresh() {
   const [stats, page] = await Promise.all([
@@ -68,55 +82,157 @@ function renderBlacklist(rules) {
 function renderImages(images) {
   const list = document.getElementById("imageList");
   document.getElementById("imageCount").textContent = `${images.length} images`;
-  list.replaceChildren();
+  const activeKeys = new Set();
   if (!images.length) {
-    const empty = document.createElement("p");
+    imageRows.forEach((row) => row.remove());
+    imageRows.clear();
+    let empty = list.querySelector?.(".image-list-empty");
+    if (!empty) {
+      empty = document.createElement("p");
+      empty.className = "image-list-empty";
+      list.appendChild(empty);
+    }
     empty.textContent = "No eligible images have been detected on the content tab yet.";
-    list.appendChild(empty);
     return;
   }
+  list.querySelector?.(".image-list-empty")?.remove();
   images.forEach((item, index) => {
-    const row = document.createElement("article");
-    row.className = "image-row";
-    const ai = document.createElement("figure");
-    const original = document.createElement("figure");
-    const aiCaption = document.createElement("figcaption");
-    aiCaption.textContent = `AI result #${index + 1} `;
-    const state = document.createElement("span");
-    state.className = `state state-${item.status}`;
-    state.textContent = item.status;
-    aiCaption.appendChild(state);
-    ai.appendChild(aiCaption);
-    const originalCaption = document.createElement("figcaption");
-    originalCaption.textContent = `Original #${index + 1}`;
-    original.appendChild(originalCaption);
-
-    if (item.enhancedImageUrl) {
-      ai.appendChild(createImage(item.enhancedImageUrl, `AI enhanced image ${index + 1}`));
-      ai.appendChild(createOpenButton(item.enhancedImageUrl, "Open AI image"));
-    } else {
-      const pending = document.createElement("div");
-      pending.className = "pending";
-      const spinner = document.createElement("span");
-      spinner.className = "spinner";
-      const title = document.createElement("strong");
-      title.textContent = item.status === "error" ? "Processing failed" : "Waiting for AI";
-      const detail = document.createElement("small");
-      detail.textContent = item.error || "The original remains visible until enhancement finishes.";
-      pending.append(spinner, title, detail);
-      ai.appendChild(pending);
+    const key = imageRowKey(item);
+    activeKeys.add(key);
+    let row = imageRows.get(key);
+    if (!row) {
+      row = createImageRow();
+      row.dataset.imageKey = key;
+      imageRows.set(key, row);
     }
-    original.appendChild(createImage(item.originalImageUrl || item.imageUrl, `Original image ${index + 1}`));
-    const actions = document.createElement("div");
-    actions.className = "image-actions";
-    actions.append(
-      createOpenButton(item.originalImageUrl || item.imageUrl, "Open original image"),
-      createBlockButton(item.imageUrl || item.originalImageUrl),
-    );
-    original.appendChild(actions);
-    row.append(ai, original);
+    updateImageRow(row, item, index);
     list.appendChild(row);
   });
+  for (const [key, row] of imageRows) {
+    if (activeKeys.has(key)) continue;
+    row.remove();
+    imageRows.delete(key);
+  }
+}
+
+function imageRowKey(item) {
+  return `${item.tabId ?? contentTabId ?? "unknown"}:${item.imageId || item.imageUrl || "image"}:${item.operationId || "operation"}`;
+}
+
+function createImageRow() {
+  const row = document.createElement("article");
+  row.className = "image-row";
+  const ai = document.createElement("figure");
+  const original = document.createElement("figure");
+  const aiCaption = document.createElement("figcaption");
+  const aiLabel = document.createElement("span");
+  const state = document.createElement("span");
+  state.className = "state";
+  aiCaption.append(aiLabel, state);
+  const aiMedia = document.createElement("div");
+  aiMedia.className = "image-media ai-media";
+  const aiActions = document.createElement("div");
+  aiActions.className = "image-actions";
+  ai.append(aiCaption, aiMedia, aiActions);
+
+  const originalCaption = document.createElement("figcaption");
+  const originalMedia = document.createElement("div");
+  originalMedia.className = "image-media original-media";
+  const originalActions = document.createElement("div");
+  originalActions.className = "image-actions";
+  const openOriginal = createOpenButton("", "Open original image");
+  const block = createBlockButton("");
+  originalActions.append(openOriginal, block);
+  original.append(originalCaption, originalMedia, originalActions);
+  row.append(ai, original);
+  row.__parts = { aiLabel, state, aiMedia, aiActions, originalCaption, originalMedia, openOriginal, block };
+  return row;
+}
+
+function updateImageRow(row, item, index) {
+  const parts = row.__parts;
+  const status = item.status || "seen";
+  parts.aiLabel.textContent = `AI result #${index + 1} `;
+  parts.state.className = `state state-${status}`;
+  parts.state.textContent = status;
+  parts.originalCaption.textContent = `Original #${index + 1}`;
+
+  if (item.enhancedImageUrl) {
+    updateMediaImage(parts.aiMedia, item.enhancedImageUrl, `AI enhanced image ${index + 1}`, "AI result is unavailable.");
+    updateSingleOpenButton(parts.aiActions, item.enhancedImageUrl, "Open AI image");
+  } else {
+    const [title, defaultDetail] = statusPresentation[status] || ["Waiting", "The image operation has not completed yet."];
+    updateMediaPlaceholder(parts.aiMedia, title, item.error || item.reason || defaultDetail, ["error", "timeout", "cancelled", "removed", "seen"].includes(status));
+    parts.aiActions.replaceChildren();
+  }
+
+  const previewUrl = isStablePreviewUrl(item.originalImageUrl) ? item.originalImageUrl : null;
+  if (previewUrl) {
+    updateMediaImage(parts.originalMedia, previewUrl, `Original image ${index + 1}`, "Original preview is not available yet");
+  } else {
+    updateMediaPlaceholder(parts.originalMedia, "Original preview is not available yet", "Open the original image to view the website source.", true);
+  }
+  const originalUrl = item.imageUrl || item.originalImageUrl || "";
+  parts.openOriginal.href = originalUrl;
+  parts.openOriginal.hidden = !originalUrl;
+  parts.block.dataset.source = originalUrl;
+  parts.block.disabled = !originalUrl;
+}
+
+function updateMediaImage(host, source, alt, failureText) {
+  const current = host.firstElementChild;
+  if (current?.tagName === "IMG" && current.dataset.source === source) {
+    current.alt = alt;
+    return current;
+  }
+  const image = createImage(source, alt);
+  image.dataset.source = source;
+  image.addEventListener("error", () => {
+    if (host.firstElementChild !== image) return;
+    updateMediaPlaceholder(host, failureText, "The preview URL could not be loaded.", true);
+  }, { once: true });
+  host.replaceChildren(image);
+  return image;
+}
+
+function updateMediaPlaceholder(host, titleText, detailText, withoutSpinner = false) {
+  let placeholder = host.firstElementChild;
+  if (!placeholder || placeholder.dataset?.placeholder !== "true") {
+    placeholder = document.createElement("div");
+    placeholder.className = "pending";
+    placeholder.dataset.placeholder = "true";
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    const title = document.createElement("strong");
+    const detail = document.createElement("small");
+    placeholder.append(spinner, title, detail);
+    host.replaceChildren(placeholder);
+  }
+  const [spinner, title, detail] = placeholder.children;
+  spinner.hidden = withoutSpinner;
+  title.textContent = titleText;
+  detail.textContent = detailText;
+}
+
+function updateSingleOpenButton(host, source, text) {
+  let link = host.firstElementChild;
+  if (!link || link.tagName !== "A") {
+    link = createOpenButton(source, text);
+    host.replaceChildren(link);
+  }
+  link.href = source;
+  link.textContent = text;
+}
+
+function isStablePreviewUrl(source) {
+  if (!source) return false;
+  try {
+    const url = new URL(source);
+    return ["blob:", "data:", "chrome-extension:"].includes(url.protocol) ||
+      (["http:", "https:"].includes(url.protocol) && ["127.0.0.1", "localhost"].includes(url.hostname));
+  } catch {
+    return false;
+  }
 }
 
 function createBlockButton(source) {
@@ -125,8 +241,9 @@ function createBlockButton(source) {
   button.type = "button";
   button.textContent = "Block AI";
   button.title = "Do not upscale this image again";
+  button.dataset.source = source;
   button.addEventListener("click", async () => {
-    const rule = normalizeImageUrl(source);
+    const rule = normalizeImageUrl(button.dataset.source || "");
     const stored = await chrome.storage.local.get({ blacklistRules: [] });
     await chrome.storage.local.set({ blacklistRules: [...new Set([...(stored.blacklistRules || []), rule])] });
     button.disabled = true;

@@ -221,7 +221,7 @@ class PageImageRegistry {
     return this.exportArray([...this.pages.values()]
       .flatMap((page) => [...page.values()])
       .sort((left, right) => {
-        const statusRank = { processing: 0, preprocessing: 1, waiting: 2, seen: 3, timeout: 4, error: 5, fixed: 6, cache: 7 };
+        const statusRank = { processing: 0, preprocessing: 1, preprocessing_queued: 2, waiting: 3, seen: 4, timeout: 5, error: 6, cancelled: 7, fixed: 8, cache: 9 };
         if ((left.order ?? 0) !== (right.order ?? 0)) return (left.order ?? 0) - (right.order ?? 0);
         const leftRank = statusRank[left.status] ?? 8;
         const rightRank = statusRank[right.status] ?? 8;
@@ -1251,6 +1251,23 @@ function hasMessageOperationIdentity(message, sender) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PREPROCESSING_QUEUED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status: "preprocessing_queued",
+      pageOrder: Number(message.pageOrder),
+      viewportDistance: Number(message.viewportDistance),
+      queuedAt: performance.now(),
+    });
+    sendResponse({ recorded: true });
+    return false;
+  }
+
   if (message.type === "PREPROCESSING_STARTED") {
     if (!hasMessageOperationIdentity(message, sender)) {
       sendResponse({ recorded: false, reason: "Missing operation identity." });
@@ -1261,6 +1278,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sourceRevision: message.sourceRevision,
       status: "preprocessing",
       pageOrder: Number(message.pageOrder),
+      viewportDistance: Number(message.viewportDistance),
+      preprocessingStartedAt: performance.now(),
+    });
+    sendResponse({ recorded: true });
+    return false;
+  }
+
+  if (message.type === "PREPROCESSING_DEFERRED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status: "seen",
+      reason: message.reason || "cancelled-outside-prefetch",
+      pageOrder: Number(message.pageOrder),
+      viewportDistance: Number(message.viewportDistance),
+    });
+    sendResponse({ recorded: true });
+    return false;
+  }
+
+  if (message.type === "PREPROCESSING_FAILED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const status = ["error", "timeout", "cancelled"].includes(message.reason === "cancelled" ? "cancelled" : message.status)
+      ? (message.reason === "cancelled" ? "cancelled" : message.status)
+      : (String(message.reason || "").includes("timeout") ? "timeout" : "error");
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status,
+      error: message.reason || "Preprocessing failed.",
+      failedAt: performance.now(),
     });
     sendResponse({ recorded: true });
     return false;
