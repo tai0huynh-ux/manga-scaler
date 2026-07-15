@@ -2,9 +2,11 @@
 
 import base64
 import binascii
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.tracing import duration_ms, emit_trace_event, new_trace_id, trace_include_stack
 from app.models.schemas import (
     HealthResponse,
     ModelStatusResponse,
@@ -119,6 +121,25 @@ async def upscale(
     service: UpscalerService = Depends(get_upscaler_service),
 ) -> UpscaleResponse:
     """Download, upscale with ONNX Runtime, cache, and return WebP output."""
+    started = time.perf_counter()
+    trace_id = payload.trace_id or new_trace_id()
+    emit_trace_event(
+        event="backend.api.request.received",
+        trace_id=trace_id,
+        component="backend_api",
+        stage="request",
+        status="running",
+        attempt=payload.attempt,
+        operation_id=payload.operation_id,
+        queue_key=payload.queue_key,
+        source_fingerprint=payload.source_fingerprint,
+        metadata={
+            "mode": payload.mode,
+            "model": payload.model,
+            "tile_size": payload.tile_size,
+            "has_image_data": payload.image_data is not None,
+        },
+    )
     try:
         image_bytes = None
         if payload.image_data is not None:
@@ -126,7 +147,18 @@ async def upscale(
                 image_bytes = base64.b64decode(payload.image_data, validate=True)
             except (binascii.Error, ValueError) as exc:
                 raise ValueError("imageData must be valid base64.") from exc
-        return await service.upscale(
+        emit_trace_event(
+            event="backend.api.job.submitted",
+            trace_id=trace_id,
+            component="backend_api",
+            stage="request",
+            status="queued",
+            attempt=payload.attempt,
+            operation_id=payload.operation_id,
+            queue_key=payload.queue_key,
+            source_fingerprint=payload.source_fingerprint,
+        )
+        response = await service.upscale(
             image_url=str(payload.image_url),
             model_name=payload.model,
             tile_size=payload.tile_size,
@@ -138,27 +170,112 @@ async def upscale(
             max_output_height=payload.max_output_height,
             output_quality=payload.output_quality,
             text_processing=TextProcessingOptions.from_payload(payload.text_processing),
+            trace_id=trace_id,
+            operation_id=payload.operation_id,
+            queue_key=payload.queue_key,
+            attempt=payload.attempt or 1,
+            source_fingerprint=payload.source_fingerprint,
         )
+        emit_trace_event(
+            event="backend.api.request.completed",
+            trace_id=trace_id,
+            component="backend_api",
+            stage="request",
+            status="completed",
+            attempt=payload.attempt,
+            duration_ms=duration_ms(started),
+            operation_id=payload.operation_id,
+            queue_key=payload.queue_key,
+            source_fingerprint=payload.source_fingerprint,
+            metadata={"http_status": status.HTTP_200_OK},
+        )
+        return response
     except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
+        raise _trace_http_error(
+            exc,
+            trace_id,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "MODEL_UNAVAILABLE",
+            "backend.api.request.failed",
+            payload,
+            started,
         ) from exc
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
+        raise _trace_http_error(
+            exc,
+            trace_id,
+            status.HTTP_400_BAD_REQUEST,
+            "REQUEST_VALIDATION_FAILED",
+            "backend.api.request.rejected",
+            payload,
+            started,
         ) from exc
     except TimeoutError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=str(exc),
+        raise _trace_http_error(
+            exc,
+            trace_id,
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            "JOB_TIMEOUT",
+            "backend.api.request.timeout",
+            payload,
+            started,
+            trace_status="timeout",
         ) from exc
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to process image.",
+        raise _trace_http_error(
+            exc,
+            trace_id,
+            status.HTTP_502_BAD_GATEWAY,
+            "UNEXPECTED_ERROR",
+            "backend.api.request.failed",
+            payload,
+            started,
+            safe_message="Unable to process image.",
         ) from exc
+
+
+def _trace_http_error(
+    exc: Exception,
+    trace_id: str,
+    http_status: int,
+    error_code: str,
+    event: str,
+    payload: UpscaleRequest,
+    started: float,
+    trace_status: str = "failed",
+    safe_message: str | None = None,
+) -> HTTPException:
+    message = safe_message or str(exc)
+    metadata: dict[str, object] = {"http_status": http_status}
+    if trace_include_stack():
+        import traceback
+
+        metadata["stack_trace"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    emit_trace_event(
+        event=event,
+        trace_id=trace_id,
+        component="backend_api",
+        stage="request",
+        status=trace_status,
+        attempt=payload.attempt,
+        duration_ms=duration_ms(started),
+        operation_id=payload.operation_id,
+        queue_key=payload.queue_key,
+        source_fingerprint=payload.source_fingerprint,
+        error_code=error_code,
+        exception_type=type(exc).__name__,
+        message=message,
+        metadata=metadata,
+    )
+    return HTTPException(
+        status_code=http_status,
+        detail={
+            "traceId": trace_id,
+            "errorCode": error_code,
+            "message": message,
+            "status": http_status,
+        },
+    )
 
 
 @router.delete("/jobs/{job_id}")

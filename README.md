@@ -81,7 +81,9 @@ Invoke-RestMethod `
   -Body '{"imageUrl":"https://example.com/image.jpg"}'
 ```
 
-The health response includes the active provider/model, GPU diagnostics, queue and cache state, and uptime. The `/upscale` response retains its Phase 1 fields and adds model, provider, scale, output dimensions, per-stage timings, memory, and queue statistics.
+The health response includes the active provider/model, GPU diagnostics, queue and cache state, and uptime. The `/upscale` response retains its Phase 1 fields and adds model, provider, scale, output dimensions, per-stage timings, memory, queue statistics, and optional `traceId` correlation.
+
+Trace Core MVP accepts optional `traceId`, `operationId`, `queueKey`, `attempt`, and `sourceFingerprint` request metadata. Older requests without trace metadata still work, and the backend creates a fallback trace ID. Backend trace events are written as append-only JSONL to `backend/logs/trace.jsonl` by default and never include raw image bytes or base64 payloads.
 
 Compatible models use float32 RGB NCHW input and output. Configured filenames are `anime_x2.onnx`, `anime_x4.onnx`, and `general_x4.onnx`; only the selected model must be installed. The service starts without model files so `/health` remains available, while an unavailable requested model returns HTTP 503.
 
@@ -102,7 +104,9 @@ For manga line art, start around `0.2–0.4`. Higher sharpness can make screento
 
 ## Configuration
 
-Backend runtime settings live in `backend/config.json`. This includes paths, download limits, model registry, provider preference, tile/batch/worker limits, WebP encoding, and rotating JSON logs. Relative paths are resolved from the backend directory.
+Backend runtime settings live in `backend/config.json`. This includes paths, download limits, model registry, provider preference, tile/batch/worker limits, WebP encoding, rotating JSON logs, and Trace Core settings. Relative paths are resolved from the backend directory.
+
+Trace settings live under `trace`: `enabled`, `file`, and `includeStack`. When tracing is disabled, trace calls become no-ops and the image pipeline behavior is unchanged.
 
 Shared defaults live in `shared/config/defaults.json`. The extension currently reads its browser-safe defaults from `extension/src/config.js`; keep both aligned when changing ports, retry settings, or image thresholds.
 
@@ -170,6 +174,7 @@ The backend also defines provider protocols in `backend/app/services/providers.p
 - `image_pipeline.py` implements RGB decode, padded overlapping tiles, ONNX batch inference, overlap averaging, and WebP encoding.
 - `inference_queue.py` provides a bounded async queue, dynamic collection window, worker pool, and global inference semaphore.
 - `statistics.py` reports download, decode, inference, GPU, encode, total latency, and process memory.
+- `core/tracing.py` emits small JSONL trace events for request, queue, upscaler, cache, and tile-plan boundaries.
 
 Run backend tests with `cd backend; ..\.venv\Scripts\python.exe -m pytest -q`.
 

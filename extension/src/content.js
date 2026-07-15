@@ -2,6 +2,56 @@ const trackedImages = new Map();
 const trackedImageKeys = new Map();
 const completedImageKeys = new Set();
 
+function newTraceId() {
+  try {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto?.getRandomValues?.(bytes);
+    if (bytes.some((value) => value !== 0)) {
+      return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+    }
+  } catch {
+    // Test harnesses may not expose browser crypto.
+  }
+  return `trace-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+
+function sanitizeTraceMetadata(metadata = {}) {
+  const sanitized = {};
+  for (const [key, value] of Object.entries(metadata || {})) {
+    const lower = key.toLowerCase();
+    if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) continue;
+    if (typeof value === "string") sanitized[key] = value.length > 256 ? `${value.slice(0, 253)}...` : value;
+    else if (typeof value === "number" || typeof value === "boolean" || value === null) sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+function emitTrace({ event, traceId, component = "content", stage = "content", status, attempt = null, metadata = {} }) {
+  try {
+    const payload = {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      event,
+      traceId: traceId || newTraceId(),
+      component,
+      stage,
+      status,
+      attempt,
+      metadata: sanitizeTraceMetadata(metadata),
+    };
+    if (Array.isArray(globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__)) {
+      globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__.push(payload);
+    }
+    if (globalThis.__AI_MANGA_UPSCALER_DEBUG__ === true) {
+      console.debug("[AI Enhancer][trace]", payload);
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Extracts stable image metadata from normal images and picture elements.
  */
@@ -725,8 +775,10 @@ class ViewportImageProvider {
       }
       const imageId = existing?.imageId || this.createImageId(imageKey);
       const operationId = existing?.operationId || this.createOperationId(imageId);
+      const traceId = existing?.traceId || newTraceId();
       image.dataset.aiEnhancerImageId = imageId;
       image.dataset.aiEnhancerOperationId = operationId;
+      image.dataset.aiEnhancerTraceId = traceId;
       image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
       image.dataset.aiEnhancerKey = imageKey;
       image.dataset.aiEnhancerSeen = "true";
@@ -734,6 +786,7 @@ class ViewportImageProvider {
         trackedImageKeys.set(imageKey, {
           imageId,
           operationId,
+          traceId,
           sourceRevision: imageKey,
           image,
           metadata,
@@ -742,11 +795,18 @@ class ViewportImageProvider {
           isSegment: false,
           pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
         });
+        emitTrace({
+          event: "content.operation.created",
+          traceId,
+          status: "created",
+          metadata: { input_width: metadata.width, input_height: metadata.height },
+        });
       }
       chrome.runtime.sendMessage({
         type: "IMAGE_SEEN",
         imageId,
         operationId,
+        traceId,
         sourceRevision: imageKey,
         imageUrl: metadata.imageUrl,
         width: metadata.width,
@@ -829,8 +889,10 @@ class ViewportImageProvider {
     }
     const imageId = existing?.imageId || existingByKey?.imageId || this.createImageId(baseKey);
     const operationId = existing?.operationId || existingByKey?.operationId || this.createOperationId(imageId);
+    const traceId = existing?.traceId || existingByKey?.traceId || image.dataset.aiEnhancerTraceId || newTraceId();
     image.dataset.aiEnhancerImageId = imageId;
     image.dataset.aiEnhancerOperationId = operationId;
+    image.dataset.aiEnhancerTraceId = traceId;
     image.dataset.aiEnhancerKey = baseKey;
     image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
     const pageOrder = Number(image.dataset.aiEnhancerPageOrder) || 0;
@@ -838,6 +900,7 @@ class ViewportImageProvider {
       imageId,
       image,
       operationId,
+      traceId,
       sourceRevision: baseKey,
       metadata,
       state: "seen",
@@ -847,6 +910,12 @@ class ViewportImageProvider {
     };
     trackedImageKeys.set(baseKey, operationEntry);
     trackedImages.set(imageId, operationEntry);
+    emitTrace({
+      event: "content.operation.created",
+      traceId,
+      status: "created",
+      metadata: { input_width: metadata.width, input_height: metadata.height },
+    });
     if (allowSegments && this.shouldSliceImage(image)) {
       await this.scheduleSegments(image, metadata, imageId, operationId, baseKey);
       return;
@@ -879,6 +948,7 @@ class ViewportImageProvider {
         type: "ENQUEUE_IMAGE",
         imageId,
         operationId,
+        traceId,
         sourceRevision: baseKey,
         sourceFingerprint,
         imageUrl: metadata.imageUrl,
@@ -916,6 +986,12 @@ class ViewportImageProvider {
       if (!this.isCurrentKeyOperation(baseKey, operation)) return;
       operation.state = "preprocessing";
       await this.sendPreprocessingStatus(operation, "PREPROCESSING_STARTED", "preprocessing");
+      emitTrace({
+        event: "content.slicing.started",
+        traceId: operation.traceId,
+        status: "running",
+        metadata: { input_width: metadata.width, input_height: metadata.height },
+      });
       let outcome = { type: "cancel" };
       try {
       if (!this.isCurrentKeyOperation(baseKey, operation)) {
@@ -1149,9 +1225,10 @@ class ViewportImageProvider {
         rawImage.dataset.aiEnhancerSegmentIndex = String(segment.index);
         rawImage.dataset.aiEnhancerSourceY = String(segment.sourceY);
         rawImage.dataset.aiEnhancerSourceHeight = String(segment.sourceHeight);
-        const segmentEntry = {
+      const segmentEntry = {
           imageId: segmentId,
           operationId: segmentOperationId,
+          traceId: operation.traceId,
           sourceRevision: segmentKey,
           sourceFingerprint: record.sourceFingerprint,
           parentSourceFingerprint: group.parentSourceFingerprint,
@@ -1172,6 +1249,7 @@ class ViewportImageProvider {
           type: "ENQUEUE_IMAGE",
           imageId: segmentId,
           operationId: segmentOperationId,
+          traceId: operation.traceId,
           sourceRevision: segmentKey,
           sourceFingerprint: record.sourceFingerprint,
           parentSourceFingerprint: group.parentSourceFingerprint,
@@ -1203,6 +1281,12 @@ class ViewportImageProvider {
       return;
     }
     chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId, operationId }).catch(() => {});
+    emitTrace({
+      event: "content.slicing.completed",
+      traceId: operation.traceId,
+      status: "completed",
+      metadata: { segment_count: records.length, input_width: metadata.width, input_height: metadata.height },
+    });
     } finally {
       release();
     }
@@ -1319,6 +1403,7 @@ class ViewportImageProvider {
     const fallbackEntry = {
       imageId,
       operationId,
+      traceId: operation.traceId,
       sourceRevision: baseKey,
       image,
       metadata,
@@ -1333,6 +1418,7 @@ class ViewportImageProvider {
       type: "PREPROCESSING_FALLBACK",
       imageId,
       operationId,
+      traceId: operation.traceId,
       sourceRevision: baseKey,
       pageOrder,
       reason: outcome.reason || "read-fetch-error",
@@ -1357,6 +1443,7 @@ class ViewportImageProvider {
       type: "ENQUEUE_IMAGE",
       imageId,
       operationId,
+      traceId: fallbackEntry.traceId,
       sourceRevision: baseKey,
       sourceFingerprint,
       imageUrl: metadata.imageUrl,
@@ -1406,12 +1493,21 @@ class ViewportImageProvider {
       type,
       imageId: operation.imageId,
       operationId: operation.operationId,
+      traceId: operation.traceId,
       sourceRevision: operation.sourceRevision,
       pageOrder: operation.pageOrder,
       viewportDistance: this.viewportDistance(operation.image),
       status: state,
       reason,
     };
+    if (state === "preprocessing" || ["error", "timeout", "cancelled"].includes(state)) {
+      emitTrace({
+        event: state === "preprocessing" ? "content.preprocessing.started" : "content.preprocessing.failed",
+        traceId: operation.traceId,
+        status: state === "preprocessing" ? "running" : state,
+        metadata: { reason },
+      });
+    }
     this.logPreprocessing(state, operation, reason);
     return this.sendRuntimeMessage(message, "extension-context-invalidated").catch(() => null);
   }
@@ -2103,6 +2199,12 @@ class ViewportImageProvider {
       completedImageKeys.add(entry.baseKey);
     }
     if (entry.sliceGroup) entry.sliceGroup.completed.add(entry.segmentRecord);
+    emitTrace({
+      event: "content.render.completed",
+      traceId: entry.traceId || message.traceId,
+      status: "completed",
+      metadata: { cache_hit: Boolean(message.cacheHit) },
+    });
     return "rendered";
   }
 
@@ -2124,6 +2226,12 @@ class ViewportImageProvider {
       this.rollbackSliceGroup(entry.sliceGroup, permanent ? "segment-permanent-failure" : "segment-failure");
       return;
     }
+    emitTrace({
+      event: "content.preprocessing.failed",
+      traceId: entry.traceId,
+      status: permanent ? "failed" : "retrying",
+      metadata: { permanent },
+    });
     if (entry && !permanent) {
       if (trackedImageKeys.get(entry.baseKey || this.processingKey(entry.metadata.imageUrl)) === entry) {
         trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
@@ -2149,7 +2257,14 @@ class ViewportImageProvider {
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
       operationId: entry.operationId,
+      traceId: entry.traceId,
       sourceRevision: entry.sourceRevision,
+    });
+    emitTrace({
+      event: "content.operation.cancelled",
+      traceId: entry.traceId,
+      status: "cancelled",
+      metadata: {},
     });
     this.cancelPreprocessingSignal(entry.preprocessingSignal, "cancelled");
     this.removeTrackedEntry(entry);

@@ -42,6 +42,61 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
+function newTraceId() {
+  try {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto?.getRandomValues?.(bytes);
+    if (bytes.some((value) => value !== 0)) {
+      return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+    }
+  } catch {
+    // Test harnesses may not expose the browser crypto API.
+  }
+  return `trace-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+
+function safeTracePrefix(value, length = 16) {
+  if (typeof value !== "string" || !value) return null;
+  return value.slice(0, length);
+}
+
+function sanitizeTraceMetadata(metadata = {}) {
+  const sanitized = {};
+  for (const [key, value] of Object.entries(metadata || {})) {
+    const lower = key.toLowerCase();
+    if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) continue;
+    if (typeof value === "string") sanitized[key] = value.length > 256 ? `${value.slice(0, 253)}...` : value;
+    else if (typeof value === "number" || typeof value === "boolean" || value === null) sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+function emitTrace({ event, traceId, component = "background", stage = "background", status, attempt = null, metadata = {} }) {
+  try {
+    const payload = {
+      schemaVersion: 1,
+      timestamp: new Date().toISOString(),
+      event,
+      traceId: traceId || newTraceId(),
+      component,
+      stage,
+      status,
+      attempt,
+      metadata: sanitizeTraceMetadata(metadata),
+    };
+    if (Array.isArray(globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__)) {
+      globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__.push(payload);
+    }
+    if (globalThis.__AI_MANGA_UPSCALER_DEBUG__ === true) {
+      console.debug("[AI Enhancer][trace]", payload);
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Tracks durable counters and computes extension performance metrics.
  */
@@ -480,6 +535,17 @@ class BackendUpscaleProvider {
 
     try {
       const imageData = options.imageData || (await this.readBrowserImage(imageUrl, options.pageUrl, signal));
+      const requestStarted = performance.now();
+      emitTrace({
+        event: "background.backend.request.started",
+        traceId: options.traceId,
+        status: "running",
+        attempt: options.attempt,
+        metadata: {
+          queue_key_prefix: safeTracePrefix(options.jobId),
+          source_fingerprint_prefix: safeTracePrefix(options.sourceFingerprint),
+        },
+      });
       const response = await fetch(`${this.baseUrl}/upscale`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -494,14 +560,47 @@ class BackendUpscaleProvider {
           outputQuality: options.outputQuality,
           tileSize: options.tileSize,
           textProcessing: options.textProcessing,
+          traceId: options.traceId,
+          operationId: options.operationId,
+          queueKey: options.queueKey || options.jobId,
+          attempt: options.attempt,
+          sourceFingerprint: options.sourceFingerprint,
         }),
         signal,
       });
       if (!response.ok) {
+        let errorPayload = null;
+        try {
+          errorPayload = await response.json();
+        } catch {
+          errorPayload = null;
+        }
+        emitTrace({
+          event: "background.backend.request.failed",
+          traceId: options.traceId || errorPayload?.detail?.traceId,
+          status: "failed",
+          attempt: options.attempt,
+          metadata: {
+            http_status: response.status,
+            error_code: errorPayload?.detail?.errorCode || "BACKEND_REQUEST_FAILED",
+            duration_ms: Math.max(0, performance.now() - requestStarted),
+          },
+        });
         throw new Error(`Backend returned ${response.status}`);
       }
 
       const metadata = await response.json();
+      emitTrace({
+        event: "background.backend.request.completed",
+        traceId: options.traceId || metadata.traceId,
+        status: "completed",
+        attempt: options.attempt,
+        metadata: {
+          http_status: response.status,
+          duration_ms: Math.max(0, performance.now() - requestStarted),
+          backend_cache_hit: Boolean(metadata.cacheHit),
+        },
+      });
       const imageResponse = await fetch(metadata.imageUrl, { signal });
       if (!imageResponse.ok) {
         throw new Error(`Image fetch returned ${imageResponse.status}`);
@@ -517,6 +616,7 @@ class BackendUpscaleProvider {
         quality: metadata.quality,
         originalImageUrl: metadata.originalImageUrl,
         enhancedImageUrl: metadata.imageUrl,
+        traceId: metadata.traceId || options.traceId,
       };
     } catch (error) {
       if (timedOut) {
@@ -657,6 +757,7 @@ class QueueScheduler {
     if (job.generation !== undefined && job.generation !== generation) return false;
     job.generation = generation;
     job.queueKey = this.queueKey(job);
+    job.traceId = job.traceId || newTraceId();
     if (this.cancelledQueueKeys.has(job.queueKey)) return false;
     this.clearRetry(job.queueKey);
     if (this.active.has(job.queueKey)) {
@@ -675,6 +776,17 @@ class QueueScheduler {
     });
     if (!job.deferred) this.preemptDeferredActiveJobs();
     pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", pageOrder: job.pageOrder });
+    emitTrace({
+      event: "background.job.enqueued",
+      traceId: job.traceId,
+      status: "queued",
+      attempt: existing?.attempt ?? job.attempt ?? 1,
+      metadata: {
+        queue_key_prefix: safeTracePrefix(job.queueKey),
+        source_fingerprint_prefix: safeTracePrefix(job.sourceFingerprint),
+        cache_variant: job.cacheVariant || "full",
+      },
+    });
     this.drain();
     return true;
   }
@@ -721,13 +833,30 @@ class QueueScheduler {
     const queueKey = this.queueKey({ tabId, imageId, operationId });
     if (!queueKey) return false;
     this.invalidateQueueKey(queueKey);
+    const pendingJob = this.pending.get(queueKey);
     this.pending.delete(queueKey);
+    if (pendingJob) {
+      emitTrace({
+        event: "background.job.cancelled",
+        traceId: pendingJob.traceId,
+        status: "cancelled",
+        attempt: pendingJob.attempt,
+        metadata: { queue_key_prefix: safeTracePrefix(queueKey) },
+      });
+    }
 
     const activeJob = this.active.get(queueKey);
     if (activeJob) {
       activeJob.abortController.abort();
       this.upscaleProvider.cancel(queueKey);
       this.active.delete(queueKey);
+      emitTrace({
+        event: "background.job.cancelled",
+        traceId: activeJob.traceId,
+        status: "cancelled",
+        attempt: activeJob.attempt,
+        metadata: { queue_key_prefix: safeTracePrefix(queueKey) },
+      });
       this.drain();
     }
     return true;
@@ -899,6 +1028,17 @@ class QueueScheduler {
         return;
       }
       if (cached) {
+        emitTrace({
+          event: "background.cache.hit",
+          traceId: job.traceId,
+          status: "cache_hit",
+          attempt: job.attempt,
+          metadata: {
+            cache_key_prefix: safeTracePrefix(cacheIdentity),
+            source_fingerprint_prefix: safeTracePrefix(job.sourceFingerprint),
+            variant: cacheVariant,
+          },
+        });
         await this.statisticsTracker.recordSuccess({
           tabId: job.tabId,
           latencyMs: performance.now() - startedAt,
@@ -915,6 +1055,13 @@ class QueueScheduler {
         });
         if (!this.isCurrentJob(job)) return;
         this.sendComplete(job, cached, true);
+        emitTrace({
+          event: "background.job.completed",
+          traceId: job.traceId,
+          status: "completed",
+          attempt: job.attempt,
+          metadata: { cache_hit: true, duration_ms: Math.max(0, performance.now() - startedAt) },
+        });
         pageImageRegistry.update(job.tabId, job.imageId, {
           operationId: job.operationId,
           status: "cache",
@@ -925,6 +1072,17 @@ class QueueScheduler {
         });
         return;
       }
+      emitTrace({
+        event: "background.cache.miss",
+        traceId: job.traceId,
+        status: "cache_miss",
+        attempt: job.attempt,
+        metadata: {
+          cache_key_prefix: safeTracePrefix(cacheIdentity),
+          source_fingerprint_prefix: safeTracePrefix(job.sourceFingerprint),
+          variant: cacheVariant,
+        },
+      });
 
       const result = await this.upscaleProvider.upscale(
         job.imageUrl,
@@ -934,6 +1092,11 @@ class QueueScheduler {
           pageUrl: job.pageUrl,
           imageData: job.imageData,
           jobId: job.queueKey,
+          queueKey: job.queueKey,
+          traceId: job.traceId,
+          operationId: job.operationId,
+          attempt: job.attempt,
+          sourceFingerprint: job.sourceFingerprint,
           maxProcessingSeconds: job.maxProcessingSeconds,
           maxOutputWidth: job.maxOutputWidth,
           maxOutputHeight: job.maxOutputHeight,
@@ -964,6 +1127,13 @@ class QueueScheduler {
       });
       if (!this.isCurrentJob(job)) return;
       this.sendComplete(job, result, false);
+      emitTrace({
+        event: "background.job.completed",
+        traceId: job.traceId || result.traceId,
+        status: "completed",
+        attempt: job.attempt,
+        metadata: { cache_hit: false, duration_ms: Math.max(0, performance.now() - startedAt) },
+      });
       pageImageRegistry.update(job.tabId, job.imageId, {
         operationId: job.operationId,
         status: "fixed",
@@ -983,6 +1153,13 @@ class QueueScheduler {
       }
       if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
+        emitTrace({
+          event: "background.job.retrying",
+          traceId: job.traceId,
+          status: "retrying",
+          attempt: job.attempt + 1,
+          metadata: { retry_reason: error?.message || "unknown", delay_ms: delay },
+        });
         this.scheduleRetry(job, delay);
         return;
       }
@@ -1001,11 +1178,19 @@ class QueueScheduler {
       error: message,
       failedAt: performance.now(),
     });
+    emitTrace({
+      event: "background.job.failed",
+      traceId: job.traceId,
+      status,
+      attempt: job.attempt,
+      metadata: { message, queue_key_prefix: safeTracePrefix(job.queueKey) },
+    });
     chrome.tabs.sendMessage(job.tabId, {
       type: "UPSCALE_FAILED",
       imageId: job.imageId,
       operationId: job.operationId,
       sourceRevision: job.sourceRevision,
+      traceId: job.traceId,
       message,
       status,
       permanent: status === "timeout",
@@ -1053,6 +1238,7 @@ class QueueScheduler {
       operationId: job.operationId,
       sourceRevision: job.sourceRevision,
       sourceFingerprint: job.sourceFingerprint || null,
+      traceId: job.traceId,
       imageUrl: job.imageUrl,
       imageBase64: this.arrayBufferToBase64(result.buffer),
       contentType: result.contentType,
@@ -1395,6 +1581,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           pageUrl: sender.tab.url,
           width: message.width,
           height: message.height,
+          traceId: message.traceId,
           pageOrder: Number(message.pageOrder),
         }),
       ]).then(() => sendResponse({ recorded: true }));
@@ -1412,10 +1599,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const generation = scheduler.tabGenerations.get(tabId) || 0;
     chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
       if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
+        emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "stale_generation" } });
         sendResponse({ accepted: false, stale: true, reason: "Stale tab generation." });
         return;
       }
       if (!settings.enabled) {
+        emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "disabled" } });
         sendResponse({ accepted: false, reason: "Extension disabled." });
         return;
       }
@@ -1430,6 +1619,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         imageId: message.imageId,
         operationId: message.operationId,
         sourceRevision: message.sourceRevision,
+        traceId: message.traceId,
         sourceFingerprint: message.sourceFingerprint || null,
         parentSourceFingerprint: message.parentSourceFingerprint || null,
         imageUrl: message.imageUrl,
@@ -1457,6 +1647,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           Number(message.displayMetrics?.sourceHeight) || 0,
         ) >= 384 ? 512 : 256,
       });
+      if (!accepted) {
+        emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "scheduler_rejected" } });
+      }
       sendResponse({ accepted });
     });
     return true;

@@ -1,5 +1,12 @@
 # Roadmap
 
+## Trace roadmap
+
+- Trace Core MVP -- Done.
+- Trace Dashboard -- Planned.
+- Trace Artifact Capture -- Planned.
+- Reproduction Package -- Planned.
+
 ## Next validation
 
 - Run the extension on long manga chapters from multiple hosts and record discovered images, raw slices, enqueued segments, and completed segments.

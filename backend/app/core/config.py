@@ -142,6 +142,14 @@ class LoggingConfig(BaseModel):
     backup_count: int = Field(alias="backupCount")
 
 
+class TraceConfig(BaseModel):
+    """Append-only trace event settings."""
+
+    enabled: bool = True
+    file: str = "trace.jsonl"
+    include_stack: bool = Field(default=True, alias="includeStack")
+
+
 class Settings(BaseModel):
     """Complete backend configuration loaded from backend/config.json."""
 
@@ -155,6 +163,7 @@ class Settings(BaseModel):
     text_processing: TextProcessingConfig = Field(default_factory=TextProcessingConfig, alias="textProcessing")
     encoding: EncodingConfig
     logging: LoggingConfig
+    trace: TraceConfig = Field(default_factory=TraceConfig)
     root_dir: Path = Field(exclude=True)
 
     @model_validator(mode="after")

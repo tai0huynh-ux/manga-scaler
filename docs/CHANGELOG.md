@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added Trace Core MVP with backend append-only JSONL tracing, trace ID propagation across extension/backend boundaries, safe error correlation, cache hit/miss events, and image pipeline tile-plan summary events.
+- Added focused trace tests for backend writer behavior, `/upscale` trace contract, inference queue propagation, pipeline summary events, and extension trace propagation/retry/cache behavior.
 - Added the `preprocessing_queued` lifecycle state and made active preprocessing conditional on acquiring a slot.
 - Added viewport-aware discovery/scheduling and a cancellable metadata priority queue.
 - Added stage-specific slicing timeouts, guarded slot release, atomic rollback, and terminal registry updates.

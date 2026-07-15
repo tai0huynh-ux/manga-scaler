@@ -44,6 +44,11 @@ class UpscaleRequest(BaseModel):
     max_output_height: int | None = Field(default=None, alias="maxOutputHeight", ge=256, le=16383)
     output_quality: int | None = Field(default=None, alias="outputQuality", ge=50, le=100)
     text_processing: "TextProcessingOptionsRequest | None" = Field(default=None, alias="textProcessing")
+    trace_id: str | None = Field(default=None, alias="traceId", max_length=200)
+    operation_id: str | None = Field(default=None, alias="operationId", max_length=200)
+    queue_key: str | None = Field(default=None, alias="queueKey", max_length=300)
+    attempt: int | None = Field(default=None, ge=1, le=100)
+    source_fingerprint: str | None = Field(default=None, alias="sourceFingerprint", max_length=200)
 
 
 class UpscaleResponse(BaseModel):
@@ -71,6 +76,7 @@ class UpscaleResponse(BaseModel):
     queue: dict[str, int] = Field(default_factory=dict, description="Queue state snapshot.")
     quality: dict[str, float] = Field(default_factory=dict, description="Objective comparison with bicubic upscale.")
     text_processing: dict[str, Any] = Field(default_factory=dict, alias="textProcessing")
+    trace_id: str | None = Field(default=None, alias="traceId")
 
     @field_serializer("image_url")
     def serialize_image_url(self, value: HttpUrl) -> str:

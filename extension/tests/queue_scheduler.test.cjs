@@ -33,11 +33,13 @@ function loadQueueScheduler(options = {}) {
     crypto: options.crypto || webcrypto,
     setTimeout: options.timers?.setTimeout || setTimeout,
     clearTimeout: options.timers?.clearTimeout || clearTimeout,
-    console,
+    console: options.console || console,
     importScripts() {},
     __pageImageRegistry: pageImageRegistry,
     chrome: { tabs: { sendMessage: options.tabsSendMessage || (async () => undefined) } },
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
+    __AI_MANGA_UPSCALER_DEBUG__: options.debug === true,
   });
   vm.runInContext(configSource, context);
   vm.runInContext(`${prefix}\nconst pageImageRegistry = globalThis.__pageImageRegistry; globalThis.__QueueScheduler = QueueScheduler;`, context);
@@ -86,7 +88,7 @@ function loadBackgroundHelpers() {
   return context.__resolveOutputLimits;
 }
 
-function loadBackgroundClasses() {
+function loadBackgroundClasses(options = {}) {
   const root = path.resolve(__dirname, "..", "..");
   const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
   const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
@@ -114,6 +116,7 @@ function loadBackgroundClasses() {
     },
     fetch: async () => ({ ok: true }),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
   vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry;`, context);
@@ -153,6 +156,7 @@ function loadBackgroundMessageHarness(options = {}) {
     importScripts() {},
     fetch: options.fetch || (async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) })),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
     chrome: {
       storage: {
         local: { get: storageGet, set: async () => undefined },
@@ -332,6 +336,7 @@ function loadContentClasses(options = {}) {
     clearTimeout: timers.clearTimeout,
     atob: (value) => Buffer.from(value, "base64").toString("binary"),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
   vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys;`, context);
@@ -348,7 +353,8 @@ function loadContentClasses(options = {}) {
 }
 
 function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, sendMessage = undefined } = {}) {
-  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, sendMessage });
+  const traceEvents = [];
+  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, sendMessage, traceEvents });
   const viewportProvider = new ViewportImageProvider({
     imageProvider: imageProvider || {
       canProcess: () => true,
@@ -372,7 +378,7 @@ function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocess
   viewportProvider.preprocessingConcurrency = preprocessingConcurrency;
   viewportProvider.readDisplayedImage = readDisplayedImage || (async () => "image-data");
   viewportProvider.cropImageSegments = cropImageSegments || (async () => []);
-  return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys };
+  return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys, traceEvents };
 }
 
 function makeFakeTimers() {
@@ -689,8 +695,125 @@ function makeJob(imageId = "image-1") {
     outputQuality: 90,
     tileSize: 256,
     attempt: 1,
+    traceId: `trace-${imageId}`,
   };
 }
+
+test("content operation creates and propagates trace id", async () => {
+  const { viewportProvider, sentMessages, traceEvents } = makeContentProvider({
+    readDisplayedImage: async () => ({ ok: true, imageData: Buffer.from("trace-image").toString("base64") }),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+
+  await viewportProvider.schedule(makeTallImage("trace-content"));
+
+  const enqueue = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE");
+  assert.ok(enqueue.traceId);
+  assert.equal(typeof enqueue.traceId, "string");
+  assert.equal(sentMessages.find((message) => message.type === "PREPROCESSING_STARTED").traceId, enqueue.traceId);
+  assert.equal(traceEvents.some((event) => event.event === "content.operation.created" && event.traceId === enqueue.traceId), true);
+  assert.equal(traceEvents.some((event) => JSON.stringify(event).includes("imageData")), false);
+});
+
+test("background request carries trace metadata without image data in trace payload", async () => {
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({ traceEvents });
+  const requests = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: async (_url, options) => {
+        requests.push(options);
+        return { buffer: new Uint8Array([1]).buffer, contentType: "image/png", traceId: options.traceId };
+      },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue({ ...makeJob("trace-background"), imageData: "base64-payload", sourceFingerprint: "sha256-trace" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requests[0].traceId, "trace-trace-background");
+  assert.equal(requests[0].operationId, "trace-background-op-1");
+  assert.equal(requests[0].queueKey, "7:trace-background:trace-background-op-1");
+  assert.equal(requests[0].attempt, 1);
+  assert.equal(requests[0].sourceFingerprint, "sha256-trace");
+  assert.equal(traceEvents.some((event) => event.event === "background.cache.miss"), true);
+  assert.equal(traceEvents.some((event) => JSON.stringify(event).includes("base64-payload")), false);
+});
+
+test("background retry keeps trace id and increments attempt", async () => {
+  const traceEvents = [];
+  const fakeTimers = makeFakeTimers();
+  const QueueScheduler = loadQueueScheduler({ timers: fakeTimers.api, traceEvents });
+  let calls = 0;
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("temporary");
+        return { buffer: new Uint8Array([1]).buffer, contentType: "image/png" };
+      },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("trace-retry"));
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeTimers.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const retry = traceEvents.find((event) => event.event === "background.job.retrying");
+  assert.equal(retry.traceId, "trace-trace-retry");
+  assert.equal(retry.attempt, 2);
+  assert.equal(calls, 2);
+});
+
+test("background cache hit emits completion terminal event", async () => {
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({ traceEvents });
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: {
+      get: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png", quality: {} }),
+      set: async () => undefined,
+    },
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("trace-cache"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(traceEvents.some((event) => event.event === "background.cache.hit" && event.traceId === "trace-trace-cache"), true);
+  assert.equal(traceEvents.some((event) => event.event === "background.job.completed" && event.status === "completed"), true);
+});
+
+test("trace helper does not throw when console debug fails", () => {
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({
+    traceEvents,
+    debug: true,
+    console: { debug: () => { throw new Error("console unavailable"); } },
+  });
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+  scheduler.paused = true;
+  scheduler.setPaused(false);
+  scheduler.maxConcurrentRequests = 0;
+  assert.doesNotThrow(() => scheduler.enqueue(makeJob("trace-console")));
+});
 
 test("same pathname with different query creates distinct content keys", () => {
   const { viewportProvider } = makeContentProvider();

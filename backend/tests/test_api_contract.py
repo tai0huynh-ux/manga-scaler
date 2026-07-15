@@ -18,6 +18,11 @@ def test_upscale_openapi_uses_browser_field_names() -> None:
         "maxOutputHeight",
         "outputQuality",
         "textProcessing",
+        "traceId",
+        "operationId",
+        "queueKey",
+        "attempt",
+        "sourceFingerprint",
     } <= properties.keys()
     assert "image_url" not in properties
     assert schema["required"] == ["imageUrl"]
@@ -34,6 +39,11 @@ def test_upscale_request_round_trips_aliases() -> None:
         "maxOutputHeight": 4096,
         "outputQuality": 90,
         "textProcessing": {"enabled": True, "sourceLanguage": "auto", "targetLanguage": "vi"},
+        "traceId": "trace-1",
+        "operationId": "operation-1",
+        "queueKey": "tab:image:operation",
+        "attempt": 2,
+        "sourceFingerprint": "sha256-source",
     }
 
     request = UpscaleRequest.model_validate(payload)
@@ -41,5 +51,9 @@ def test_upscale_request_round_trips_aliases() -> None:
 
     assert serialized["imageUrl"] == payload["imageUrl"]
     assert serialized["jobId"] == payload["jobId"]
+    assert serialized["traceId"] == payload["traceId"]
+    assert serialized["operationId"] == payload["operationId"]
+    assert serialized["queueKey"] == payload["queueKey"]
+    assert serialized["sourceFingerprint"] == payload["sourceFingerprint"]
     assert serialized["textProcessing"]["targetLanguage"] == "vi"
     assert isinstance(request.text_processing, TextProcessingOptionsRequest)

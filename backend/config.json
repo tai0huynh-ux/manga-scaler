@@ -104,5 +104,10 @@
     "file": "backend.jsonl",
     "maxBytes": 5242880,
     "backupCount": 5
+  },
+  "trace": {
+    "enabled": true,
+    "file": "trace.jsonl",
+    "includeStack": true
   }
 }

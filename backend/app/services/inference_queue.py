@@ -3,8 +3,11 @@
 import asyncio
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
+
+from app.core.tracing import duration_ms, emit_trace_event
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,6 +27,11 @@ class InferenceJob:
     max_output_height: int | None
     output_quality: int | None
     text_processing: object | None
+    trace_id: str
+    operation_id: str | None
+    queue_key: str | None
+    attempt: int
+    source_fingerprint: str | None
     future: asyncio.Future
     cancel_event: threading.Event = field(default_factory=threading.Event)
     created_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
@@ -93,6 +101,11 @@ class InferenceQueue:
         max_output_height: int | None = None,
         output_quality: int | None = None,
         text_processing: object | None = None,
+        trace_id: str | None = None,
+        operation_id: str | None = None,
+        queue_key: str | None = None,
+        attempt: int = 1,
+        source_fingerprint: str | None = None,
     ) -> object:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
@@ -111,10 +124,27 @@ class InferenceQueue:
             max_output_height=max_output_height,
             output_quality=output_quality,
             text_processing=text_processing,
+            trace_id=trace_id or "",
+            operation_id=operation_id,
+            queue_key=queue_key or client_job_id,
+            attempt=attempt,
+            source_fingerprint=source_fingerprint,
             future=future,
         )
         if client_job_id:
             self.jobs[client_job_id] = job
+        emit_trace_event(
+            event="backend.queue.job.queued",
+            trace_id=job.trace_id,
+            component="inference_queue",
+            stage="queue",
+            status="queued",
+            attempt=job.attempt,
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+        )
         await self.queue.put(job)
         self.accepted += 1
         return await future
@@ -168,24 +198,95 @@ class InferenceQueue:
         """Process one job and settle its future."""
         if job.future.cancelled() or job.cancel_event.is_set():
             self.cancelled += 1
+            emit_trace_event(
+                event="backend.queue.job.cancelled",
+                trace_id=job.trace_id,
+                component="inference_queue",
+                stage="queue",
+                status="cancelled",
+                attempt=job.attempt,
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+            )
             if job.client_job_id:
                 self.jobs.pop(job.client_job_id, None)
             return
         self.processing += 1
+        started = time.perf_counter()
+        emit_trace_event(
+            event="backend.queue.job.started",
+            trace_id=job.trace_id,
+            component="inference_queue",
+            stage="queue",
+            status="running",
+            attempt=job.attempt,
+            duration_ms=duration_ms(job.created_at),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"worker": worker_id},
+        )
         try:
             result = await self.processor(job)
             if not job.future.cancelled():
                 job.future.set_result(result)
             self.completed += 1
+            emit_trace_event(
+                event="backend.queue.job.completed",
+                trace_id=job.trace_id,
+                component="inference_queue",
+                stage="queue",
+                status="completed",
+                attempt=job.attempt,
+                duration_ms=duration_ms(started),
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+            )
         except InterruptedError:
             self.cancelled += 1
             if not job.future.done():
                 job.future.cancel()
+            emit_trace_event(
+                event="backend.queue.job.cancelled",
+                trace_id=job.trace_id,
+                component="inference_queue",
+                stage="queue",
+                status="cancelled",
+                attempt=job.attempt,
+                duration_ms=duration_ms(started),
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+                error_code="JOB_CANCELLED",
+                exception_type="InterruptedError",
+            )
         except Exception as exc:
             LOGGER.exception("Inference job failed", extra={"_worker": worker_id, "_image_url": job.image_url})
             if not job.future.cancelled():
                 job.future.set_exception(exc)
             self.failed += 1
+            emit_trace_event(
+                event="backend.queue.job.failed",
+                trace_id=job.trace_id,
+                component="inference_queue",
+                stage="queue",
+                status="failed",
+                attempt=job.attempt,
+                duration_ms=duration_ms(started),
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+                error_code="MODEL_INFERENCE_FAILED",
+                exception_type=type(exc).__name__,
+                message=str(exc),
+            )
         finally:
             self.processing -= 1
             if job.client_job_id:

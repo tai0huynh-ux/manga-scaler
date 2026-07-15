@@ -5,6 +5,7 @@ import logging
 import time
 
 from app.core.config import Settings
+from app.core.tracing import duration_ms, emit_trace_event, safe_prefix
 from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
@@ -72,11 +73,17 @@ class UpscalerService:
         max_output_height: int | None = None,
         output_quality: int | None = None,
         text_processing: TextProcessingOptions | None = None,
+        trace_id: str | None = None,
+        operation_id: str | None = None,
+        queue_key: str | None = None,
+        attempt: int = 1,
+        source_fingerprint: str | None = None,
     ) -> UpscaleResponse:
         """Submit an image URL for AI upscaling and wait for the result."""
         result = await self.queue.submit(
             str(image_url), model_name, tile_size, enhance_level, mode, image_bytes, client_job_id,
-            max_output_width, max_output_height, output_quality, text_processing
+            max_output_width, max_output_height, output_quality, text_processing, trace_id, operation_id, queue_key,
+            attempt, source_fingerprint
         )
         if not isinstance(result, UpscaleResponse):
             raise TypeError("Inference queue returned an invalid response.")
@@ -89,6 +96,19 @@ class UpscalerService:
         """Process a queued image through the full inference pipeline."""
         total_started = time.perf_counter()
         timings = StageTimings()
+        emit_trace_event(
+            event="backend.upscale.started",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="upscale",
+            status="running",
+            attempt=job.attempt,
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"mode": job.mode, "model": job.model_name},
+        )
         self._ensure_active(job)
 
         download_started = time.perf_counter()
@@ -105,14 +125,43 @@ class UpscalerService:
         self._ensure_active(job)
 
         source_key = sha256_bytes(image_content)
+        if not job.source_fingerprint:
+            job.source_fingerprint = source_key
         decode_started = time.perf_counter()
         image = await self.pipeline.decode(image_content)
         self._ensure_active(job)
         timings.set("decode", decode_started)
+        emit_trace_event(
+            event="backend.upscale.input.decoded",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="decode",
+            status="completed",
+            attempt=job.attempt,
+            duration_ms=timings.values.get("decode"),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"input_width": image.width, "input_height": image.height},
+        )
         original_path = self.settings.cache_dir / f"{source_key}-original.png"
         if not original_path.exists():
             original_png = await self.pipeline.encode_png(image)
             original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
+            emit_trace_event(
+                event="backend.upscale.input.saved",
+                trace_id=job.trace_id,
+                component="cache",
+                stage="input_cache",
+                status="completed",
+                attempt=job.attempt,
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+                cache_key=f"{source_key}-original",
+            )
 
         text_options = TextProcessingOptions.from_payload(getattr(job, "text_processing", None))
         text_metadata: dict[str, object] = {}
@@ -126,7 +175,22 @@ class UpscalerService:
 
         classification = self._resolve_mode(job.mode, image)
         profile = self.settings.modes[classification.mode]
+        model_started = time.perf_counter()
         model = self.model_manager.get_model(job.model_name or profile.model)
+        emit_trace_event(
+            event="backend.upscale.model.resolved",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="model",
+            status="completed",
+            attempt=job.attempt,
+            duration_ms=duration_ms(model_started),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"mode": classification.mode, "model": model.name, "provider": model.provider},
+        )
         inference_image = await self.pipeline.fit_for_model_scale(
             image, model.scale, job.max_output_width, job.max_output_height
         )
@@ -146,6 +210,20 @@ class UpscalerService:
         final_path = self.settings.cache_dir / f"{output_key}.webp"
         quality_path = self.settings.cache_dir / f"{output_key}-quality.json"
         if final_path.exists():
+            emit_trace_event(
+                event="backend.upscale.cache.hit",
+                trace_id=job.trace_id,
+                component="cache",
+                stage="output_cache",
+                status="cache_hit",
+                attempt=job.attempt,
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+                cache_key=output_key,
+                metadata={"cache_key_prefix": safe_prefix(output_key), "mode": classification.mode},
+            )
             cached_bytes = final_path.read_bytes()
             cached = await self.pipeline.decode(cached_bytes)
             quality_loaded = False
@@ -164,6 +242,21 @@ class UpscalerService:
                     ".json",
                 )
             timings.total_since(total_started)
+            emit_trace_event(
+                event="backend.upscale.completed",
+                trace_id=job.trace_id,
+                component="upscaler",
+                stage="upscale",
+                status="completed",
+                attempt=job.attempt,
+                duration_ms=timings.values.get("total"),
+                operation_id=job.operation_id,
+                queue_key=job.queue_key,
+                backend_job_id=job.client_job_id,
+                source_fingerprint=job.source_fingerprint,
+                cache_key=output_key,
+                metadata={"cache_hit": True, "output_width": cached.width, "output_height": cached.height},
+            )
             LOGGER.info(
                 "Upscaled image",
                 extra={
@@ -197,9 +290,37 @@ class UpscalerService:
                 original_path=original_path,
                 quality=quality,
                 text_processing=text_metadata,
+                trace_id=job.trace_id,
             )
 
+        emit_trace_event(
+            event="backend.upscale.cache.miss",
+            trace_id=job.trace_id,
+            component="cache",
+            stage="output_cache",
+            status="cache_miss",
+            attempt=job.attempt,
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            cache_key=output_key,
+            metadata={"cache_key_prefix": safe_prefix(output_key), "mode": classification.mode},
+        )
         inference_started = time.perf_counter()
+        emit_trace_event(
+            event="backend.upscale.inference.started",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="inference",
+            status="running",
+            attempt=job.attempt,
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"model": model.name, "provider": model.provider, "tile_size": tile_size, "overlap": overlap},
+        )
         output, model = await self._infer_with_provider_recovery(
             image=inference_image,
             model=model,
@@ -210,6 +331,20 @@ class UpscalerService:
         self._ensure_active(job)
         timings.set("inference", inference_started)
         timings.values["gpu"] = output.gpu_time_ms
+        emit_trace_event(
+            event="backend.upscale.inference.completed",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="inference",
+            status="completed",
+            attempt=job.attempt,
+            duration_ms=timings.values.get("inference"),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"model": model.name, "provider": model.provider, "gpu_ms": output.gpu_time_ms},
+        )
 
         enhance_started = time.perf_counter()
         enhanced_image = await self.pipeline.enhance(output.image, enhance_level)
@@ -222,6 +357,20 @@ class UpscalerService:
         encoded = await self.pipeline.encode_webp(enhanced_image, output_quality)
         self._ensure_active(job)
         timings.set("encode", encode_started)
+        emit_trace_event(
+            event="backend.upscale.output.encoded",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="encode",
+            status="completed",
+            attempt=job.attempt,
+            duration_ms=timings.values.get("encode"),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            metadata={"output_width": enhanced_image.width, "output_height": enhanced_image.height},
+        )
         output_artifact = EncodedImage(
             content=encoded,
             content_type="image/webp",
@@ -230,6 +379,20 @@ class UpscalerService:
             gpu_time_ms=output.gpu_time_ms,
         )
         output_path, cache_hit = await self.cache.save_named(output_key, output_artifact.content, ".webp")
+        emit_trace_event(
+            event="backend.upscale.output.saved",
+            trace_id=job.trace_id,
+            component="cache",
+            stage="output_cache",
+            status="completed",
+            attempt=job.attempt,
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            cache_key=output_key,
+            metadata={"cache_hit": cache_hit},
+        )
         quality = self.quality_analyzer.analyze(image, enhanced_image)
         await self.cache.save_named(
             f"{output_key}-quality",
@@ -237,6 +400,21 @@ class UpscalerService:
             ".json",
         )
         timings.total_since(total_started)
+        emit_trace_event(
+            event="backend.upscale.completed",
+            trace_id=job.trace_id,
+            component="upscaler",
+            stage="upscale",
+            status="completed",
+            attempt=job.attempt,
+            duration_ms=timings.values.get("total"),
+            operation_id=job.operation_id,
+            queue_key=job.queue_key,
+            backend_job_id=job.client_job_id,
+            source_fingerprint=job.source_fingerprint,
+            cache_key=output_key,
+            metadata={"cache_hit": cache_hit, "output_width": enhanced_image.width, "output_height": enhanced_image.height},
+        )
 
         LOGGER.info(
             "Upscaled image",
@@ -265,6 +443,7 @@ class UpscalerService:
             original_path=original_path,
             quality=quality,
             text_processing=text_metadata,
+            trace_id=job.trace_id,
         )
 
     def _response(
@@ -284,6 +463,7 @@ class UpscalerService:
         original_path,
         quality: dict[str, float],
         text_processing: dict[str, object] | None = None,
+        trace_id: str | None = None,
     ) -> UpscaleResponse:
         """Build an API response compatible with the existing extension."""
         filename = self.cache.public_filename(output_path)
@@ -313,6 +493,7 @@ class UpscalerService:
             queue=self.queue.snapshot(),
             quality=quality,
             textProcessing=text_processing or {},
+            traceId=trace_id,
         )
 
     def _resolve_mode(self, requested_mode: str, image) -> ClassificationResult:
@@ -344,6 +525,7 @@ class UpscalerService:
                 overlap=overlap,
                 batch_size=self.settings.inference.batch_size,
                 cancellation_check=job.cancel_event.is_set,
+                trace_context=self._trace_context(job),
             )
             return output, model
         except Exception as exc:
@@ -363,8 +545,19 @@ class UpscalerService:
                 overlap=recovered_overlap,
                 batch_size=1,
                 cancellation_check=job.cancel_event.is_set,
+                trace_context=self._trace_context(job),
             )
             return output, recovered_model
+
+    def _trace_context(self, job: InferenceJob) -> dict[str, object]:
+        return {
+            "trace_id": getattr(job, "trace_id", ""),
+            "operation_id": getattr(job, "operation_id", None),
+            "queue_key": getattr(job, "queue_key", None),
+            "backend_job_id": getattr(job, "client_job_id", None),
+            "source_fingerprint": getattr(job, "source_fingerprint", None),
+            "attempt": getattr(job, "attempt", 1),
+        }
 
     def _is_provider_device_lost(self, exc: Exception) -> bool:
         message = str(exc).lower()

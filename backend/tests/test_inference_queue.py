@@ -1,8 +1,11 @@
 """Inference queue concurrency tests."""
 
 import asyncio
+import json
 
 import pytest
+from app.core.config import TraceConfig
+from app.core.tracing import configure_tracing
 from app.services.inference_queue import InferenceQueue
 
 
@@ -73,3 +76,40 @@ async def test_stop_settles_active_submitters() -> None:
     assert submitter.done()
     assert submitter.cancelled()
     assert queue.snapshot()["processing"] == 0
+
+
+@pytest.mark.asyncio
+async def test_queue_propagates_trace_id_to_job_and_events(tmp_path) -> None:
+    configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
+
+    async def processor(job):
+        assert job.trace_id == "trace-queue"
+        assert job.operation_id == "operation-queue"
+        assert job.queue_key == "queue-key"
+        assert job.attempt == 2
+        return "ok"
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    try:
+        result = await queue.submit(
+            "image",
+            None,
+            None,
+            trace_id="trace-queue",
+            operation_id="operation-queue",
+            queue_key="queue-key",
+            attempt=2,
+            source_fingerprint="sha256-source",
+        )
+    finally:
+        await queue.stop()
+
+    events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert result == "ok"
+    assert [event["event"] for event in events] == [
+        "backend.queue.job.queued",
+        "backend.queue.job.started",
+        "backend.queue.job.completed",
+    ]
+    assert {event["trace_id"] for event in events} == {"trace-queue"}

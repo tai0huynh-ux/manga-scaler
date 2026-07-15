@@ -2,6 +2,10 @@
 
 ## Completed
 
+- [x] Implement Trace Core MVP backend JSONL writer.
+- [x] Propagate `traceId` through content, background, `/upscale`, inference queue, upscaler, and image pipeline.
+- [x] Add trace unit/API/queue/pipeline/extension tests.
+- [x] Document Trace Core MVP architecture and limitations.
 - [x] Reproduce eager offscreen preprocessing and premature active-state reporting.
 - [x] Add `preprocessing_queued` and slot-owned `preprocessing`.
 - [x] Add cancellable viewport-priority preprocessing waiters.
@@ -13,5 +17,6 @@
 
 ## Manual follow-up
 
+- [ ] Validate Trace Core MVP in Chrome against representative manga and webtoon sites.
 - [ ] Validate slice counts and viewport behavior in Chrome against representative manga and webtoon sites.
 - [ ] Record any site-specific anti-hotlink failures with Network and structured extension logs.

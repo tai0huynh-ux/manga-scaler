@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.tracing import configure_tracing
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
 from app.services.gpu_provider import GpuProviderSelector
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create and dispose application-level services."""
     settings = get_settings()
     configure_logging(settings.logging, settings.logs_dir)
+    configure_tracing(settings.trace, settings.logs_dir)
 
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     settings.models_dir.mkdir(parents=True, exist_ok=True)

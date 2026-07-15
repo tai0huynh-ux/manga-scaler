@@ -11,6 +11,11 @@
 
 ## Remaining limitations
 
+- Extension trace events do not have a persistent local event store.
+- Trace Dashboard is not implemented yet.
+- Trace Artifact Capture and reproduction packages are not implemented yet.
+- Per-tile trace events are intentionally not emitted in default mode.
+- GPU/VRAM trace sampling is not implemented.
 - Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Chrome can suspend the MV3 service worker; tab generation checks prevent stale resurrection, but runtime inspection should account for worker restarts.

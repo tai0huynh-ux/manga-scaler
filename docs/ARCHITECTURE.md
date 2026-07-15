@@ -27,3 +27,32 @@ The slice transaction owns its wrapper, raw nodes, Blob URLs, original-image vis
 `GET_PAGE_IMAGES` requires a content tab ID and returns `PageImageRegistry.list(tabId)`. Tab close and navigation cancel jobs and remove that tab's registry.
 
 Dashboard rows are keyed by `tabId:imageId:operationId`. Polling updates status and changed URLs without recreating unchanged `<img>` nodes. Direct website URLs remain available through “Open original image” but are not used as previews; only local extension, Blob/data, or localhost cache URLs are rendered.
+
+## Trace Core MVP
+
+Trace identity flows through the processing path:
+
+```text
+content traceId
+-> background queue
+-> backend /upscale request
+-> inference job
+-> upscaler
+-> image pipeline
+-> cache/output
+-> background completion/failure
+-> content terminal render/failure
+```
+
+The content script creates an opaque `traceId` for each logical operation. Background jobs keep that `traceId` across cache hit/miss, backend request, retry, cancellation, and completion. Backend `/upscale` accepts optional `traceId`, `operationId`, `queueKey`, `attempt`, and `sourceFingerprint`; if `traceId` is missing, the backend creates a fallback.
+
+Backend trace events use schema version `1` and include timestamp, event name, trace ID, component, stage, status, and small controlled metadata. Trace events are written to `backend/logs/trace.jsonl` by default through an append-only writer. Trace writes are isolated from business failures: serialization or file errors are logged as warnings and do not fail image processing.
+
+Privacy constraints:
+
+- No raw image bytes.
+- No base64 image payloads.
+- No DOM nodes, request objects, response objects, tensors, or full exception objects.
+- Cache keys and source fingerprints are shortened in trace events.
+
+When trace is disabled in `backend/config.json`, backend trace calls are no-ops. Extension trace events remain transient in message/job metadata and debug-only structured events; there is no persistent extension trace store in this phase.
