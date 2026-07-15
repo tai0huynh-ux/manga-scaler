@@ -6,6 +6,8 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from app.core.config import TraceConfig
+from app.core.tracing import configure_tracing
 from app.services.gpu_provider import GpuProviderSelector
 from app.services.model_manager import ModelManager
 from app.services.upscaler import UpscalerService
@@ -42,7 +44,15 @@ def make_service(error: Exception):
     service.pipeline = pipeline
     service.model_manager = manager
     service.settings = SimpleNamespace(inference=SimpleNamespace(batch_size=3, tile_overlap=32))
-    job = SimpleNamespace(cancel_event=threading.Event())
+    job = SimpleNamespace(
+        cancel_event=threading.Event(),
+        trace_id="trace-provider",
+        attempt=1,
+        operation_id="operation-provider",
+        queue_key="queue-provider",
+        client_job_id="job-provider",
+        source_fingerprint="sha256-source",
+    )
     return service, directml, cpu, pipeline, manager, job
 
 
@@ -61,6 +71,19 @@ async def test_directml_device_loss_retries_once_on_cpu() -> None:
     assert len(pipeline.calls) == 2
     assert pipeline.calls[1]["batch_size"] == 1
     assert pipeline.calls[1]["tile_size"] == 128
+
+
+@pytest.mark.asyncio
+async def test_provider_recovery_traces_retry_and_recovered(tmp_path) -> None:
+    configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
+    error = RuntimeError("887A0005 The GPU device instance has been suspended")
+    service, directml, _cpu, _pipeline, _manager, job = make_service(error)
+
+    await service._infer_with_provider_recovery(image=object(), model=directml, tile_size=256, overlap=32, job=job)
+
+    events = [line for line in (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert "backend.upscale.provider.retrying" in "".join(events)
+    assert "backend.upscale.provider.recovered" in "".join(events)
 
 
 @pytest.mark.asyncio

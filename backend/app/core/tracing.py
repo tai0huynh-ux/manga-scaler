@@ -22,14 +22,22 @@ SENSITIVE_KEYS = {
     "base64",
     "binary",
     "blob",
+    "cookie",
+    "credential",
+    "header",
     "image_data",
     "imageData",
+    "password",
     "raw",
     "request",
     "response",
     "secret",
+    "session",
     "token",
 }
+MAX_METADATA_DEPTH = 6
+MAX_STRING_LENGTH = 256
+REDACTED = "[REDACTED]"
 
 
 def new_trace_id() -> str:
@@ -58,19 +66,14 @@ def sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Keep trace metadata small, JSON-safe, and free of obvious sensitive payloads."""
     if not metadata:
         return {}
-    sanitized: dict[str, Any] = {}
-    for key, value in metadata.items():
-        if key in SENSITIVE_KEYS or any(part in key.lower() for part in ("imagedata", "base64", "authorization")):
-            continue
-        sanitized[key] = _sanitize_value(value)
-    return sanitized
+    return _sanitize_mapping(metadata, depth=0, seen=set())
 
 
 def exception_metadata(exc: BaseException, include_stack: bool = False) -> dict[str, Any]:
     """Return safe exception fields for terminal trace events."""
     metadata: dict[str, Any] = {
         "exception_type": type(exc).__name__,
-        "message": str(exc),
+        "message": _sanitize_string(str(exc)),
     }
     if include_stack:
         metadata["stack_trace"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -170,7 +173,7 @@ class TraceWriter:
             "cache_key": safe_prefix(cache_key),
             "error_code": error_code,
             "exception_type": exception_type,
-            "message": message,
+            "message": _sanitize_string(message) if message is not None else None,
             "metadata": sanitize_metadata(metadata),
         }
         payload.update({key: value for key, value in optional.items() if value not in (None, {})})
@@ -202,13 +205,54 @@ def trace_include_stack() -> bool:
     return _INCLUDE_STACK
 
 
-def _sanitize_value(value: Any) -> Any:
+def _is_sensitive_key(key: object) -> bool:
+    normalized = str(key).replace("_", "").replace("-", "").lower()
+    return any(part.replace("_", "").lower() in normalized for part in SENSITIVE_KEYS)
+
+
+def _sanitize_string(value: str) -> str:
+    lowered = value.lower()
+    if any(part in lowered for part in ("authorization", "token", "secret", "password", "cookie")):
+        return REDACTED
+    if len(value) > MAX_STRING_LENGTH:
+        return f"{value[:MAX_STRING_LENGTH - 3]}..."
+    return value
+
+
+def _sanitize_mapping(metadata: dict[Any, Any], depth: int, seen: set[int]) -> dict[str, Any]:
+    if depth >= MAX_METADATA_DEPTH:
+        return {"truncated": True}
+    object_id = id(metadata)
+    if object_id in seen:
+        return {"recursive": True}
+    seen.add(object_id)
+    sanitized: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_text = str(key)
+        if _is_sensitive_key(key_text):
+            sanitized[key_text] = REDACTED
+        else:
+            sanitized[key_text] = _sanitize_value(value, depth + 1, seen)
+    seen.discard(object_id)
+    return sanitized
+
+
+def _sanitize_value(value: Any, depth: int = 0, seen: set[int] | None = None) -> Any:
+    seen = seen or set()
+    if depth >= MAX_METADATA_DEPTH:
+        return {"truncated": True}
     if isinstance(value, (str, int, float, bool)) or value is None:
-        if isinstance(value, str) and len(value) > 256:
-            return f"{value[:253]}..."
+        if isinstance(value, str):
+            return _sanitize_string(value)
         return value
     if isinstance(value, dict):
-        return sanitize_metadata(value)
+        return _sanitize_mapping(value, depth, seen)
     if isinstance(value, (list, tuple)):
-        return [_sanitize_value(item) for item in value[:20]]
-    return str(value)
+        object_id = id(value)
+        if object_id in seen:
+            return [{"recursive": True}]
+        seen.add(object_id)
+        result = [_sanitize_value(item, depth + 1, seen) for item in value[:20]]
+        seen.discard(object_id)
+        return result
+    return _sanitize_string(str(value))

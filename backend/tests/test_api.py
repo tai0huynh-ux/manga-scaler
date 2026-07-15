@@ -57,7 +57,10 @@ def test_cancel_unknown_job_is_idempotent() -> None:
 
 def test_upscale_success_returns_trace_id_from_request() -> None:
     class FakeUpscaler:
+        seen_attempt = None
+
         async def upscale(self, **kwargs):
+            self.seen_attempt = kwargs["attempt"]
             return UpscaleResponse(
                 imageUrl="http://127.0.0.1:8765/cache/images/out.webp",
                 cacheKey="cache-key",
@@ -69,8 +72,9 @@ def test_upscale_success_returns_trace_id_from_request() -> None:
 
     with TestClient(app) as client:
         original = client.app.state.upscaler_service
+        fake = FakeUpscaler()
         try:
-            client.app.state.upscaler_service = FakeUpscaler()
+            client.app.state.upscaler_service = fake
             response = client.post(
                 "/upscale",
                 json={
@@ -85,6 +89,7 @@ def test_upscale_success_returns_trace_id_from_request() -> None:
 
     assert response.status_code == 200
     assert response.json()["traceId"] == "trace-from-client"
+    assert fake.seen_attempt == 1
 
 
 def test_upscale_unexpected_error_returns_safe_trace_detail() -> None:

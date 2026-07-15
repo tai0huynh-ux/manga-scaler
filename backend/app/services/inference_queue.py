@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from app.core.tracing import duration_ms, emit_trace_event
+from app.core.tracing import duration_ms, emit_trace_event, new_trace_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class InferenceJob:
     source_fingerprint: str | None
     future: asyncio.Future
     cancel_event: threading.Event = field(default_factory=threading.Event)
-    created_at: float = field(default_factory=lambda: asyncio.get_running_loop().time())
+    created_at: float = field(default_factory=time.perf_counter)
 
 
 class InferenceQueue:
@@ -124,7 +124,7 @@ class InferenceQueue:
             max_output_height=max_output_height,
             output_quality=output_quality,
             text_processing=text_processing,
-            trace_id=trace_id or "",
+            trace_id=trace_id or new_trace_id(),
             operation_id=operation_id,
             queue_key=queue_key or client_job_id,
             attempt=attempt,
@@ -231,7 +231,25 @@ class InferenceQueue:
         )
         try:
             result = await self.processor(job)
-            if not job.future.cancelled():
+            if job.future.cancelled() or job.cancel_event.is_set():
+                self.cancelled += 1
+                emit_trace_event(
+                    event="backend.queue.job.cancelled",
+                    trace_id=job.trace_id,
+                    component="inference_queue",
+                    stage="queue",
+                    status="cancelled",
+                    attempt=job.attempt,
+                    duration_ms=duration_ms(started),
+                    operation_id=job.operation_id,
+                    queue_key=job.queue_key,
+                    backend_job_id=job.client_job_id,
+                    source_fingerprint=job.source_fingerprint,
+                    error_code="JOB_CANCELLED",
+                    exception_type="CancelledError" if job.future.cancelled() else "InterruptedError",
+                )
+                return
+            if not job.future.done():
                 job.future.set_result(result)
             self.completed += 1
             emit_trace_event(
@@ -283,7 +301,7 @@ class InferenceQueue:
                 queue_key=job.queue_key,
                 backend_job_id=job.client_job_id,
                 source_fingerprint=job.source_fingerprint,
-                error_code="MODEL_INFERENCE_FAILED",
+                error_code=getattr(exc, "error_code", "JOB_PROCESSING_FAILED"),
                 exception_type=type(exc).__name__,
                 message=str(exc),
             )

@@ -220,6 +220,18 @@ class ImagePipeline:
                 metadata={"output_width": width * scale, "output_height": height * scale},
             )
             return Image.fromarray(output), round(gpu_time_ms, 3)
+        except InterruptedError as exc:
+            self._emit_pipeline_trace(
+                trace_context,
+                "backend.pipeline.cancelled",
+                "inference",
+                "cancelled",
+                duration_ms=duration_ms(started),
+                error_code="JOB_CANCELLED",
+                exception_type=type(exc).__name__,
+                message=str(exc),
+            )
+            raise
         except Exception as exc:
             self._emit_pipeline_trace(
                 trace_context,

@@ -601,12 +601,40 @@ class BackendUpscaleProvider {
           backend_cache_hit: Boolean(metadata.cacheHit),
         },
       });
+      const outputFetchStarted = performance.now();
+      emitTrace({
+        event: "background.backend.output_fetch.started",
+        traceId: options.traceId || metadata.traceId,
+        status: "running",
+        attempt: options.attempt,
+        metadata: { queue_key_prefix: safeTracePrefix(options.jobId) },
+      });
       const imageResponse = await fetch(metadata.imageUrl, { signal });
       if (!imageResponse.ok) {
+        emitTrace({
+          event: "background.backend.output_fetch.failed",
+          traceId: options.traceId || metadata.traceId,
+          status: "failed",
+          attempt: options.attempt,
+          metadata: {
+            http_status: imageResponse.status,
+            duration_ms: Math.max(0, performance.now() - outputFetchStarted),
+          },
+        });
         throw new Error(`Image fetch returned ${imageResponse.status}`);
       }
 
       const buffer = await imageResponse.arrayBuffer();
+      emitTrace({
+        event: "background.backend.output_fetch.completed",
+        traceId: options.traceId || metadata.traceId,
+        status: "completed",
+        attempt: options.attempt,
+        metadata: {
+          http_status: imageResponse.status,
+          duration_ms: Math.max(0, performance.now() - outputFetchStarted),
+        },
+      });
       return {
         buffer,
         contentType: metadata.contentType || imageResponse.headers.get("content-type") || "image/png",
@@ -832,33 +860,8 @@ class QueueScheduler {
   cancel(tabId, imageId, operationId) {
     const queueKey = this.queueKey({ tabId, imageId, operationId });
     if (!queueKey) return false;
-    this.invalidateQueueKey(queueKey);
-    const pendingJob = this.pending.get(queueKey);
-    this.pending.delete(queueKey);
-    if (pendingJob) {
-      emitTrace({
-        event: "background.job.cancelled",
-        traceId: pendingJob.traceId,
-        status: "cancelled",
-        attempt: pendingJob.attempt,
-        metadata: { queue_key_prefix: safeTracePrefix(queueKey) },
-      });
-    }
-
-    const activeJob = this.active.get(queueKey);
-    if (activeJob) {
-      activeJob.abortController.abort();
-      this.upscaleProvider.cancel(queueKey);
-      this.active.delete(queueKey);
-      emitTrace({
-        event: "background.job.cancelled",
-        traceId: activeJob.traceId,
-        status: "cancelled",
-        attempt: activeJob.attempt,
-        metadata: { queue_key_prefix: safeTracePrefix(queueKey) },
-      });
-      this.drain();
-    }
+    const cancelled = this.cancelQueueKey(queueKey, "explicit");
+    if (cancelled) this.drain();
     return true;
   }
 
@@ -866,18 +869,10 @@ class QueueScheduler {
     this.tabGenerations.set(tabId, (this.tabGenerations.get(tabId) || 0) + 1);
     [...this.pending.values()]
       .filter((job) => job.tabId === tabId)
-      .forEach((job) => {
-        this.invalidateQueueKey(job.queueKey);
-        this.pending.delete(job.queueKey);
-      });
+      .forEach((job) => this.cancelQueueKey(job.queueKey, "tab_cleanup"));
     [...this.active.values()]
       .filter((job) => job.tabId === tabId)
-      .forEach((job) => {
-        this.invalidateQueueKey(job.queueKey);
-        job.abortController.abort();
-        this.upscaleProvider.cancel(job.queueKey);
-        this.active.delete(job.queueKey);
-      });
+      .forEach((job) => this.cancelQueueKey(job.queueKey, "tab_cleanup"));
     [...this.retryTimers.entries()]
       .filter(([, retry]) => retry.job.tabId === tabId)
       .forEach(([queueKey]) => this.invalidateQueueKey(queueKey));
@@ -885,12 +880,8 @@ class QueueScheduler {
   }
 
   cancelAll() {
-    [...this.pending.keys()].forEach((queueKey) => this.invalidateQueueKey(queueKey));
-    [...this.active.values()].forEach((job) => {
-      this.invalidateQueueKey(job.queueKey);
-      job.abortController.abort();
-      this.upscaleProvider.cancel(job.queueKey);
-    });
+    [...this.pending.keys()].forEach((queueKey) => this.cancelQueueKey(queueKey, "cancel_all"));
+    [...this.active.values()].forEach((job) => this.cancelQueueKey(job.queueKey, "cancel_all"));
     [...this.retryTimers.keys()].forEach((queueKey) => this.invalidateQueueKey(queueKey));
     this.pending.clear();
     this.active.clear();
@@ -908,6 +899,30 @@ class QueueScheduler {
     if (!queueKey) return;
     this.cancelledQueueKeys.add(queueKey);
     this.clearRetry(queueKey);
+  }
+
+  cancelQueueKey(queueKey, reason) {
+    if (!queueKey) return false;
+    const pendingJob = this.pending.get(queueKey);
+    const activeJob = this.active.get(queueKey);
+    const job = pendingJob || activeJob;
+    this.invalidateQueueKey(queueKey);
+    this.pending.delete(queueKey);
+    if (activeJob) {
+      activeJob.abortController.abort();
+      this.upscaleProvider.cancel(queueKey);
+      this.active.delete(queueKey);
+    }
+    if (!job || job.cancelTraceEmitted) return Boolean(job);
+    job.cancelTraceEmitted = true;
+    emitTrace({
+      event: "background.job.cancelled",
+      traceId: job.traceId,
+      status: "cancelled",
+      attempt: job.attempt,
+      metadata: { reason, queue_key_prefix: safeTracePrefix(queueKey) },
+    });
+    return true;
   }
 
   scheduleRetry(job, delay) {
@@ -941,6 +956,13 @@ class QueueScheduler {
         job.abortController.abort();
         this.upscaleProvider.cancel(job.queueKey);
         this.active.delete(job.queueKey);
+        emitTrace({
+          event: "background.job.preempted",
+          traceId: job.traceId,
+          status: "preempted",
+          attempt: job.attempt,
+          metadata: { reason: "foreground_job", queue_key_prefix: safeTracePrefix(job.queueKey) },
+        });
         this.pending.set(job.queueKey, {
           ...job,
           abortController: undefined,
@@ -948,6 +970,13 @@ class QueueScheduler {
           pageOrder: job.pageOrder ?? Number.MAX_SAFE_INTEGER,
           viewportDistance: Number.MAX_SAFE_INTEGER,
           deferred: true,
+        });
+        emitTrace({
+          event: "background.job.requeued",
+          traceId: job.traceId,
+          status: "queued",
+          attempt: job.attempt,
+          metadata: { reason: "preempted", queue_key_prefix: safeTracePrefix(job.queueKey) },
         });
         pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", deferred: true });
       });

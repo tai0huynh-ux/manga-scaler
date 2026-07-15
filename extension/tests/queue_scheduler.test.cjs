@@ -119,10 +119,11 @@ function loadBackgroundClasses(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider;`, context);
   return {
     QueueScheduler: context.__QueueScheduler,
     PageImageRegistry: context.__PageImageRegistry,
+    BackendUpscaleProvider: context.__BackendUpscaleProvider,
   };
 }
 
@@ -3297,4 +3298,32 @@ test("delayed image-seen storage read cannot resurrect a pre-navigation registry
 
   assert.deepEqual(pageImageRegistry.list(7), []);
   assert.equal(responses.at(-1)?.recorded, false);
+});
+
+test("scheduler emits one cancellation trace for repeated active cancellation", async () => {
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({ traceEvents });
+  const run = deferred();
+  const canceled = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: () => run.promise,
+      cancel: (jobId) => canceled.push(jobId),
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("cancel-once"));
+  await new Promise((resolve) => setImmediate(resolve));
+  scheduler.cancel(7, "cancel-once", "cancel-once-op-1");
+  scheduler.cancel(7, "cancel-once", "cancel-once-op-1");
+  run.resolve({});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const cancellationEvents = traceEvents.filter((event) => event.event === "background.job.cancelled");
+  assert.equal(cancellationEvents.length, 1);
+  assert.deepEqual(canceled, ["7:cancel-once:cancel-once-op-1"]);
+  assert.equal(traceEvents.some((event) => event.event === "background.job.completed" && event.traceId === cancellationEvents[0].traceId), false);
 });

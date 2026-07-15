@@ -113,3 +113,50 @@ async def test_queue_propagates_trace_id_to_job_and_events(tmp_path) -> None:
         "backend.queue.job.completed",
     ]
     assert {event["trace_id"] for event in events} == {"trace-queue"}
+
+
+@pytest.mark.asyncio
+async def test_late_future_cancellation_does_not_complete_job(tmp_path) -> None:
+    configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
+
+    async def processor(job):
+        job.future.cancel()
+        return "late-result"
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await queue.submit("image", None, None, client_job_id="late")
+    finally:
+        await queue.stop()
+
+    events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert queue.snapshot()["completed"] == 0
+    assert queue.snapshot()["cancelled"] == 1
+    assert [event["event"] for event in events].count("backend.queue.job.cancelled") == 1
+    assert "backend.queue.job.completed" not in [event["event"] for event in events]
+
+
+@pytest.mark.asyncio
+async def test_queue_creates_one_fallback_trace_id_for_direct_submit(tmp_path) -> None:
+    configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
+
+    async def processor(_job):
+        return "ok"
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    try:
+        assert await queue.submit("image", None, None) == "ok"
+    finally:
+        await queue.stop()
+
+    events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == [
+        "backend.queue.job.queued",
+        "backend.queue.job.started",
+        "backend.queue.job.completed",
+    ]
+    assert len({event["trace_id"] for event in events}) == 1
+    assert events[1]["duration_ms"] >= 0

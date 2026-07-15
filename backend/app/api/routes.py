@@ -123,13 +123,14 @@ async def upscale(
     """Download, upscale with ONNX Runtime, cache, and return WebP output."""
     started = time.perf_counter()
     trace_id = payload.trace_id or new_trace_id()
+    attempt = payload.attempt or 1
     emit_trace_event(
         event="backend.api.request.received",
         trace_id=trace_id,
         component="backend_api",
         stage="request",
         status="running",
-        attempt=payload.attempt,
+        attempt=attempt,
         operation_id=payload.operation_id,
         queue_key=payload.queue_key,
         source_fingerprint=payload.source_fingerprint,
@@ -153,7 +154,7 @@ async def upscale(
             component="backend_api",
             stage="request",
             status="queued",
-            attempt=payload.attempt,
+            attempt=attempt,
             operation_id=payload.operation_id,
             queue_key=payload.queue_key,
             source_fingerprint=payload.source_fingerprint,
@@ -173,7 +174,7 @@ async def upscale(
             trace_id=trace_id,
             operation_id=payload.operation_id,
             queue_key=payload.queue_key,
-            attempt=payload.attempt or 1,
+            attempt=attempt,
             source_fingerprint=payload.source_fingerprint,
         )
         emit_trace_event(
@@ -182,7 +183,7 @@ async def upscale(
             component="backend_api",
             stage="request",
             status="completed",
-            attempt=payload.attempt,
+            attempt=attempt,
             duration_ms=duration_ms(started),
             operation_id=payload.operation_id,
             queue_key=payload.queue_key,
@@ -199,6 +200,7 @@ async def upscale(
             "backend.api.request.failed",
             payload,
             started,
+            attempt,
         ) from exc
     except ValueError as exc:
         raise _trace_http_error(
@@ -209,6 +211,7 @@ async def upscale(
             "backend.api.request.rejected",
             payload,
             started,
+            attempt,
         ) from exc
     except TimeoutError as exc:
         raise _trace_http_error(
@@ -219,6 +222,7 @@ async def upscale(
             "backend.api.request.timeout",
             payload,
             started,
+            attempt,
             trace_status="timeout",
         ) from exc
     except Exception as exc:
@@ -230,6 +234,7 @@ async def upscale(
             "backend.api.request.failed",
             payload,
             started,
+            attempt,
             safe_message="Unable to process image.",
         ) from exc
 
@@ -242,6 +247,7 @@ def _trace_http_error(
     event: str,
     payload: UpscaleRequest,
     started: float,
+    attempt: int,
     trace_status: str = "failed",
     safe_message: str | None = None,
 ) -> HTTPException:
@@ -257,7 +263,7 @@ def _trace_http_error(
         component="backend_api",
         stage="request",
         status=trace_status,
-        attempt=payload.attempt,
+        attempt=attempt,
         duration_ms=duration_ms(started),
         operation_id=payload.operation_id,
         queue_key=payload.queue_key,
