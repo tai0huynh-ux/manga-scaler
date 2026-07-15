@@ -54,8 +54,8 @@
     "tileOverlap": 32,
     "batchSize": 1,
     "warmup": true,
-    "workerCount": 2,
-    "maxConcurrentInferences": 2,
+    "workerCount": 1,
+    "maxConcurrentInferences": 1,
     "queueMaxSize": 64,
     "dynamicBatchWindowMs": 8
   },

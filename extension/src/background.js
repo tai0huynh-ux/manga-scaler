@@ -189,7 +189,7 @@ class PageImageRegistry {
       ...existing,
       ...image,
       tabId,
-      status: existing?.status || "seen",
+      status: existing?.operationId === image.operationId ? existing?.status || "seen" : image.status || "seen",
       order: existing?.order ?? (Number.isFinite(image.pageOrder) ? image.pageOrder : this.sequence++),
       seenAt: existing?.seenAt ?? performance.now(),
     });
@@ -199,6 +199,9 @@ class PageImageRegistry {
   update(tabId, imageId, patch) {
     const page = this.page(tabId);
     const existing = page.get(imageId);
+    if (existing?.operationId && existing.operationId !== patch.operationId) {
+      return false;
+    }
     page.set(imageId, {
       ...existing,
       imageId,
@@ -207,14 +210,15 @@ class PageImageRegistry {
       order: existing?.order ?? (Number.isFinite(patch.pageOrder) ? patch.pageOrder : this.sequence++),
       updatedAt: performance.now(),
     });
+    return true;
   }
 
   list(tabId) {
-    return [...(this.pages.get(tabId)?.values() || [])];
+    return this.exportArray(this.pages.get(tabId)?.values() || []);
   }
 
   listAll() {
-    return [...this.pages.values()]
+    return this.exportArray([...this.pages.values()]
       .flatMap((page) => [...page.values()])
       .sort((left, right) => {
         const statusRank = { processing: 0, preprocessing: 1, waiting: 2, seen: 3, timeout: 4, error: 5, fixed: 6, cache: 7 };
@@ -223,11 +227,29 @@ class PageImageRegistry {
         const rightRank = statusRank[right.status] ?? 8;
         if (leftRank !== rightRank) return leftRank - rightRank;
         return String(left.imageId || "").localeCompare(String(right.imageId || ""));
-      });
+      }));
   }
 
-  removeImage(tabId, imageId) {
-    this.pages.get(tabId)?.delete(imageId);
+  exportArray(values) {
+    const result = Array.isArray(values) ? values : [...values];
+    try {
+      const hostArrayPrototype = globalThis.constructor?.constructor?.("return Array.prototype")();
+      if (hostArrayPrototype && Object.getPrototypeOf(result) !== hostArrayPrototype) {
+        Object.setPrototypeOf(result, hostArrayPrototype);
+      }
+    } catch {
+      // Extension CSP can reject Function construction; cross-realm arrays only matter in VM tests.
+    }
+    return result;
+  }
+
+  removeImage(tabId, imageId, operationId = null) {
+    const page = this.pages.get(tabId);
+    const existing = page?.get(imageId);
+    if (typeof operationId !== "string" || !operationId || (existing?.operationId && existing.operationId !== operationId)) {
+      return false;
+    }
+    return Boolean(page?.delete(imageId));
   }
 
   remove(tabId) {
@@ -615,39 +637,63 @@ class QueueScheduler {
     this.statisticsTracker = statisticsTracker;
     this.pending = new Map();
     this.active = new Map();
+    this.retryTimers = new Map();
+    this.cancelledQueueKeys = new Set();
     this.tabGenerations = new Map();
     this.paused = false;
   }
 
   enqueue(job) {
-    if (this.paused) return;
+    if (this.paused) return false;
+    if (!this.hasOperationIdentity(job.tabId, job.imageId, job.operationId)) return false;
     const generation = this.tabGenerations.get(job.tabId) || 0;
-    if (job.generation !== undefined && job.generation !== generation) return;
+    if (job.generation !== undefined && job.generation !== generation) return false;
     job.generation = generation;
-    if (this.active.has(job.imageId)) {
-      this.updatePriority(job.imageId, job.viewportDistance);
-      return;
+    job.queueKey = this.queueKey(job);
+    if (this.cancelledQueueKeys.has(job.queueKey)) return false;
+    this.clearRetry(job.queueKey);
+    if (this.active.has(job.queueKey)) {
+      this.updatePriority(job.tabId, job.imageId, job.viewportDistance, job.operationId);
+      return true;
     }
 
-    const existing = this.pending.get(job.imageId);
-    this.pending.set(job.imageId, {
+    const existing = this.pending.get(job.queueKey);
+    this.pending.set(job.queueKey, {
       ...existing,
       ...job,
-      attempt: existing?.attempt ?? 1,
+      attempt: existing?.attempt ?? job.attempt ?? 1,
       queuedAt: existing?.queuedAt ?? performance.now(),
       pageOrder: Number.isFinite(job.pageOrder) ? job.pageOrder : existing?.pageOrder ?? Number.MAX_SAFE_INTEGER,
       viewportDistance: Number.isFinite(job.viewportDistance) ? job.viewportDistance : Number.MAX_SAFE_INTEGER,
     });
     if (!job.deferred) this.preemptDeferredActiveJobs();
-    pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting", pageOrder: job.pageOrder });
+    pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", pageOrder: job.pageOrder });
     this.drain();
+    return true;
   }
 
-  updatePriority(imageId, viewportDistance) {
-    const pendingJob = this.pending.get(imageId);
+  queueKey(job) {
+    if (!this.hasOperationIdentity(job.tabId, job.imageId, job.operationId)) return null;
+    return `${job.tabId}:${job.imageId}:${job.operationId}`;
+  }
+
+  hasOperationIdentity(tabId, imageId, operationId) {
+    return (
+      Number.isInteger(tabId) &&
+      typeof imageId === "string" && Boolean(imageId) &&
+      typeof operationId === "string" && Boolean(operationId)
+    );
+  }
+
+  updatePriority(tabId, imageId, viewportDistance, operationId) {
+    const queueKey = this.queueKey({ tabId, imageId, operationId });
+    if (!queueKey || this.cancelledQueueKeys.has(queueKey)) return false;
+    const pendingJob = this.pending.get(queueKey);
     if (pendingJob) {
       pendingJob.viewportDistance = viewportDistance;
+      return true;
     }
+    return false;
   }
 
   setMaxConcurrentRequests(value) {
@@ -664,42 +710,92 @@ class QueueScheduler {
     this.drain();
   }
 
-  cancel(imageId) {
-    if (this.pending.delete(imageId)) {
-      return;
-    }
+  cancel(tabId, imageId, operationId) {
+    const queueKey = this.queueKey({ tabId, imageId, operationId });
+    if (!queueKey) return false;
+    this.invalidateQueueKey(queueKey);
+    this.pending.delete(queueKey);
 
-    const activeJob = this.active.get(imageId);
+    const activeJob = this.active.get(queueKey);
     if (activeJob) {
       activeJob.abortController.abort();
-      this.upscaleProvider.cancel(activeJob.imageId);
-      this.active.delete(imageId);
+      this.upscaleProvider.cancel(queueKey);
+      this.active.delete(queueKey);
       this.drain();
     }
+    return true;
   }
 
   cancelTab(tabId) {
     this.tabGenerations.set(tabId, (this.tabGenerations.get(tabId) || 0) + 1);
     [...this.pending.values()]
       .filter((job) => job.tabId === tabId)
-      .forEach((job) => this.pending.delete(job.imageId));
+      .forEach((job) => {
+        this.invalidateQueueKey(job.queueKey);
+        this.pending.delete(job.queueKey);
+      });
     [...this.active.values()]
       .filter((job) => job.tabId === tabId)
       .forEach((job) => {
+        this.invalidateQueueKey(job.queueKey);
         job.abortController.abort();
-        this.upscaleProvider.cancel(job.imageId);
-        this.active.delete(job.imageId);
+        this.upscaleProvider.cancel(job.queueKey);
+        this.active.delete(job.queueKey);
       });
+    [...this.retryTimers.entries()]
+      .filter(([, retry]) => retry.job.tabId === tabId)
+      .forEach(([queueKey]) => this.invalidateQueueKey(queueKey));
     this.drain();
   }
 
   cancelAll() {
-    this.pending.clear();
+    [...this.pending.keys()].forEach((queueKey) => this.invalidateQueueKey(queueKey));
     [...this.active.values()].forEach((job) => {
+      this.invalidateQueueKey(job.queueKey);
       job.abortController.abort();
-      this.upscaleProvider.cancel(job.imageId);
+      this.upscaleProvider.cancel(job.queueKey);
     });
+    [...this.retryTimers.keys()].forEach((queueKey) => this.invalidateQueueKey(queueKey));
+    this.pending.clear();
     this.active.clear();
+  }
+
+  clearRetry(queueKey) {
+    const retry = this.retryTimers.get(queueKey);
+    if (!retry) return false;
+    clearTimeout(retry.timerId);
+    this.retryTimers.delete(queueKey);
+    return true;
+  }
+
+  invalidateQueueKey(queueKey) {
+    if (!queueKey) return;
+    this.cancelledQueueKeys.add(queueKey);
+    this.clearRetry(queueKey);
+  }
+
+  scheduleRetry(job, delay) {
+    const queueKey = job.queueKey;
+    if (!queueKey || this.cancelledQueueKeys.has(queueKey)) return;
+    this.clearRetry(queueKey);
+    const timerId = setTimeout(() => {
+      const retry = this.retryTimers.get(queueKey);
+      if (!retry || retry.timerId !== timerId) return;
+      this.retryTimers.delete(queueKey);
+      if (
+        this.cancelledQueueKeys.has(queueKey) ||
+        job.generation !== (this.tabGenerations.get(job.tabId) || 0)
+      ) {
+        return;
+      }
+      this.enqueue({
+        ...job,
+        abortController: undefined,
+        attempt: job.attempt + 1,
+        deferred: true,
+      });
+    }, delay);
+    this.retryTimers.set(queueKey, { timerId, job });
   }
 
   preemptDeferredActiveJobs() {
@@ -707,9 +803,9 @@ class QueueScheduler {
       .filter((job) => job.deferred)
       .forEach((job) => {
         job.abortController.abort();
-        this.upscaleProvider.cancel(job.imageId);
-        this.active.delete(job.imageId);
-        this.pending.set(job.imageId, {
+        this.upscaleProvider.cancel(job.queueKey);
+        this.active.delete(job.queueKey);
+        this.pending.set(job.queueKey, {
           ...job,
           abortController: undefined,
           queuedAt: performance.now(),
@@ -717,7 +813,7 @@ class QueueScheduler {
           viewportDistance: Number.MAX_SAFE_INTEGER,
           deferred: true,
         });
-        pageImageRegistry.update(job.tabId, job.imageId, { status: "waiting", deferred: true });
+        pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", deferred: true });
       });
   }
 
@@ -738,18 +834,22 @@ class QueueScheduler {
     if (this.paused) return;
     while (this.active.size < this.maxConcurrentRequests && this.pending.size > 0) {
       const job = this.nextJob();
-      this.pending.delete(job.imageId);
+      this.pending.delete(job.queueKey);
       const abortController = new AbortController();
       const startedAt = performance.now();
-      this.active.set(job.imageId, { ...job, abortController, startedAt });
+      const activeJob = { ...job, abortController, startedAt };
+      this.active.set(job.queueKey, activeJob);
       pageImageRegistry.update(job.tabId, job.imageId, {
+        operationId: job.operationId,
         status: "processing",
         startedAt,
         deferred: Boolean(job.deferred),
         pageOrder: job.pageOrder,
       });
-      this.process({ ...job, abortController }).finally(() => {
-        this.active.delete(job.imageId);
+      this.process(activeJob).finally(() => {
+        if (this.active.get(job.queueKey) === activeJob) {
+          this.active.delete(job.queueKey);
+        }
         this.drain();
       });
     }
@@ -765,17 +865,30 @@ class QueueScheduler {
     })[0];
   }
 
+  isCurrentJob(job) {
+    return Boolean(
+      job?.queueKey &&
+      !job.abortController?.signal.aborted &&
+      !this.cancelledQueueKeys.has(job.queueKey) &&
+      this.active.get(job.queueKey) === job
+    );
+  }
+
   async process(job) {
     const startedAt = performance.now();
     try {
-      const cacheUrl = this.normalizeCacheUrl(job.imageUrl);
+      const cacheUrl = job.sourceFingerprint ? this.normalizeCacheUrl(job.imageUrl) : this.canonicalCacheUrl(job.imageUrl);
+      const contentIdentity = job.sourceFingerprint || `url:${cacheUrl}`;
       const cacheVariant = job.cacheVariant || "full";
+      const parentContentIdentity = cacheVariant.startsWith("segment-")
+        ? `|parent:${job.parentSourceFingerprint || `url:${this.canonicalCacheUrl(job.imageUrl)}`}`
+        : "";
       const textVariant = job.textProcessing?.enabled
         ? `text:${job.textProcessing.cleanup ? "c1" : "c0"}:${job.textProcessing.translate ? "tr1" : "tr0"}:${job.textProcessing.sourceLanguage || "auto"}>${job.textProcessing.targetLanguage || "vi"}`
         : "text:off";
-      const cacheIdentity = `${cacheUrl}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
+      const cacheIdentity = `${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
-      if (job.abortController.signal.aborted) {
+      if (!this.isCurrentJob(job)) {
         return;
       }
       if (cached) {
@@ -793,8 +906,10 @@ class QueueScheduler {
             detectedMode: cached.detectedMode,
           },
         });
+        if (!this.isCurrentJob(job)) return;
         this.sendComplete(job, cached, true);
         pageImageRegistry.update(job.tabId, job.imageId, {
+          operationId: job.operationId,
           status: "cache",
           cacheHit: true,
           originalImageUrl: cached.originalImageUrl || job.imageUrl,
@@ -811,7 +926,7 @@ class QueueScheduler {
           enhanceLevel: job.enhanceLevel,
           pageUrl: job.pageUrl,
           imageData: job.imageData,
-          jobId: job.imageId,
+          jobId: job.queueKey,
           maxProcessingSeconds: job.maxProcessingSeconds,
           maxOutputWidth: job.maxOutputWidth,
           maxOutputHeight: job.maxOutputHeight,
@@ -821,10 +936,11 @@ class QueueScheduler {
         },
         job.abortController.signal,
       );
-      if (job.abortController.signal.aborted) {
+      if (!this.isCurrentJob(job)) {
         return;
       }
       await this.cacheProvider.set(cacheIdentity, result);
+      if (!this.isCurrentJob(job)) return;
       await this.statisticsTracker.recordSuccess({
         tabId: job.tabId,
         latencyMs: performance.now() - startedAt,
@@ -839,8 +955,10 @@ class QueueScheduler {
           detectedMode: result.detectedMode,
         },
       });
+      if (!this.isCurrentJob(job)) return;
       this.sendComplete(job, result, false);
       pageImageRegistry.update(job.tabId, job.imageId, {
+        operationId: job.operationId,
         status: "fixed",
         cacheHit: false,
         originalImageUrl: result.originalImageUrl || job.imageUrl,
@@ -848,7 +966,7 @@ class QueueScheduler {
         quality: result.quality,
       });
     } catch (error) {
-      if (job.abortController.signal.aborted) {
+      if (!this.isCurrentJob(job)) {
         return;
       }
 
@@ -858,11 +976,7 @@ class QueueScheduler {
       }
       if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
-        setTimeout(() => {
-          if (job.generation === (this.tabGenerations.get(job.tabId) || 0)) {
-            this.enqueue({ ...job, attempt: job.attempt + 1, deferred: true });
-          }
-        }, delay);
+        this.scheduleRetry(job, delay);
         return;
       }
 
@@ -873,7 +987,9 @@ class QueueScheduler {
   async failJob(job, error, status = "error") {
     const message = error instanceof Error ? error.message : "Unknown upscale error";
     await this.statisticsTracker.recordError(job.tabId);
+    if (!this.isCurrentJob(job)) return false;
     pageImageRegistry.update(job.tabId, job.imageId, {
+      operationId: job.operationId,
       status,
       error: message,
       failedAt: performance.now(),
@@ -881,10 +997,13 @@ class QueueScheduler {
     chrome.tabs.sendMessage(job.tabId, {
       type: "UPSCALE_FAILED",
       imageId: job.imageId,
+      operationId: job.operationId,
+      sourceRevision: job.sourceRevision,
       message,
       status,
       permanent: status === "timeout",
     }).catch(() => {});
+    return true;
   }
 
   normalizeCacheUrl(imageUrl) {
@@ -894,7 +1013,7 @@ class QueueScheduler {
       // still identifying the same browser-visible image.
       const volatileParameters = new Set([
         "_", "cb", "cache", "cachebust", "cachebuster", "expires", "exp",
-        "key", "policy", "signature", "sig", "token", "ts", "timestamp", "v",
+        "key", "policy", "signature", "sig", "token", "ts", "timestamp",
       ]);
       for (const name of [...parsed.searchParams.keys()]) {
         if (volatileParameters.has(name.toLowerCase()) || name.toLowerCase().startsWith("x-amz-")) {
@@ -909,10 +1028,24 @@ class QueueScheduler {
     }
   }
 
+  canonicalCacheUrl(imageUrl) {
+    try {
+      const parsed = new URL(imageUrl);
+      parsed.hash = "";
+      parsed.searchParams.sort();
+      return parsed.toString();
+    } catch {
+      return String(imageUrl).split("#", 1)[0];
+    }
+  }
+
   sendComplete(job, result, cacheHit) {
     chrome.tabs.sendMessage(job.tabId, {
       type: "UPSCALE_COMPLETE",
       imageId: job.imageId,
+      operationId: job.operationId,
+      sourceRevision: job.sourceRevision,
+      sourceFingerprint: job.sourceFingerprint || null,
       imageUrl: job.imageUrl,
       imageBase64: this.arrayBufferToBase64(result.buffer),
       contentType: result.contentType,
@@ -1048,10 +1181,17 @@ function resolveOutputLimits(settings, metrics = {}) {
   const outputHeightEnabled = settings.maxOutputHeightEnabled !== false;
   const configuredMaxWidth = outputWidthEnabled ? Number(settings.maxOutputWidth) : 16383;
   const configuredMaxHeight = outputHeightEnabled ? Number(settings.maxOutputHeight) : 16383;
+  const isSegment = typeof metrics.cacheVariant === "string" && metrics.cacheVariant.startsWith("segment-");
   if (settings.sizingMode === "pixel") {
     return {
       width: outputWidthEnabled ? Number(settings.maxOutputWidth) : null,
       height: outputHeightEnabled ? Number(settings.maxOutputHeight) : null,
+    };
+  }
+  if (settings.sizingMode === "auto" && isSegment) {
+    return {
+      width: outputWidthEnabled ? configuredMaxWidth : null,
+      height: outputHeightEnabled ? configuredMaxHeight : null,
     };
   }
   const presets = { hd: [1280, 720], fhd: [1920, 1080], "2k": [2560, 1440], "4k": [3840, 2160] };
@@ -1095,59 +1235,111 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.alarms.create("ai-enhancer-watchdog", { periodInMinutes: 0.5 });
 
+function hasMessageOperationIdentity(message, sender) {
+  return Boolean(
+    Number.isInteger(sender.tab?.id) &&
+    typeof message.imageId === "string" && message.imageId &&
+    typeof message.operationId === "string" && message.operationId
+  );
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PREPROCESSING_STARTED") {
-    if (sender.tab?.id) {
-      pageImageRegistry.update(sender.tab.id, message.imageId, {
-        status: "preprocessing",
-        pageOrder: Number(message.pageOrder),
-      });
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
     }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status: "preprocessing",
+      pageOrder: Number(message.pageOrder),
+    });
+    sendResponse({ recorded: true });
+    return false;
+  }
+
+  if (message.type === "PREPROCESSING_FALLBACK") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status: "preprocessing",
+      phase: "fallback",
+      fallbackReason: message.reason,
+      pageOrder: Number(message.pageOrder),
+    });
     sendResponse({ recorded: true });
     return false;
   }
 
   if (message.type === "IMAGE_SEEN") {
-    if (sender.tab?.id) {
-      chrome.storage.local.get({ enabled: true }).then((settings) => {
-        if (!settings.enabled) {
-          sendResponse({ recorded: false, disabled: true });
-          return;
-        }
-        lastContentTabId = sender.tab.id;
-        Promise.all([
-          statisticsTracker.recordSeen(sender.tab.id),
-          pageImageRegistry.seen(sender.tab.id, {
-            imageId: message.imageId,
-            imageUrl: message.imageUrl,
-            pageUrl: sender.tab.url,
-            width: message.width,
-            height: message.height,
-            pageOrder: Number(message.pageOrder),
-          }),
-        ]).then(() => sendResponse({ recorded: true }));
-      });
-      return true;
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
     }
-    return false;
+    const tabId = sender.tab.id;
+    const generation = scheduler.tabGenerations.get(tabId) || 0;
+    chrome.storage.local.get({ enabled: true }).then((settings) => {
+      if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
+        sendResponse({ recorded: false, stale: true, reason: "Stale tab generation." });
+        return;
+      }
+      if (!settings.enabled) {
+        sendResponse({ recorded: false, disabled: true });
+        return;
+      }
+      lastContentTabId = tabId;
+      Promise.all([
+        statisticsTracker.recordSeen(tabId),
+        pageImageRegistry.seen(tabId, {
+          imageId: message.imageId,
+          operationId: message.operationId,
+          sourceRevision: message.sourceRevision,
+          imageUrl: message.imageUrl,
+          pageUrl: sender.tab.url,
+          width: message.width,
+          height: message.height,
+          pageOrder: Number(message.pageOrder),
+        }),
+      ]).then(() => sendResponse({ recorded: true }));
+    });
+    return true;
   }
 
   if (message.type === "ENQUEUE_IMAGE") {
-    if (!sender.tab?.id) {
-      sendResponse({ accepted: false, reason: "Missing sender tab." });
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ accepted: false, reason: "Missing operation identity." });
       return false;
     }
 
+    const tabId = sender.tab.id;
+    const generation = scheduler.tabGenerations.get(tabId) || 0;
     chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+      if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
+        sendResponse({ accepted: false, stale: true, reason: "Stale tab generation." });
+        return;
+      }
       if (!settings.enabled) {
         sendResponse({ accepted: false, reason: "Extension disabled." });
         return;
       }
-      lastContentTabId = sender.tab.id;
-      const outputLimits = resolveOutputLimits(settings, message.displayMetrics);
-      scheduler.enqueue({
-        tabId: sender.tab.id,
+      lastContentTabId = tabId;
+      const outputLimits = resolveOutputLimits(settings, {
+        ...(message.displayMetrics || {}),
+        cacheVariant: message.cacheVariant || "full",
+      });
+      const accepted = scheduler.enqueue({
+        tabId,
+        generation,
         imageId: message.imageId,
+        operationId: message.operationId,
+        sourceRevision: message.sourceRevision,
+        sourceFingerprint: message.sourceFingerprint || null,
+        parentSourceFingerprint: message.parentSourceFingerprint || null,
         imageUrl: message.imageUrl,
         pageUrl: sender.tab.url,
         imageData: message.imageData || null,
@@ -1173,28 +1365,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           Number(message.displayMetrics?.sourceHeight) || 0,
         ) >= 384 ? 512 : 256,
       });
-      sendResponse({ accepted: true });
+      sendResponse({ accepted });
     });
     return true;
   }
 
   if (message.type === "UPDATE_PRIORITY") {
-    scheduler.updatePriority(message.imageId, message.viewportDistance);
-    sendResponse({ updated: true });
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ updated: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const updated = scheduler.updatePriority(
+      sender.tab.id,
+      message.imageId,
+      message.viewportDistance,
+      message.operationId,
+    );
+    sendResponse({ updated });
     return false;
   }
 
   if (message.type === "CANCEL_IMAGE") {
-    scheduler.cancel(message.imageId);
-    if (sender.tab?.id) pageImageRegistry.removeImage(sender.tab.id, message.imageId);
-    sendResponse({ canceled: true });
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ canceled: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const canceled = scheduler.cancel(sender.tab.id, message.imageId, message.operationId);
+    pageImageRegistry.removeImage(sender.tab.id, message.imageId, message.operationId);
+    sendResponse({ canceled });
     return false;
   }
 
   if (message.type === "REMOVE_IMAGE") {
-    if (sender.tab?.id) pageImageRegistry.removeImage(sender.tab.id, message.imageId);
-    scheduler.cancel(message.imageId);
-    sendResponse({ removed: true });
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ removed: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.removeImage(sender.tab.id, message.imageId, message.operationId);
+    const removed = scheduler.cancel(sender.tab.id, message.imageId, message.operationId);
+    sendResponse({ removed });
     return false;
   }
 

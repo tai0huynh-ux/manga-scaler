@@ -3,7 +3,9 @@ httpx==0.28.1
 numpy==2.2.6
 onnxruntime-directml==1.22.0
 pillow==11.3.0
+pydantic==2.11.7
 psutil==7.0.0
+pytesseract==0.3.13
 pytest==8.4.1
 pytest-asyncio==1.1.0
 uvicorn[standard]==0.35.0

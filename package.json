@@ -1,0 +1,9 @@
+{
+  "name": "ai-manga-upscaler-quality-gates",
+  "private": true,
+  "scripts": {
+    "check:js": "node --check extension/src/config.js && node --check extension/src/background.js && node --check extension/src/content.js && node --check extension/src/popup.js && node --check extension/src/dashboard.js",
+    "test:extension": "node --test extension/tests/*.test.cjs",
+    "test": "npm run check:js && npm run test:extension"
+  }
+}

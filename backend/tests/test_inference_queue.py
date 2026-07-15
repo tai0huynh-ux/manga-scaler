@@ -3,7 +3,6 @@
 import asyncio
 
 import pytest
-
 from app.services.inference_queue import InferenceQueue
 
 
@@ -54,3 +53,23 @@ async def test_client_job_can_cancel_active_processing() -> None:
     await asyncio.sleep(0.02)
     assert queue.snapshot()["cancelled"] == 1
     await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_settles_active_submitters() -> None:
+    started = asyncio.Event()
+
+    async def processor(_job):
+        started.set()
+        await asyncio.Event().wait()
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    submitter = asyncio.create_task(queue.submit("image", None, None))
+    await started.wait()
+
+    await queue.stop()
+
+    assert submitter.done()
+    assert submitter.cancelled()
+    assert queue.snapshot()["processing"] == 0

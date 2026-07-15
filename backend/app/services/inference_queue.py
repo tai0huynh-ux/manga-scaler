@@ -52,6 +52,7 @@ class InferenceQueue:
         self.failed = 0
         self.cancelled = 0
         self.jobs: dict[str, InferenceJob] = {}
+        self.futures: set[asyncio.Future] = set()
         self.running = False
 
     async def start(self) -> None:
@@ -64,9 +65,20 @@ class InferenceQueue:
     async def stop(self) -> None:
         """Cancel queue workers."""
         self.running = False
+        for future in tuple(self.futures):
+            if not future.done():
+                future.cancel()
         for worker in self.workers:
             worker.cancel()
         await asyncio.gather(*self.workers, return_exceptions=True)
+        self.workers.clear()
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                self.queue.task_done()
 
     async def submit(
         self,
@@ -85,6 +97,8 @@ class InferenceQueue:
         """Submit a job and wait for its result."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()
+        self.futures.add(future)
+        future.add_done_callback(self.futures.discard)
         job = InferenceJob(
             image_url=image_url,
             client_job_id=client_job_id,

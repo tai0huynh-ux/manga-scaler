@@ -1,9 +1,8 @@
 """Quality verification metric tests."""
 
 import numpy as np
-from PIL import Image, ImageEnhance
-
 from app.services.quality import QualityAnalyzer
+from PIL import Image, ImageEnhance
 
 
 def test_quality_analyzer_detects_a_changed_image() -> None:

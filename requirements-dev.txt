@@ -1,0 +1,4 @@
+-r backend/requirements.txt
+coverage==7.15.1
+hypothesis==6.156.6
+ruff==0.15.21

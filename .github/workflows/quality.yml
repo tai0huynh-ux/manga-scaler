@@ -1,0 +1,29 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Verify backend
+        run: |
+          python -m pytest -q
+          python -m ruff check backend
+          python -m coverage run -m pytest -q
+          python -m coverage report --fail-under=45
+      - name: Verify extension
+        run: npm test

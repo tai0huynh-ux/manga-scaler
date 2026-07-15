@@ -3,11 +3,10 @@
 import base64
 import io
 
+from app.main import app
+from app.services.text_processor import TextProcessingOptions, TextProcessor, TextRegion
 from fastapi.testclient import TestClient
 from PIL import Image, ImageChops, ImageDraw
-
-from app.main import app
-from app.services.text_processor import TextProcessingOptions
 
 
 def synthetic_text_image() -> Image.Image:
@@ -45,7 +44,8 @@ def test_text_capabilities_report_no_fake_translation() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["cleanupAvailable"] is True
-    assert payload["translationAvailable"] is False
+    assert payload["translationAvailable"] is True
+    assert payload["translationProvider"]
 
 
 def test_text_process_endpoint_returns_cleaned_image_metadata() -> None:
@@ -64,3 +64,83 @@ def test_text_process_endpoint_returns_cleaned_image_metadata() -> None:
     assert payload["textProcessing"]["regionCount"] > 0
     assert payload["textProcessing"]["translationApplied"] is False
     assert payload["textProcessing"]["warnings"]
+
+
+def test_text_processor_renders_translated_ocr_text(monkeypatch) -> None:
+    with TestClient(app) as client:
+        processor = client.app.state.text_processor
+        original = synthetic_text_image()
+
+        monkeypatch.setattr(
+            processor,
+            "capabilities",
+            lambda: {
+                "cleanupAvailable": True,
+                "ocrAvailable": True,
+                "ocrEngine": "tesseract",
+                "tesseractPath": "tesseract",
+                "pytesseractAvailable": True,
+                "translationAvailable": True,
+                "translationProvider": "test",
+                "message": "test",
+            },
+        )
+        monkeypatch.setattr(
+            processor,
+            "_recognize_text_regions",
+            lambda *_args: [TextRegion(x=66, y=52, width=150, height=36, area=5400, confidence=0.9, text="HELLO AI")],
+        )
+        monkeypatch.setattr(processor, "_translate_text", lambda *_args: "Xin chao AI")
+
+        result = processor._process_sync(original, TextProcessingOptions(enabled=True, cleanup=True, translate=True))
+
+    assert result.translation_applied is True
+    assert result.regions[0].text == "HELLO AI"
+    assert result.regions[0].translated_text == "Xin chao AI"
+    diff = ImageChops.difference(original, result.image)
+    assert diff.getbbox() is not None
+
+
+def test_translation_history_reuses_and_reloads_saved_translations(tmp_path, monkeypatch) -> None:
+    with TestClient(app) as client:
+        config = client.app.state.text_processor.config
+
+    history_path = tmp_path / "translation-history.jsonl"
+    processor = TextProcessor(config, history_path=history_path)
+    calls = []
+
+    def fake_translate(text, source_language, target_language, context=None):
+        calls.append({"text": text, "context": context or []})
+        return f"vi:{text}"
+
+    monkeypatch.setattr(processor, "_translate_text", fake_translate)
+
+    assert processor._translate_text_with_memory("HELLO AI", "auto", "vi") == "vi:HELLO AI"
+    assert processor._translate_text_with_memory("HELLO AI", "auto", "vi") == "vi:HELLO AI"
+    assert len(calls) == 1
+    assert history_path.exists()
+
+    reloaded = TextProcessor(config, history_path=history_path)
+    monkeypatch.setattr(reloaded, "_translate_text", lambda *_args, **_kwargs: "should-not-run")
+
+    assert reloaded._translate_text_with_memory("HELLO AI", "auto", "vi") == "vi:HELLO AI"
+
+
+def test_translation_history_supplies_recent_context(tmp_path, monkeypatch) -> None:
+    with TestClient(app) as client:
+        config = client.app.state.text_processor.config
+
+    processor = TextProcessor(config, history_path=tmp_path / "translation-history.jsonl")
+    contexts = []
+
+    def fake_translate(text, source_language, target_language, context=None):
+        contexts.append(context or [])
+        return f"vi:{text}"
+
+    monkeypatch.setattr(processor, "_translate_text", fake_translate)
+
+    processor._translate_text_with_memory("First line", "auto", "vi")
+    processor._translate_text_with_memory("Second line", "auto", "vi")
+
+    assert contexts[0] == []
+    assert contexts[1] == ["First line => vi:First line"]

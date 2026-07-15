@@ -13,10 +13,10 @@ from app.core.logging import configure_logging
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
 from app.services.gpu_provider import GpuProviderSelector
-from app.services.image_pipeline import ImagePipeline
 from app.services.image_classifier import ImageTypeClassifier
-from app.services.quality import QualityAnalyzer
+from app.services.image_pipeline import ImagePipeline
 from app.services.model_manager import ModelManager
+from app.services.quality import QualityAnalyzer
 from app.services.statistics import AppRuntime
 from app.services.text_processor import TextProcessor
 from app.services.upscaler import UpscalerService
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pipeline = ImagePipeline(settings.encoding, settings.enhancement)
     classifier = ImageTypeClassifier(settings.auto_detection)
     quality_analyzer = QualityAnalyzer()
-    text_processor = TextProcessor(settings.text_processing)
+    text_processor = TextProcessor(settings.text_processing, history_path=settings.logs_dir / "translation-history.jsonl")
     app.state.pipeline = pipeline
     app.state.quality_analyzer = quality_analyzer
     app.state.text_processor = text_processor

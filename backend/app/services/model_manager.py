@@ -1,7 +1,7 @@
 """Singleton ONNX Runtime model manager with hot reload support."""
 
-import logging
 import hashlib
+import logging
 import os
 import threading
 from dataclasses import dataclass
@@ -148,6 +148,13 @@ class ModelManager:
             sess_options=session_options,
             providers=[provider],
         )
+        actual_providers = tuple(session.get_providers())
+        actual_provider = actual_providers[0] if actual_providers else provider
+        if actual_provider != provider:
+            LOGGER.warning(
+                "ONNX Runtime did not bind the requested provider",
+                extra={"_requested_provider": provider, "_actual_providers": actual_providers, "_model": model_name},
+            )
         input_name = session.get_inputs()[0].name
         input_shape = session.get_inputs()[0].shape
         fixed_tile_size = (
@@ -166,12 +173,21 @@ class ModelManager:
             input_name=input_name,
             output_name=output_name,
             mtime=path.stat().st_mtime,
-            provider=provider,
+            provider=actual_provider,
             run_lock=threading.Lock(),
             fixed_tile_size=fixed_tile_size,
         )
         self.loaded[model_name] = loaded
-        LOGGER.info("Loaded ONNX model", extra={"_model": model_name, "_path": str(path), "_provider": provider})
+        LOGGER.info(
+            "Loaded ONNX model",
+            extra={
+                "_model": model_name,
+                "_path": str(path),
+                "_provider": actual_provider,
+                "_requested_provider": provider,
+                "_session_providers": actual_providers,
+            },
+        )
 
         if self.config.warmup:
             self.warmup(loaded)
@@ -203,6 +219,7 @@ class ModelManager:
                 name for name, descriptor in self.config.models.items() if self._model_path(descriptor).exists()
             ),
             "provider": self.provider_selector.current().provider,
+            "loadedProviders": {name: model.provider for name, model in self.loaded.items()},
         }
 
     def _model_path(self, descriptor: ModelConfig) -> Path:

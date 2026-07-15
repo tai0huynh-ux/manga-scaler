@@ -14,14 +14,15 @@ class ImageProvider {
     this.limits = limits;
   }
 
-  canProcess(image) {
+  canProcess(image, options = {}) {
     const width = image.naturalWidth || image.width || image.clientWidth;
     const height = image.naturalHeight || image.height || image.clientHeight;
+    const allowTallImage = options.allowTallImage === true;
     return (
       (this.limits.minInputWidthEnabled === false || width >= this.limits.minInputWidth) &&
       (this.limits.minInputHeightEnabled === false || height >= this.limits.minInputHeight) &&
       (this.limits.maxInputWidthEnabled === false || width <= this.limits.maxInputWidth) &&
-      (this.limits.maxInputHeightEnabled === false || height <= this.limits.maxInputHeight)
+      (allowTallImage || this.limits.maxInputHeightEnabled === false || height <= this.limits.maxInputHeight)
     );
   }
 
@@ -61,56 +62,130 @@ class ImageProvider {
 class Renderer {
   constructor() {
     this.activeObjectUrls = new WeakMap();
+    this.renderTransactions = new WeakMap();
+    this.sliceTransactions = new WeakMap();
+    this.revokedObjectUrls = new Set();
+    this.transactionSequence = 0;
     this.installStyles();
   }
 
-  async render(image, payload) {
+  async render(image, payload, isCurrent = () => true) {
     if (!image || !payload?.imageBase64) {
-      return;
+      return "load-error";
+    }
+    if (!isCurrent()) {
+      return "stale";
     }
 
     const metadata = trackedImages.get(payload.imageId)?.metadata;
     if (!metadata) {
-      return;
+      return "stale";
+    }
+    if (!isCurrent()) {
+      return "stale";
+    }
+
+    const previousTransaction = this.renderTransactions.get(image);
+    if (previousTransaction?.state === "prepared") {
+      previousTransaction.rollback();
+    }
+
+    let objectUrl;
+    try {
+      const blob = new Blob([this.base64ToUint8Array(payload.imageBase64)], {
+        type: payload.contentType || "image/png",
+      });
+      objectUrl = URL.createObjectURL(blob);
+    } catch {
+      return "load-error";
+    }
+
+    const snapshot = this.captureRenderState(image, metadata);
+    const transaction = {
+      token: `render-${this.transactionSequence++}`,
+      state: "prepared",
+      image,
+      metadata,
+      objectUrl,
+      abortController: this.createCancellationController(),
+      previousObjectUrl: this.activeObjectUrls.get(image),
+      snapshot,
+      applied: null,
+      rollback: () => this.rollbackRenderTransaction(transaction),
+    };
+    this.renderTransactions.set(image, transaction);
+
+    await this.fadeOut(image);
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
     }
 
     this.freezeLayout(image, metadata);
     this.preserveResponsiveAttributes(image, metadata);
+    transaction.applied = this.capturePreparedRenderState(image, metadata);
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
+    }
 
-    const blob = new Blob([this.base64ToUint8Array(payload.imageBase64)], {
-      type: payload.contentType || "image/png",
-    });
-    const objectUrl = URL.createObjectURL(blob);
-    const previousObjectUrl = this.activeObjectUrls.get(image);
-    this.activeObjectUrls.set(image, objectUrl);
-
-    await this.fadeOut(image);
     image.removeAttribute("srcset");
     image.removeAttribute("sizes");
-    image.src = objectUrl;
-    await this.waitForImageLoad(image);
-    image.classList.add("ai-manga-upscaler-ready");
-
-    if (typeof previousObjectUrl === "string") {
-      URL.revokeObjectURL(previousObjectUrl);
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
     }
+
+    this.activeObjectUrls.set(image, objectUrl);
+    image.src = objectUrl;
+    try {
+      await this.waitForImageLoad(image, transaction.abortController.signal);
+    } catch {
+      const stale = !isCurrent() || this.renderTransactions.get(image) !== transaction;
+      transaction.rollback();
+      return stale ? "stale" : "load-error";
+    }
+
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
+    }
+
+    transaction.state = "committed";
+    image.classList.remove?.("ai-manga-upscaler-fading");
+    image.classList.add?.("ai-manga-upscaler-ready");
+    if (this.renderTransactions.get(image) === transaction) {
+      this.renderTransactions.delete(image);
+    }
+    if (typeof transaction.previousObjectUrl === "string" && transaction.previousObjectUrl !== objectUrl) {
+      this.revokeObjectUrl(transaction.previousObjectUrl);
+    }
+    return "rendered";
   }
 
-  installRawSlices(image, metadata, segments) {
+  prepareRawSlices(image, metadata, segments, identity = {}) {
     const wrapper = document.createElement("div");
     wrapper.className = "ai-enhancer-slice-wrapper";
+    wrapper.dataset = wrapper.dataset || {};
+    const token = `${identity.operationId || "slice"}-${this.transactionSequence++}`;
+    wrapper.dataset.aiEnhancerSliceToken = token;
+    wrapper.dataset.aiEnhancerParentOperationId = identity.operationId || "";
     if (metadata.width > 0) {
       wrapper.style.width = `${metadata.width}px`;
       wrapper.style.maxWidth = "100%";
     }
-    image.parentNode.insertBefore(wrapper, image);
-    image.style.display = "none";
-    image.dataset.aiEnhancerSliced = "true";
-
-    return segments.map((segment) => {
+    const previousDisplay = image.style.display;
+    const slicedDataset = this.captureDatasetValue(image, "aiEnhancerSliced");
+    const segmentUrls = new Set(segments.map((segment) => segment?.objectUrl).filter((objectUrl) => typeof objectUrl === "string"));
+    const rawImages = segments.map((segment) => {
       const raw = new Image();
       raw.className = "ai-enhancer-raw-slice";
       raw.dataset.aiEnhancerRawSlice = "true";
+      raw.dataset.aiEnhancerSliceToken = token;
+      raw.dataset.aiEnhancerParentOperationId = identity.operationId || "";
+      raw.dataset.aiEnhancerSegmentIndex = String(segment.index);
+      raw.dataset.aiEnhancerSourceY = String(segment.sourceY ?? 0);
+      raw.dataset.aiEnhancerSourceHeight = String(segment.sourceHeight ?? 0);
       raw.alt = image.alt || "";
       raw.decoding = "async";
       raw.src = segment.objectUrl;
@@ -122,6 +197,230 @@ class Renderer {
       this.activeObjectUrls.set(raw, segment.objectUrl);
       return raw;
     });
+    const transaction = {
+      token,
+      state: "prepared",
+      wrapper,
+      image,
+      identity,
+      rawImages,
+      segments,
+      commit: () => {
+        if (transaction.state === "committed") return true;
+        if (transaction.state !== "prepared" || !image.parentNode) return false;
+        const previousOwner = this.sliceTransactions.get(image);
+        if (previousOwner && previousOwner !== transaction) {
+          previousOwner.rollback();
+        }
+        this.sliceTransactions.set(image, transaction);
+        image.parentNode.insertBefore(wrapper, image);
+        image.style.display = "none";
+        image.dataset.aiEnhancerSliced = "true";
+        transaction.state = "committed";
+        return true;
+      },
+      rollback: () => {
+        if (transaction.state === "rolledBack") return false;
+        const wasCommitted = transaction.state === "committed";
+        transaction.state = "rolledBack";
+        if (typeof wrapper.remove === "function") {
+          wrapper.remove();
+        } else if (wrapper.parentNode?.removeChild) {
+          wrapper.parentNode.removeChild(wrapper);
+        }
+        if (wasCommitted && this.sliceTransactions.get(image) === transaction) {
+          image.style.display = previousDisplay;
+          this.restoreDatasetValue(image, "aiEnhancerSliced", slicedDataset);
+          this.sliceTransactions.delete(image);
+        }
+        for (const raw of rawImages) {
+          const activeUrl = this.activeObjectUrls.get(raw);
+          if (typeof activeUrl === "string") this.revokeObjectUrl(activeUrl);
+          this.activeObjectUrls.delete(raw);
+        }
+        for (const objectUrl of segmentUrls) {
+          this.revokeObjectUrl(objectUrl);
+        }
+        return true;
+      },
+    };
+    return transaction;
+  }
+
+  installRawSlices(image, metadata, segments) {
+    const transaction = this.prepareRawSlices(image, metadata, segments);
+    transaction.commit();
+    return transaction.rawImages;
+  }
+
+  captureAttribute(element, name) {
+    const value = typeof element?.getAttribute === "function" ? element.getAttribute(name) : null;
+    const present = typeof element?.hasAttribute === "function" ? element.hasAttribute(name) : value !== null;
+    return { present, value };
+  }
+
+  restoreAttribute(element, name, snapshot) {
+    if (!element || !snapshot) return;
+    if (snapshot.present) element.setAttribute?.(name, snapshot.value ?? "");
+    else element.removeAttribute?.(name);
+  }
+
+  captureDatasetValue(element, name) {
+    return {
+      present: Boolean(element?.dataset && Object.prototype.hasOwnProperty.call(element.dataset, name)),
+      value: element?.dataset?.[name],
+    };
+  }
+
+  restoreDatasetValue(element, name, snapshot) {
+    if (!element?.dataset || !snapshot) return;
+    if (snapshot.present) element.dataset[name] = snapshot.value;
+    else delete element.dataset[name];
+  }
+
+  captureRenderState(image, metadata) {
+    return {
+      src: this.captureAttribute(image, "src"),
+      srcProperty: metadata.src || null,
+      displayedSrc: image.currentSrc || image.src || metadata.imageUrl || "",
+      srcset: this.captureAttribute(image, "srcset"),
+      sizes: this.captureAttribute(image, "sizes"),
+      width: image.style.width,
+      height: image.style.height,
+      originalSrc: this.captureDatasetValue(image, "aiMangaOriginalSrc"),
+      originalSrcset: this.captureDatasetValue(image, "aiMangaOriginalSrcset"),
+      originalSizes: this.captureDatasetValue(image, "aiMangaOriginalSizes"),
+      fading: Boolean(image.classList.contains?.("ai-manga-upscaler-fading")),
+      ready: Boolean(image.classList.contains?.("ai-manga-upscaler-ready")),
+      pictureSources: (metadata.pictureSources || []).map(({ source }) => ({
+        source,
+        srcset: this.captureAttribute(source, "srcset"),
+        sizes: this.captureAttribute(source, "sizes"),
+        originalSrcset: this.captureDatasetValue(source, "aiMangaOriginalSrcset"),
+        originalSizes: this.captureDatasetValue(source, "aiMangaOriginalSizes"),
+      })),
+    };
+  }
+
+  capturePreparedRenderState(image, metadata) {
+    return {
+      width: image.style.width,
+      height: image.style.height,
+      originalSrc: image.dataset.aiMangaOriginalSrc,
+      originalSrcset: image.dataset.aiMangaOriginalSrcset,
+      originalSizes: image.dataset.aiMangaOriginalSizes,
+      pictureSources: (metadata.pictureSources || []).map(({ source }) => ({
+        source,
+        originalSrcset: source.dataset.aiMangaOriginalSrcset,
+        originalSizes: source.dataset.aiMangaOriginalSizes,
+      })),
+    };
+  }
+
+  rollbackRenderTransaction(transaction) {
+    if (!transaction || transaction.state === "rolledBack") return false;
+    transaction.state = "rolledBack";
+    const { image, snapshot, objectUrl, applied } = transaction;
+    const ownsDom = this.renderTransactions.get(image) === transaction;
+    if (!transaction.abortController?.signal?.aborted) {
+      transaction.abortController?.abort("stale");
+    }
+    if (ownsDom) {
+      if (image.src === objectUrl || image.currentSrc === objectUrl) {
+        this.restoreAttribute(image, "src", snapshot.src);
+        if (snapshot.src.present) {
+          image.src = snapshot.src.value ?? "";
+        } else if (snapshot.srcProperty) {
+          image.src = snapshot.srcProperty;
+          image.removeAttribute?.("src");
+        }
+      }
+      if (!image.hasAttribute?.("srcset")) this.restoreAttribute(image, "srcset", snapshot.srcset);
+      if (!image.hasAttribute?.("sizes")) this.restoreAttribute(image, "sizes", snapshot.sizes);
+      if (!applied || image.style.width === applied.width) image.style.width = snapshot.width;
+      if (!applied || image.style.height === applied.height) image.style.height = snapshot.height;
+      if (!applied || image.dataset.aiMangaOriginalSrc === applied.originalSrc) {
+        this.restoreDatasetValue(image, "aiMangaOriginalSrc", snapshot.originalSrc);
+      }
+      if (!applied || image.dataset.aiMangaOriginalSrcset === applied.originalSrcset) {
+        this.restoreDatasetValue(image, "aiMangaOriginalSrcset", snapshot.originalSrcset);
+      }
+      if (!applied || image.dataset.aiMangaOriginalSizes === applied.originalSizes) {
+        this.restoreDatasetValue(image, "aiMangaOriginalSizes", snapshot.originalSizes);
+      }
+      snapshot.pictureSources.forEach((sourceSnapshot, index) => {
+        const source = sourceSnapshot.source;
+        const appliedSource = applied?.pictureSources?.[index];
+        if (!source.hasAttribute?.("srcset")) this.restoreAttribute(source, "srcset", sourceSnapshot.srcset);
+        if (!source.hasAttribute?.("sizes")) this.restoreAttribute(source, "sizes", sourceSnapshot.sizes);
+        if (!appliedSource || source.dataset.aiMangaOriginalSrcset === appliedSource.originalSrcset) {
+          this.restoreDatasetValue(source, "aiMangaOriginalSrcset", sourceSnapshot.originalSrcset);
+        }
+        if (!appliedSource || source.dataset.aiMangaOriginalSizes === appliedSource.originalSizes) {
+          this.restoreDatasetValue(source, "aiMangaOriginalSizes", sourceSnapshot.originalSizes);
+        }
+      });
+      if (snapshot.fading) image.classList.add?.("ai-manga-upscaler-fading");
+      else image.classList.remove?.("ai-manga-upscaler-fading");
+      if (snapshot.ready) image.classList.add?.("ai-manga-upscaler-ready");
+      else image.classList.remove?.("ai-manga-upscaler-ready");
+      if (this.activeObjectUrls.get(image) === objectUrl) {
+        if (typeof transaction.previousObjectUrl === "string") {
+          this.activeObjectUrls.set(image, transaction.previousObjectUrl);
+        } else {
+          this.activeObjectUrls.delete(image);
+        }
+      }
+      this.renderTransactions.delete(image);
+    }
+    this.revokeObjectUrl(objectUrl);
+    return true;
+  }
+
+  revokeObjectUrl(objectUrl) {
+    if (typeof objectUrl !== "string" || this.revokedObjectUrls.has(objectUrl)) return false;
+    this.revokedObjectUrls.add(objectUrl);
+    URL.revokeObjectURL(objectUrl);
+    return true;
+  }
+
+  createCancellationController() {
+    if (typeof AbortController === "function") {
+      return new AbortController();
+    }
+    const listeners = new Set();
+    const signal = {
+      aborted: false,
+      reason: null,
+      addEventListener: (_type, listener) => listeners.add(listener),
+      removeEventListener: (_type, listener) => listeners.delete(listener),
+    };
+    return {
+      signal,
+      abort(reason = "cancelled") {
+        if (signal.aborted) return;
+        signal.aborted = true;
+        signal.reason = reason;
+        for (const listener of [...listeners]) listener({ type: "abort" });
+        listeners.clear();
+      },
+    };
+  }
+
+  isOwnedSource(image) {
+    const objectUrl = this.activeObjectUrls.get(image);
+    return typeof objectUrl === "string" && (image?.src === objectUrl || image?.currentSrc === objectUrl);
+  }
+
+  releaseImageOwnership(image) {
+    const objectUrl = this.activeObjectUrls.get(image);
+    if (typeof objectUrl === "string") {
+      this.revokeObjectUrl(objectUrl);
+      this.activeObjectUrls.delete(image);
+    }
+    delete image.dataset.aiMangaOriginalSrc;
+    delete image.dataset.aiMangaOriginalSrcset;
+    delete image.dataset.aiMangaOriginalSizes;
   }
 
   freezeLayout(image, metadata) {
@@ -145,11 +444,11 @@ class Renderer {
   }
 
   preserveResponsiveAttributes(image, metadata) {
-    image.dataset.aiMangaOriginalSrc = metadata.src || "";
+    image.dataset.aiMangaOriginalSrc = metadata.src || metadata.imageUrl || image.currentSrc || image.src || "";
     image.dataset.aiMangaOriginalSrcset = metadata.srcset || "";
     image.dataset.aiMangaOriginalSizes = metadata.sizes || "";
 
-    metadata.pictureSources.forEach(({ source, srcset, sizes }) => {
+    (metadata.pictureSources || []).forEach(({ source, srcset, sizes }) => {
       source.dataset.aiMangaOriginalSrcset = srcset || "";
       source.dataset.aiMangaOriginalSizes = sizes || "";
       source.removeAttribute("srcset");
@@ -164,14 +463,36 @@ class Renderer {
     });
   }
 
-  waitForImageLoad(image) {
+  waitForImageLoad(image, signal = null) {
+    if (signal?.aborted) {
+      return Promise.reject(new Error("Image load cancelled."));
+    }
     if (image.complete) {
+      if ((image.naturalWidth || 0) <= 0) {
+        return Promise.reject(new Error("Image failed to load."));
+      }
       return Promise.resolve();
     }
 
-    return new Promise((resolve) => {
-      image.addEventListener("load", () => resolve(), { once: true });
-      image.addEventListener("error", () => resolve(), { once: true });
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        image.removeEventListener?.("load", onLoad);
+        image.removeEventListener?.("error", onError);
+        signal?.removeEventListener?.("abort", onAbort);
+      };
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+      const onLoad = () => settle(resolve);
+      const onError = () => settle(reject, new Error("Image failed to load."));
+      const onAbort = () => settle(reject, new Error("Image load cancelled."));
+      image.addEventListener("load", onLoad, { once: true });
+      image.addEventListener("error", onError, { once: true });
+      signal?.addEventListener?.("abort", onAbort, { once: true });
     });
   }
 
@@ -230,6 +551,8 @@ class ViewportImageProvider {
     this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
+    this.sliceGroups = new Map();
+    this.sliceGroupsByParent = new WeakMap();
     this.pageGeneration = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.pageOrder = 0;
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
@@ -280,12 +603,15 @@ class ViewportImageProvider {
       this.observeExistingImages();
       this.refreshPriorities();
     } else {
-      trackedImages.forEach((entry) => this.cancel(entry));
+      [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "disabled"));
+      [...trackedImages.values()].forEach((entry) => this.cancel(entry));
     }
   }
 
   reprocessVisibleImages() {
+    [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "reprocess"));
     trackedImageKeys.clear();
+    trackedImages.clear();
     completedImageKeys.clear();
     document.querySelectorAll("img").forEach((image) => this.schedule(image));
   }
@@ -329,11 +655,24 @@ class ViewportImageProvider {
     }
 
     image.dataset.aiMangaUpscalerObserved = "true";
-    const reportSeen = () => {
-      if (image.dataset.aiMangaOriginalSrc || image.dataset.aiEnhancerSliced === "true") {
-        return;
+    const reportSeen = (event = null) => {
+      if (image.dataset.aiMangaOriginalSrc) {
+        if (this.renderer?.isOwnedSource?.(image)) return;
+        this.renderer?.releaseImageOwnership?.(image);
       }
-      if (!this.imageProvider.canProcess(image)) {
+      if (image.dataset.aiEnhancerSliced === "true") {
+        const group = this.sliceGroupsByParent.get(image);
+        if (!group) return;
+        const currentMetadata = this.imageProvider.read(image);
+        const currentKey = currentMetadata.imageUrl ? this.imageKey(currentMetadata, image) : null;
+        if (currentKey === group.sourceRevision) return;
+        this.rollbackSliceGroup(group, "superseded");
+      }
+      if (event?.type === "load") {
+        const currentGeneration = Number(image.dataset.aiEnhancerSourceGeneration || "0");
+        image.dataset.aiEnhancerSourceGeneration = String(currentGeneration + 1);
+      }
+      if (!this.canProcessCandidate(image)) {
         return;
       }
       const metadata = this.imageProvider.read(image);
@@ -355,13 +694,30 @@ class ViewportImageProvider {
         return;
       }
       const imageId = existing?.imageId || this.createImageId(imageKey);
+      const operationId = existing?.operationId || this.createOperationId(imageId);
       image.dataset.aiEnhancerImageId = imageId;
+      image.dataset.aiEnhancerOperationId = operationId;
       image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
       image.dataset.aiEnhancerKey = imageKey;
       image.dataset.aiEnhancerSeen = "true";
+      if (!existing) {
+        trackedImageKeys.set(imageKey, {
+          imageId,
+          operationId,
+          sourceRevision: imageKey,
+          image,
+          metadata,
+          state: "seen",
+          baseKey: imageKey,
+          isSegment: false,
+          pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
+        });
+      }
       chrome.runtime.sendMessage({
         type: "IMAGE_SEEN",
         imageId,
+        operationId,
+        sourceRevision: imageKey,
         imageUrl: metadata.imageUrl,
         width: metadata.width,
         height: metadata.height,
@@ -386,6 +742,9 @@ class ViewportImageProvider {
       }
 
       if (entry.isIntersecting) {
+        if (!this.findByImage(image) && !this.findKeyEntryByImage(image)) {
+          this.schedule(image, true, { allowPrefetch: true });
+        }
         this.updateImagePriority(image);
       } else {
         const existing = this.findByImage(image);
@@ -394,68 +753,93 @@ class ViewportImageProvider {
     }
   }
 
-  async schedule(image, allowSegments = true) {
-    if (image.dataset.aiEnhancerRawSlice === "true" || image.dataset.aiEnhancerSliced === "true") {
+  async schedule(image, allowSegments = true, options = {}) {
+    if (image.dataset.aiEnhancerRawSlice === "true") {
       return;
     }
     const metadata = this.imageProvider.read(image);
-    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || !this.imageProvider.canProcess(image)) {
+    const activeSliceGroup = this.sliceGroupsByParent.get(image);
+    if (image.dataset.aiEnhancerSliced === "true") {
+      const nextKey = metadata.imageUrl ? this.imageKey(metadata, image) : null;
+      if (!activeSliceGroup || activeSliceGroup.sourceRevision === nextKey) return;
+      this.rollbackSliceGroup(activeSliceGroup, "superseded");
+    }
+    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || !this.canProcessCandidate(image, options)) {
       return;
     }
 
-    const existing = this.findByImage(image);
+    let existing = this.findByImage(image);
     const baseKey = this.imageKey(metadata, image);
+    const existingKeyEntry = this.findKeyEntryByImage(image);
+    if (existingKeyEntry && existingKeyEntry.baseKey !== baseKey) {
+      this.cancelPreprocessingSignal(existingKeyEntry.entry.preprocessingSignal, "superseded");
+      trackedImageKeys.delete(existingKeyEntry.baseKey);
+    }
+    if (existing && existing.baseKey !== baseKey) {
+      this.cancel(existing);
+      existing = null;
+    }
     const existingByKey = trackedImageKeys.get(baseKey);
     if (existingByKey && existingByKey.image !== image && document.documentElement.contains(existingByKey.image)) {
+      return;
+    }
+    if (
+      existingByKey?.image === image &&
+      ["preprocessing", "waiting", "processing", "sliced"].includes(existingByKey.state)
+    ) {
       return;
     }
     if (completedImageKeys.has(baseKey)) {
       return;
     }
-    const imageId = existing?.imageId || existingByKey?.imageId || image.dataset.aiEnhancerImageId || this.createImageId(baseKey);
+    const imageId = existing?.imageId || existingByKey?.imageId || this.createImageId(baseKey);
+    const operationId = existing?.operationId || existingByKey?.operationId || this.createOperationId(imageId);
     image.dataset.aiEnhancerImageId = imageId;
+    image.dataset.aiEnhancerOperationId = operationId;
     image.dataset.aiEnhancerKey = baseKey;
     image.dataset.aiEnhancerPageOrder = image.dataset.aiEnhancerPageOrder || String(this.pageOrder++);
     const pageOrder = Number(image.dataset.aiEnhancerPageOrder) || 0;
-    trackedImageKeys.set(baseKey, {
+    const operationEntry = {
       imageId,
       image,
+      operationId,
+      sourceRevision: baseKey,
       metadata,
       state: "preprocessing",
       baseKey,
       isSegment: false,
       pageOrder,
-    });
+    };
+    trackedImageKeys.set(baseKey, operationEntry);
+    trackedImages.set(imageId, operationEntry);
     if (allowSegments && this.shouldSliceImage(image)) {
-      await this.scheduleSegments(image, metadata, imageId, baseKey);
+      await this.scheduleSegments(image, metadata, imageId, operationId, baseKey);
       return;
     }
 
-    trackedImages.set(imageId, {
-      imageId,
-      image,
-      metadata,
-      state: "waiting",
-      baseKey,
-      isSegment: false,
-      pageOrder,
-    });
-    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, pageOrder });
+    operationEntry.state = "waiting";
+    chrome.runtime.sendMessage({ type: "PREPROCESSING_STARTED", imageId, operationId, sourceRevision: baseKey, pageOrder });
 
     await this.acquirePreprocessingSlot();
-    let imageData = null;
+    let readResult = { ok: false, imageData: null, reason: "read-fetch-error" };
     try {
-      if (!trackedImages.has(imageId)) return;
-      imageData = await this.readDisplayedImage(metadata.imageUrl);
+      if (!this.isCurrentImageEntry(operationEntry)) return;
+      readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
     } finally {
       this.releasePreprocessingSlot();
     }
-    if (!trackedImages.has(imageId)) return;
+    if (!this.isCurrentImageEntry(operationEntry)) return;
+    const sourceFingerprint = readResult.ok ? await this.sourceFingerprint(readResult.imageData) : null;
+    if (!this.isCurrentImageEntry(operationEntry)) return;
+    operationEntry.sourceFingerprint = sourceFingerprint;
     chrome.runtime.sendMessage({
       type: "ENQUEUE_IMAGE",
       imageId,
+      operationId,
+      sourceRevision: baseKey,
+      sourceFingerprint,
       imageUrl: metadata.imageUrl,
-      imageData,
+      imageData: readResult.ok ? readResult.imageData : null,
       cacheVariant: "full",
       pageOrder,
       viewportDistance: this.viewportDistance(image),
@@ -463,35 +847,114 @@ class ViewportImageProvider {
     });
   }
 
-  async scheduleSegments(image, metadata, imageId, baseKey) {
+  async scheduleSegments(image, metadata, imageId, operationId, baseKey) {
+    const operation = trackedImageKeys.get(baseKey);
+    if (!operation || operation.operationId !== operationId || trackedImages.get(imageId) !== operation) return;
+    const signal = this.createPreprocessingSignal();
+    operation.preprocessingSignal = signal;
     await this.acquirePreprocessingSlot();
-    let segments = [];
+    let outcome = { type: "cancel" };
     try {
-      if (!trackedImageKeys.has(baseKey)) return;
-      const imageData = await this.readDisplayedImage(metadata.imageUrl);
-      if (!imageData) {
-        trackedImageKeys.delete(baseKey);
-        await this.schedule(image, false);
+      if (!this.isCurrentKeyOperation(baseKey, operation)) {
+        this.cancelPreprocessingSignal(signal, "superseded");
         return;
       }
-      segments = await this.cropImageSegments(imageData, image);
+      const readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
+      if (!readResult.ok) {
+        outcome = { type: "fallback", reason: readResult.reason, imageData: null };
+      } else {
+        const parentFingerprintPromise = Promise.resolve(this.sourceFingerprint(readResult.imageData));
+        const segmentsPromise = Promise.resolve(this.cropImageSegments(readResult.imageData, image, signal));
+        const segments = await this.withTimeout(
+          segmentsPromise,
+          AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs * 3,
+          "slice-timeout",
+          () => {
+            this.cancelPreprocessingSignal(signal, "slice-timeout");
+            segmentsPromise.then(
+              (lateSegments) => this.discardSegments(lateSegments),
+              () => {},
+            );
+          },
+        );
+        const parentSourceFingerprint = await parentFingerprintPromise;
+        if (!this.isCurrentKeyOperation(baseKey, operation)) {
+          throw this.preprocessingError("superseded");
+        }
+        outcome = segments.length
+          ? { type: "segments", segments, parentSourceFingerprint }
+          : { type: "fallback", reason: "slice-encode-error", imageData: readResult.imageData, parentSourceFingerprint };
+      }
+    } catch (error) {
+      const reason = this.reasonFromError(error, "slice-encode-error");
+      if (reason === "cancelled" || reason === "superseded") {
+        outcome = { type: "cancel", reason };
+      } else {
+        outcome = { type: "fallback", reason, imageData: null };
+      }
     } finally {
       this.releasePreprocessingSlot();
     }
 
-    if (!segments.length) {
-      trackedImageKeys.delete(baseKey);
-      await this.schedule(image, false);
+    if (!this.isCurrentKeyOperation(baseKey, operation)) {
+      this.cancelPreprocessingSignal(signal, "superseded");
+      this.discardSegments(outcome.segments);
+      this.removeTrackedEntry(operation);
       return;
     }
 
-    const rawImages = this.renderer.installRawSlices(image, metadata, segments);
-    await Promise.all(rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
-    chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId }).catch(() => {});
-    trackedImageKeys.delete(baseKey);
-    for (const segment of segments) {
+    if (outcome.type === "fallback") {
+      await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, outcome);
+      return;
+    }
+
+    if (outcome.type !== "segments") {
+      return;
+    }
+
+    const segments = outcome.segments;
+    const transaction = typeof this.renderer.prepareRawSlices === "function"
+      ? this.renderer.prepareRawSlices(image, metadata, segments, { operationId, sourceRevision: baseKey })
+      : {
+          state: "prepared",
+          rawImages: this.renderer.installRawSlices(image, metadata, segments),
+          commit() { this.state = "committed"; return true; },
+          rollback: () => this.discardSegments(segments),
+        };
+    try {
+      await Promise.all(transaction.rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
+    } catch {
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+    if (!this.isCurrentKeyOperation(baseKey, operation)) {
+      this.cancelPreprocessingSignal(signal, "superseded");
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+
+    let segmentFingerprints;
+    try {
+      segmentFingerprints = await Promise.all(segments.map((segment) => this.sourceFingerprint(segment.imageData)));
+    } catch {
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+    if (!this.isCurrentKeyOperation(baseKey, operation)) {
+      this.cancelPreprocessingSignal(signal, "superseded");
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+
+    const records = segments.map((segment, position) => {
       const segmentId = `${imageId}-seg-${segment.index}`;
-      const rawImage = rawImages[segment.index];
+      const segmentOperationId = `${operationId}-seg-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`;
+      const segmentSourceFingerprint = segmentFingerprints[position];
+      const rawImage = transaction.rawImages[position];
       const segmentKey = `${baseKey}#segment:${segment.index}:${segment.sourceY}:${segment.sourceHeight}`;
       const segmentOrder = (Number(image.dataset.aiEnhancerPageOrder) || 0) + (segment.index / 1000);
       const segmentMetadata = {
@@ -504,45 +967,408 @@ class ViewportImageProvider {
         height: segment.renderedHeight,
         pictureSources: [],
       };
-      trackedImageKeys.set(segmentKey, {
+      return {
+        segment,
+        rawImage,
         imageId: segmentId,
-        image: rawImage,
+        operationId: segmentOperationId,
+        sourceRevision: segmentKey,
+        sourceFingerprint: segmentSourceFingerprint,
+        requiredSliceToken: rawImage?.dataset?.aiEnhancerSliceToken || null,
         metadata: segmentMetadata,
-        state: "waiting",
-        baseKey: segmentKey,
-        parentKey: baseKey,
-        isSegment: true,
         pageOrder: segmentOrder,
-      });
-      trackedImages.set(segmentId, {
-        imageId: segmentId,
-        image: rawImage,
-        metadata: segmentMetadata,
-        state: "waiting",
-        baseKey: segmentKey,
-        parentKey: baseKey,
-        isSegment: true,
-        pageOrder: segmentOrder,
-      });
-      chrome.runtime.sendMessage({
-        type: "PREPROCESSING_STARTED",
-        imageId: segmentId,
-        pageOrder: segmentOrder,
-      });
-      chrome.runtime.sendMessage({
-        type: "ENQUEUE_IMAGE",
-        imageId: segmentId,
-        imageUrl: metadata.imageUrl,
-        imageData: segment.imageData,
-        cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
-        pageOrder: segmentOrder,
-        viewportDistance: this.viewportDistance(rawImage) + segment.index,
-        displayMetrics: {
-          ...this.displayMetrics(rawImage),
-          sourceHeight: segment.sourceHeight,
-          renderedHeight: segment.renderedHeight,
-        },
-      });
+      };
+    });
+    if (records.some((record) => !record.rawImage)) {
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+
+    const group = {
+      token: transaction.token || `${operationId}|${baseKey}`,
+      state: "prepared",
+      parent: image,
+      parentEntry: operation,
+      parentImageId: imageId,
+      operationId,
+      sourceRevision: baseKey,
+      parentSourceFingerprint: outcome.parentSourceFingerprint || null,
+      transaction,
+      records,
+      completed: new Set(),
+    };
+    if (transaction.commit() === false) {
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+    if (!this.isCurrentKeyOperation(baseKey, operation)) {
+      this.cancelPreprocessingSignal(signal, "superseded");
+      transaction.rollback();
+      this.removeTrackedEntry(operation);
+      return;
+    }
+
+    group.state = "committed";
+    operation.state = "sliced";
+    operation.sliceGroup = group;
+    this.sliceGroups.set(group.token, group);
+    this.sliceGroupsByParent.set(image, group);
+    try {
+      for (const record of records) {
+        const { segment, rawImage, imageId: segmentId, operationId: segmentOperationId, sourceRevision: segmentKey, metadata: segmentMetadata, pageOrder: segmentOrder } = record;
+        rawImage.dataset = rawImage.dataset || {};
+        rawImage.dataset.aiEnhancerImageId = segmentId;
+        rawImage.dataset.aiEnhancerOperationId = segmentOperationId;
+        rawImage.dataset.aiEnhancerKey = segmentKey;
+        rawImage.dataset.aiEnhancerParentOperationId = operationId;
+        rawImage.dataset.aiEnhancerSegmentIndex = String(segment.index);
+        rawImage.dataset.aiEnhancerSourceY = String(segment.sourceY);
+        rawImage.dataset.aiEnhancerSourceHeight = String(segment.sourceHeight);
+        const segmentEntry = {
+          imageId: segmentId,
+          operationId: segmentOperationId,
+          sourceRevision: segmentKey,
+          sourceFingerprint: record.sourceFingerprint,
+          parentSourceFingerprint: group.parentSourceFingerprint,
+          image: rawImage,
+          metadata: segmentMetadata,
+          state: "waiting",
+          baseKey: segmentKey,
+          parentKey: baseKey,
+          isSegment: true,
+          pageOrder: segmentOrder,
+          sliceGroup: group,
+          segmentRecord: record,
+        };
+        record.entry = segmentEntry;
+        trackedImageKeys.set(segmentKey, segmentEntry);
+        trackedImages.set(segmentId, segmentEntry);
+        await chrome.runtime.sendMessage({
+          type: "PREPROCESSING_STARTED",
+          imageId: segmentId,
+          operationId: segmentOperationId,
+          sourceRevision: segmentKey,
+          pageOrder: segmentOrder,
+        });
+        await chrome.runtime.sendMessage({
+          type: "ENQUEUE_IMAGE",
+          imageId: segmentId,
+          operationId: segmentOperationId,
+          sourceRevision: segmentKey,
+          sourceFingerprint: record.sourceFingerprint,
+          parentSourceFingerprint: group.parentSourceFingerprint,
+          imageUrl: metadata.imageUrl,
+          imageData: segment.imageData,
+          cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
+          pageOrder: segmentOrder,
+          viewportDistance: this.viewportDistance(rawImage) + segment.index,
+          displayMetrics: {
+            ...this.displayMetrics(rawImage),
+            sourceHeight: segment.sourceHeight,
+            renderedHeight: segment.renderedHeight,
+          },
+        });
+      }
+    } catch {
+      this.rollbackSliceGroup(group, "segment-registration-failed");
+      return;
+    }
+    chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId, operationId }).catch(() => {});
+  }
+
+  isCurrentKeyOperation(baseKey, operation) {
+    return operation && trackedImageKeys.get(baseKey) === operation;
+  }
+
+  isCurrentImageEntry(entry) {
+    return Boolean(
+      entry &&
+      trackedImages.get(entry.imageId) === entry &&
+      trackedImageKeys.get(entry.baseKey) === entry
+    );
+  }
+
+  removeTrackedEntry(entry) {
+    if (!entry) return false;
+    let removed = false;
+    if (trackedImages.get(entry.imageId) === entry) {
+      trackedImages.delete(entry.imageId);
+      removed = true;
+    }
+    if (entry.baseKey && trackedImageKeys.get(entry.baseKey) === entry) {
+      trackedImageKeys.delete(entry.baseKey);
+      removed = true;
+    }
+    return removed;
+  }
+
+  isCurrentSegmentEntry(entry) {
+    if (!entry?.isSegment || !this.isCurrentImageEntry(entry)) return false;
+    const group = entry.sliceGroup;
+    const record = entry.segmentRecord;
+    if (
+      !group ||
+      group.state !== "committed" ||
+      group.transaction?.state !== "committed" ||
+      this.sliceGroups.get(group.token) !== group ||
+      this.sliceGroupsByParent.get(group.parent) !== group ||
+      record?.entry !== entry ||
+      record?.rawImage !== entry.image
+    ) {
+      return false;
+    }
+    const rawToken = entry.image.dataset?.aiEnhancerSliceToken;
+    const requiredToken = record?.requiredSliceToken || null;
+    if (requiredToken) return rawToken === requiredToken;
+    return !rawToken || rawToken === group.token || rawToken === group.transaction?.token;
+  }
+
+  rollbackSliceGroup(group, reason = "cancelled", options = {}) {
+    if (!group || group.state === "rolledBack") return false;
+    group.state = "rolledBack";
+    group.reason = reason;
+    group.transaction?.rollback?.();
+    const cancelJobs = options.cancelJobs !== false;
+    for (const record of group.records || []) {
+      const entry = record.entry;
+      if (entry && this.isCurrentImageEntry(entry)) {
+        if (cancelJobs) {
+          try {
+            chrome.runtime.sendMessage({
+              type: "CANCEL_IMAGE",
+              imageId: entry.imageId,
+              operationId: entry.operationId,
+              sourceRevision: entry.sourceRevision,
+            });
+          } catch {
+            // Rollback must finish even when cancellation transport is unavailable.
+          }
+        }
+        this.removeTrackedEntry(entry);
+      }
+      if (entry?.baseKey) completedImageKeys.delete(entry.baseKey);
+    }
+    this.removeTrackedEntry(group.parentEntry);
+    this.sliceGroups.delete(group.token);
+    if (this.sliceGroupsByParent.get(group.parent) === group) {
+      this.sliceGroupsByParent.delete(group.parent);
+    }
+    const parent = group.parent;
+    if (parent?.dataset?.aiEnhancerOperationId === group.operationId) {
+      parent.dataset.aiEnhancerSeen = "false";
+      delete parent.dataset.aiEnhancerImageId;
+      delete parent.dataset.aiEnhancerOperationId;
+      delete parent.dataset.aiEnhancerKey;
+    }
+    return true;
+  }
+
+  isCurrentImageOperation(imageId, operationId, sourceRevision) {
+    const entry = trackedImages.get(imageId);
+    return Boolean(entry && entry.operationId === operationId && entry.sourceRevision === sourceRevision);
+  }
+
+  async enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, outcome = {}) {
+    if (!this.isCurrentKeyOperation(baseKey, operation)) {
+      return;
+    }
+
+    const pageOrder = Number(image.dataset.aiEnhancerPageOrder) || 0;
+    const fallbackEntry = {
+      imageId,
+      operationId,
+      sourceRevision: baseKey,
+      image,
+      metadata,
+      state: "waiting",
+      baseKey,
+      isSegment: false,
+      pageOrder,
+    };
+    trackedImageKeys.set(baseKey, fallbackEntry);
+    trackedImages.set(imageId, fallbackEntry);
+    chrome.runtime.sendMessage({
+      type: "PREPROCESSING_FALLBACK",
+      imageId,
+      operationId,
+      sourceRevision: baseKey,
+      pageOrder,
+      reason: outcome.reason || "read-fetch-error",
+    });
+    if (trackedImages.get(imageId) !== fallbackEntry || trackedImageKeys.get(baseKey) !== fallbackEntry) return;
+    const sourceFingerprint = outcome.parentSourceFingerprint || (outcome.imageData ? await this.sourceFingerprint(outcome.imageData) : null);
+    if (trackedImages.get(imageId) !== fallbackEntry || trackedImageKeys.get(baseKey) !== fallbackEntry) return;
+    fallbackEntry.sourceFingerprint = sourceFingerprint;
+    chrome.runtime.sendMessage({
+      type: "ENQUEUE_IMAGE",
+      imageId,
+      operationId,
+      sourceRevision: baseKey,
+      sourceFingerprint,
+      imageUrl: metadata.imageUrl,
+      imageData: outcome.imageData || null,
+      cacheVariant: "full",
+      pageOrder,
+      viewportDistance: this.viewportDistance(image),
+      displayMetrics: this.displayMetrics(image),
+    });
+  }
+
+  createPreprocessingSignal() {
+    return {
+      cancelled: false,
+      reason: null,
+      objectUrls: new Set(),
+    };
+  }
+
+  cancelPreprocessingSignal(signal, reason) {
+    if (!signal || signal.cancelled) return;
+    signal.cancelled = true;
+    signal.reason = reason;
+  }
+
+  isPreprocessingCancelled(signal) {
+    return Boolean(signal?.cancelled);
+  }
+
+  preprocessingError(reason, message = reason) {
+    const error = new Error(message);
+    error.reason = reason;
+    return error;
+  }
+
+  reasonFromError(error, fallbackReason) {
+    return typeof error?.reason === "string" ? error.reason : fallbackReason;
+  }
+
+  normalizeReadResult(result) {
+    if (typeof result === "string") {
+      return { ok: true, imageData: result };
+    }
+    if (result?.ok === true) {
+      return { ok: true, imageData: result.imageData || "" };
+    }
+    return {
+      ok: false,
+      imageData: null,
+      reason: typeof result?.reason === "string" ? result.reason : "read-fetch-error",
+    };
+  }
+
+  async sourceFingerprint(imageData) {
+    if (!imageData) return null;
+    const bytes = this.imageDataToBytes(imageData);
+    if (bytes.length <= 4096) {
+      return `sha256:${this.sha256Bytes(bytes)}`;
+    }
+    if (globalThis.crypto?.subtle) {
+      try {
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+        return `sha256:${this.bytesToHex(new Uint8Array(digest))}`;
+      } catch {
+        // Continue with the deterministic implementation below.
+      }
+    }
+    return `sha256:${this.sha256Bytes(bytes)}`;
+  }
+
+  imageDataToBytes(imageData) {
+    try {
+      return this.base64ToBytes(imageData);
+    } catch {
+      return new TextEncoder().encode(String(imageData));
+    }
+  }
+
+  base64ToBytes(base64Value) {
+    const binary = atob(base64Value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  bytesToHex(bytes) {
+    return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  sha256Bytes(bytes) {
+    const constants = new Uint32Array([
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ]);
+    const bitLength = bytes.length * 8;
+    const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(bytes);
+    padded[bytes.length] = 0x80;
+    const view = new DataView(padded.buffer);
+    view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000), false);
+    view.setUint32(paddedLength - 4, bitLength >>> 0, false);
+    const hash = new Uint32Array([
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    const words = new Uint32Array(64);
+    const rotateRight = (value, count) => (value >>> count) | (value << (32 - count));
+    for (let offset = 0; offset < paddedLength; offset += 64) {
+      for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(offset + index * 4, false);
+      for (let index = 16; index < 64; index += 1) {
+        const left = words[index - 15];
+        const right = words[index - 2];
+        const sigma0 = rotateRight(left, 7) ^ rotateRight(left, 18) ^ (left >>> 3);
+        const sigma1 = rotateRight(right, 17) ^ rotateRight(right, 19) ^ (right >>> 10);
+        words[index] = (words[index - 16] + sigma0 + words[index - 7] + sigma1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, h] = hash;
+      for (let index = 0; index < 64; index += 1) {
+        const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+        const choice = (e & f) ^ (~e & g);
+        const temporary1 = (h + sum1 + choice + constants[index] + words[index]) >>> 0;
+        const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+        const majority = (a & b) ^ (a & c) ^ (b & c);
+        const temporary2 = (sum0 + majority) >>> 0;
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temporary1) >>> 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temporary1 + temporary2) >>> 0;
+      }
+      hash[0] = (hash[0] + a) >>> 0;
+      hash[1] = (hash[1] + b) >>> 0;
+      hash[2] = (hash[2] + c) >>> 0;
+      hash[3] = (hash[3] + d) >>> 0;
+      hash[4] = (hash[4] + e) >>> 0;
+      hash[5] = (hash[5] + f) >>> 0;
+      hash[6] = (hash[6] + g) >>> 0;
+      hash[7] = (hash[7] + h) >>> 0;
+    }
+    const digest = new Uint8Array(32);
+    const digestView = new DataView(digest.buffer);
+    hash.forEach((value, index) => digestView.setUint32(index * 4, value, false));
+    return this.bytesToHex(digest);
+  }
+
+  discardSegments(segments) {
+    if (!Array.isArray(segments)) return;
+    for (const segment of segments) {
+      if (typeof segment?.objectUrl === "string") {
+        if (typeof this.renderer?.revokeObjectUrl === "function") this.renderer.revokeObjectUrl(segment.objectUrl);
+        else URL.revokeObjectURL(segment.objectUrl);
+      }
     }
   }
 
@@ -553,29 +1379,129 @@ class ViewportImageProvider {
     return sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
   }
 
-  async cropImageSegments(imageData, image) {
+  canProcessCandidate(image, options = {}) {
+    if (!this.isVisibleCandidate(image, options)) {
+      return false;
+    }
+    return this.imageProvider.canProcess(image, {
+      allowTallImage: this.imageSlicingEnabled && this.shouldSliceImage(image),
+    });
+  }
+
+  isVisibleCandidate(image, options = {}) {
+    if (!image || image.dataset?.aiEnhancerRawSlice === "true" || image.dataset?.aiEnhancerSliced === "true") {
+      return false;
+    }
+    if (
+      image.hidden ||
+      (typeof image.getAttribute === "function" && image.getAttribute("hidden") !== null) ||
+      (typeof image.getAttribute === "function" && image.getAttribute("aria-hidden") === "true")
+    ) {
+      return false;
+    }
+    if (document.documentElement?.contains && !document.documentElement.contains(image)) {
+      return false;
+    }
+    const rect = image.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(image) : image.style || {};
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity ?? 1) <= 0.05) {
+      return false;
+    }
+    const position = style.position || "";
+    const viewportArea = Math.max(window.innerWidth || 0, 1) * Math.max(window.innerHeight || 0, 1);
+    const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth || rect.right) - Math.max(rect.left, 0));
+    const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight || rect.bottom) - Math.max(rect.top, 0));
+    const visibleArea = visibleWidth * visibleHeight;
+    if (visibleArea <= 0 && options.allowPrefetch !== true) {
+      return false;
+    }
+    if ((position === "fixed" || position === "sticky") && visibleArea / viewportArea > 0.35) {
+      return false;
+    }
+    if (visibleArea <= 0) {
+      return true;
+    }
+    return this.visibleByHitTesting(image, rect);
+  }
+
+  visibleByHitTesting(image, rect) {
+    if (typeof document.elementsFromPoint !== "function") {
+      return true;
+    }
+    const left = Math.max(rect.left, 0);
+    const right = Math.min(rect.right, window.innerWidth || rect.right);
+    const top = Math.max(rect.top, 0);
+    const bottom = Math.min(rect.bottom, window.innerHeight || rect.bottom);
+    const points = [
+      [left + (right - left) * 0.5, top + (bottom - top) * 0.2],
+      [left + (right - left) * 0.5, top + (bottom - top) * 0.5],
+      [left + (right - left) * 0.5, top + (bottom - top) * 0.8],
+      [left + (right - left) * 0.25, top + (bottom - top) * 0.5],
+      [left + (right - left) * 0.75, top + (bottom - top) * 0.5],
+    ];
+    let visible = 0;
+    for (const [x, y] of points) {
+      const stack = document.elementsFromPoint(x, y);
+      const relatedIndex = stack.findIndex((element) => (
+        element === image || image.contains?.(element) || element?.contains?.(image)
+      ));
+      if (relatedIndex < 0) continue;
+      const blocked = stack.slice(0, relatedIndex).some((element) => {
+        if (element === image || image.contains?.(element) || element?.contains?.(image)) return false;
+        const style = typeof getComputedStyle === "function" ? getComputedStyle(element) : element?.style || {};
+        if (style.pointerEvents === "none") return false;
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        return Number(style.opacity ?? 1) > 0.05;
+      });
+      if (!blocked) {
+        visible += 1;
+      }
+    }
+    return visible / points.length > 0.4;
+  }
+
+  async cropImageSegments(imageData, image, signal = null) {
     const source = await this.decodeBase64Image(imageData);
+    if (this.isPreprocessingCancelled(signal)) {
+      throw this.preprocessingError(signal.reason || "cancelled");
+    }
     const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || source.height;
     const sourcePerRenderedPixel = source.height / Math.max(renderedHeight, 1);
     const screenSourceHeight = Math.round((window.innerHeight || 900) * 1.25 * sourcePerRenderedPixel);
     const segmentSourceHeight = Math.min(Math.max(screenSourceHeight, 512), this.imageSliceMaxHeight);
     const renderedPerSourcePixel = renderedHeight / source.height;
     const segments = [];
-    for (let sourceY = 0, index = 0; sourceY < source.height; sourceY += segmentSourceHeight, index += 1) {
-      const sourceHeight = Math.min(segmentSourceHeight, source.height - sourceY);
-      const canvas = document.createElement("canvas");
-      canvas.width = source.width;
-      canvas.height = sourceHeight;
-      const context = canvas.getContext("2d", { alpha: false });
-      context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
-      segments.push({
-        index,
-        sourceY,
-        sourceHeight,
-        renderedTop: sourceY * renderedPerSourcePixel,
-        renderedHeight: sourceHeight * renderedPerSourcePixel,
-        ...(await this.canvasToSegmentPayload(canvas)),
-      });
+    try {
+      for (let sourceY = 0, index = 0; sourceY < source.height; sourceY += segmentSourceHeight, index += 1) {
+        if (this.isPreprocessingCancelled(signal)) {
+          throw this.preprocessingError(signal.reason || "cancelled");
+        }
+        const sourceHeight = Math.min(segmentSourceHeight, source.height - sourceY);
+        const canvas = document.createElement("canvas");
+        canvas.width = source.width;
+        canvas.height = sourceHeight;
+        const context = canvas.getContext("2d", { alpha: false });
+        context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
+        const payload = await this.canvasToSegmentPayload(canvas, signal);
+        if (this.isPreprocessingCancelled(signal)) {
+          this.discardSegments([payload]);
+          throw this.preprocessingError(signal.reason || "cancelled");
+        }
+        segments.push({
+          index,
+          sourceY,
+          sourceHeight,
+          renderedTop: sourceY * renderedPerSourcePixel,
+          renderedHeight: sourceHeight * renderedPerSourcePixel,
+          ...payload,
+        });
+      }
+    } catch (error) {
+      this.discardSegments(segments);
+      throw error;
     }
     return segments;
   }
@@ -584,7 +1510,7 @@ class ViewportImageProvider {
     return new Promise((resolve, reject) => {
       const image = new Image();
       image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("Unable to decode displayed image for segmentation."));
+      image.onerror = () => reject(this.preprocessingError("slice-decode-error", "Unable to decode displayed image for segmentation."));
       image.src = `data:${this.detectImageMime(imageData)};base64,${imageData}`;
     });
   }
@@ -597,25 +1523,61 @@ class ViewportImageProvider {
     return "image/png";
   }
 
-  canvasToSegmentPayload(canvas) {
+  canvasToSegmentPayload(canvas, signal = null) {
     return new Promise((resolve, reject) => {
+      if (this.isPreprocessingCancelled(signal)) {
+        reject(this.preprocessingError(signal.reason || "cancelled"));
+        return;
+      }
       canvas.toBlob((blob) => {
         if (!blob) {
-          reject(new Error("Unable to encode image segment."));
+          reject(this.preprocessingError("slice-encode-error", "Unable to encode image segment."));
           return;
         }
         const objectUrl = URL.createObjectURL(blob);
+        signal?.objectUrls?.add(objectUrl);
+        if (this.isPreprocessingCancelled(signal)) {
+          URL.revokeObjectURL(objectUrl);
+          reject(this.preprocessingError(signal.reason || "cancelled"));
+          return;
+        }
         const reader = new FileReader();
-        reader.onload = () => resolve({
-          objectUrl,
-          imageData: String(reader.result).split(",", 2)[1] || "",
-        });
+        reader.onload = () => {
+          if (this.isPreprocessingCancelled(signal)) {
+            URL.revokeObjectURL(objectUrl);
+            reject(this.preprocessingError(signal.reason || "cancelled"));
+            return;
+          }
+          resolve({
+            objectUrl,
+            imageData: String(reader.result).split(",", 2)[1] || "",
+          });
+        };
         reader.onerror = () => {
           URL.revokeObjectURL(objectUrl);
-          reject(new Error("Unable to read image segment."));
+          reject(this.preprocessingError("slice-encode-error", "Unable to read image segment."));
         };
         reader.readAsDataURL(blob);
       }, "image/png");
+    });
+  }
+
+  withTimeout(promise, timeoutMs, reason, onTimeout = null) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (onTimeout) onTimeout();
+        reject(this.preprocessingError(reason));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      );
     });
   }
 
@@ -623,7 +1585,9 @@ class ViewportImageProvider {
     try {
       const url = new URL(imageUrl, document.baseURI);
       const segment = url.hash.startsWith("#ai-segment-") ? url.hash : "";
-      return `${url.origin}${url.pathname}${segment}`;
+      url.hash = segment;
+      url.searchParams.sort();
+      return url.toString();
     } catch {
       return imageUrl;
     }
@@ -636,7 +1600,8 @@ class ViewportImageProvider {
     const height = Math.round(metadata.height || rect.height || image.naturalHeight || 0);
     const sourceWidth = image.naturalWidth || width;
     const sourceHeight = image.naturalHeight || height;
-    return `${this.pageGeneration}|${normalizedUrl}|${sourceWidth}x${sourceHeight}|render:${width}x${height}`;
+    const sourceGeneration = image.dataset?.aiEnhancerSourceGeneration || "0";
+    return `${this.pageGeneration}|${normalizedUrl}|${sourceWidth}x${sourceHeight}|render:${width}x${height}|gen:${sourceGeneration}`;
   }
 
   createImageId(imageKey) {
@@ -645,6 +1610,10 @@ class ViewportImageProvider {
       hash = ((hash << 5) - hash + imageKey.charCodeAt(index)) | 0;
     }
     return `ai-image-${Math.abs(hash).toString(36)}-${this.sequence++}`;
+  }
+
+  createOperationId(imageId) {
+    return `${imageId}-op-${this.sequence++}`;
   }
 
   acquirePreprocessingSlot() {
@@ -695,7 +1664,11 @@ class ViewportImageProvider {
 
   async readDisplayedImage(imageUrl) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
     try {
       const response = await fetch(imageUrl, {
         cache: "force-cache",
@@ -703,11 +1676,11 @@ class ViewportImageProvider {
         signal: controller.signal,
       });
       if (!response.ok) {
-        return null;
+        return { ok: false, imageData: null, reason: "read-http-error" };
       }
       const buffer = await response.arrayBuffer();
       if (!this.isImageBuffer(buffer)) {
-        return null;
+        return { ok: false, imageData: null, reason: "read-non-image" };
       }
       const bytes = new Uint8Array(buffer);
       const chunkSize = 0x8000;
@@ -715,9 +1688,13 @@ class ViewportImageProvider {
       for (let index = 0; index < bytes.length; index += chunkSize) {
         binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
       }
-      return btoa(binary);
-    } catch {
-      return null;
+      return { ok: true, imageData: btoa(binary) };
+    } catch (error) {
+      return {
+        ok: false,
+        imageData: null,
+        reason: timedOut || error?.name === "AbortError" ? "read-timeout" : "read-fetch-error",
+      };
     } finally {
       clearTimeout(timeout);
     }
@@ -745,46 +1722,96 @@ class ViewportImageProvider {
   }
 
   updateImagePriority(image, imageId = null) {
-    const targetId = imageId || image.dataset.aiEnhancerImageId;
+    const entry = imageId ? trackedImages.get(imageId) : this.findByImage(image);
+    const targetId = entry?.imageId || imageId || image.dataset.aiEnhancerImageId;
     if (!targetId) return;
     chrome.runtime.sendMessage({
       type: "UPDATE_PRIORITY",
       imageId: targetId,
+      operationId: entry?.operationId || image.dataset.aiEnhancerOperationId || null,
       viewportDistance: this.viewportDistance(image),
     });
   }
 
   async complete(message) {
     const entry = trackedImages.get(message.imageId);
-    if (!entry) {
-      return;
+    if (!this.isCurrentMessage(entry, message) || (entry?.isSegment && !this.isCurrentSegmentEntry(entry))) {
+      return "stale";
     }
 
     entry.state = "processing";
-    await this.renderer.render(entry.image, message);
-    trackedImages.delete(message.imageId);
+    const isCurrent = () => {
+      const currentEntry = trackedImages.get(message.imageId);
+      return this.isCurrentMessage(currentEntry, message) && (!currentEntry?.isSegment || this.isCurrentSegmentEntry(currentEntry));
+    };
+    const renderOutcome = await this.renderer.render(entry.image, message, isCurrent);
+    const outcome = renderOutcome || "rendered";
+    if (!isCurrent()) {
+      return "stale";
+    }
+    if (outcome === "stale") {
+      entry.state = "waiting";
+      return "stale";
+    }
+    if (outcome === "load-error") {
+      if (entry.sliceGroup) this.rollbackSliceGroup(entry.sliceGroup, "segment-load-error");
+      else this.removeTrackedEntry(entry);
+      return "load-error";
+    }
+    this.removeTrackedEntry(entry);
     if (entry.baseKey) {
-      trackedImageKeys.delete(entry.baseKey);
       completedImageKeys.add(entry.baseKey);
     }
+    if (entry.sliceGroup) entry.sliceGroup.completed.add(entry.segmentRecord);
+    return "rendered";
   }
 
-  fail(imageId, permanent = false) {
+  isCurrentMessage(entry, message) {
+    return Boolean(
+      entry &&
+      entry.operationId === message.operationId &&
+      entry.sourceRevision === message.sourceRevision &&
+      (entry.sourceFingerprint || null) === (message.sourceFingerprint || null)
+    );
+  }
+
+  fail(imageId, permanent = false, operationId = null, sourceRevision = null) {
     const entry = trackedImages.get(imageId);
+    if (!entry || entry.operationId !== operationId || entry.sourceRevision !== sourceRevision) {
+      return;
+    }
+    if (entry.sliceGroup) {
+      this.rollbackSliceGroup(entry.sliceGroup, permanent ? "segment-permanent-failure" : "segment-failure");
+      return;
+    }
     if (entry && !permanent) {
-      trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
+      if (trackedImageKeys.get(entry.baseKey || this.processingKey(entry.metadata.imageUrl)) === entry) {
+        trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
+      }
     }
     if (entry && permanent && entry.baseKey) completedImageKeys.add(entry.baseKey);
-    trackedImages.delete(imageId);
+    if (trackedImages.get(imageId) === entry) trackedImages.delete(imageId);
   }
 
   cancel(entry) {
+    if (!entry) return;
+    if (entry.sliceGroup) {
+      this.rollbackSliceGroup(entry.sliceGroup, "cancelled");
+      return;
+    }
+    const parentGroup = entry.image ? this.sliceGroupsByParent.get(entry.image) : null;
+    if (parentGroup) {
+      this.rollbackSliceGroup(parentGroup, "cancelled");
+      return;
+    }
     chrome.runtime.sendMessage({
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
+      operationId: entry.operationId,
+      sourceRevision: entry.sourceRevision,
     });
-    trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
-    trackedImages.delete(entry.imageId);
+    this.cancelPreprocessingSignal(entry.preprocessingSignal, "cancelled");
+    this.removeTrackedEntry(entry);
   }
 
   cleanupRemovedNode(node) {
@@ -795,13 +1822,22 @@ class ViewportImageProvider {
       removedImages.push(...node.querySelectorAll("img"));
     }
     for (const image of removedImages) {
+      const parentGroup = this.sliceGroupsByParent.get(image);
+      const preserveCommittedSliceParent = Boolean(
+        parentGroup &&
+        parentGroup.state === "committed" &&
+        image.dataset?.aiEnhancerSliced === "true"
+      );
       const entry = this.findByImage(image);
-      if (entry) {
+      if (entry && !preserveCommittedSliceParent) {
         this.cancel(entry);
       }
       for (const [key, keyedEntry] of trackedImageKeys.entries()) {
+        if (preserveCommittedSliceParent && keyedEntry === parentGroup.parentEntry) {
+          continue;
+        }
         if (keyedEntry.image === image) {
-          chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId: keyedEntry.imageId }).catch(() => {});
+          chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId: keyedEntry.imageId, operationId: keyedEntry.operationId }).catch(() => {});
           trackedImageKeys.delete(key);
           completedImageKeys.delete(key);
         }
@@ -811,13 +1847,22 @@ class ViewportImageProvider {
       }
       if (image.dataset?.aiEnhancerImageId) {
         const byId = trackedImages.get(image.dataset.aiEnhancerImageId);
-        if (byId) this.cancel(byId);
+        if (!preserveCommittedSliceParent && byId?.image === image && byId.operationId === image.dataset.aiEnhancerOperationId) this.cancel(byId);
       }
     }
   }
 
   findByImage(image) {
     return [...trackedImages.values()].find((entry) => entry.image === image) || null;
+  }
+
+  findKeyEntryByImage(image) {
+    for (const [baseKey, entry] of trackedImageKeys.entries()) {
+      if (entry.image === image) {
+        return { baseKey, entry };
+      }
+    }
+    return null;
   }
 
   viewportDistance(image) {
@@ -920,7 +1965,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "UPSCALE_FAILED") {
-    viewportProvider.fail(message.imageId, Boolean(message.permanent));
+    viewportProvider.fail(message.imageId, Boolean(message.permanent), message.operationId, message.sourceRevision);
   }
 
   if (message.type === "SET_PREVIEW_ORIGINAL") {

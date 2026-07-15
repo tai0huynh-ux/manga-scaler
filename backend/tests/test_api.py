@@ -1,8 +1,7 @@
 """Application lifecycle and health API tests."""
 
-from fastapi.testclient import TestClient
-
 from app.main import app
+from fastapi.testclient import TestClient
 
 
 def test_health_is_available_without_model_artifacts() -> None:

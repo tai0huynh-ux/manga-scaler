@@ -6,15 +6,21 @@ stages clearly:
 
 1. visual text-region detection and cleanup, implemented with Pillow/NumPy;
 2. optional OCR capability probing, currently Tesseract-compatible;
-3. optional translation/render metadata, reported as unavailable until a real
-   provider is configured.
+3. optional translation/render metadata with local translation memory.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import shutil
+import threading
+import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -103,8 +109,15 @@ class TextProcessingOptions:
 class TextProcessor:
     """Detect text-like marks, remove old text, and prepare translation metadata."""
 
-    def __init__(self, config: TextProcessingConfig) -> None:
+    def __init__(self, config: TextProcessingConfig, history_path: Path | None = None) -> None:
         self.config = config
+        self.history_path = history_path
+        self.history_limit = 800
+        self.context_lines = 4
+        self._history_lock = threading.RLock()
+        self._translation_memory: dict[tuple[str, str, str], str] = {}
+        self._translation_history: list[dict[str, str]] = []
+        self._load_translation_history()
 
     def capabilities(self) -> dict[str, Any]:
         """Return deterministic capability diagnostics for UI and tests."""
@@ -121,11 +134,12 @@ class TextProcessor:
             "ocrEngine": "tesseract" if tesseract_path and pytesseract_available else None,
             "tesseractPath": tesseract_path,
             "pytesseractAvailable": pytesseract_available,
-            "translationAvailable": False,
-            "translationProvider": None,
+            "translationAvailable": True,
+            "translationProvider": "google-web",
+            "translationMemoryEntries": len(self._translation_history),
             "message": (
-                "Text cleanup is available. Install Tesseract + pytesseract and configure a translation provider "
-                "before enabling real OCR translation."
+                "Text cleanup is available. Install Tesseract + pytesseract for OCR. Translation uses a best-effort "
+                "online Google Translate endpoint and local translation memory when OCR text is available."
             ),
         }
 
@@ -149,6 +163,11 @@ class TextProcessor:
 
         mask = self._detect_text_mask(image)
         regions = self._detect_regions(mask, image.width, image.height)
+        if caps["ocrAvailable"]:
+            ocr_regions = self._recognize_text_regions(image, options)
+            if ocr_regions:
+                regions = ocr_regions
+                mask = self._mask_from_regions(image.size, regions)
         processed = image.copy()
         mask_pixels = int(np.count_nonzero(np.asarray(mask, dtype=np.uint8)))
 
@@ -159,15 +178,17 @@ class TextProcessor:
         if options.translate:
             if not caps["ocrAvailable"]:
                 warnings.append("OCR is not available; translation was skipped instead of guessing text.")
-            if not caps["translationAvailable"]:
-                warnings.append("No translation provider is configured; translated text was not rendered.")
+            elif not any(region.text for region in regions):
+                warnings.append("OCR did not return usable text; translation was skipped.")
 
-        if options.translate and caps["ocrAvailable"] and caps["translationAvailable"] and options.render_text:
-            # Reserved integration point for the real OCR/translation provider.
-            # Keeping this branch explicit prevents a future implementation from
-            # accidentally reporting translation success without rendered text.
-            processed = self._render_translations(processed, [])
-            translation_applied = True
+        if options.translate and caps["ocrAvailable"] and options.render_text:
+            translated_regions, translation_warnings = self._translate_regions(regions, options)
+            warnings.extend(translation_warnings)
+            renderable = [region for region in translated_regions if region.translated_text]
+            if renderable:
+                processed = self._render_translations(processed, renderable)
+                regions = translated_regions
+                translation_applied = True
 
         return TextProcessingResult(
             image=processed,
@@ -267,17 +288,328 @@ class TextProcessor:
         cleaned.paste(background, mask=mask)
         return cleaned
 
+    def _recognize_text_regions(self, image: Image.Image, options: TextProcessingOptions) -> list[TextRegion]:
+        """Use Tesseract word boxes grouped by OCR line when available."""
+        try:
+            import pytesseract
+            from pytesseract import Output
+        except ImportError:
+            return []
+
+        try:
+            data = pytesseract.image_to_data(
+                image.convert("RGB"),
+                lang=self._ocr_languages(options),
+                output_type=Output.DICT,
+                config="--psm 6",
+            )
+        except Exception:
+            return []
+
+        line_items: dict[tuple[int, int, int], list[dict[str, Any]]] = {}
+        count = len(data.get("text", []))
+        for index in range(count):
+            text = str(data["text"][index] or "").strip()
+            if not text:
+                continue
+            try:
+                confidence = float(data["conf"][index])
+            except (TypeError, ValueError):
+                confidence = -1.0
+            if confidence < 25:
+                continue
+            item = {
+                "text": text,
+                "confidence": confidence,
+                "x": int(data["left"][index]),
+                "y": int(data["top"][index]),
+                "width": int(data["width"][index]),
+                "height": int(data["height"][index]),
+            }
+            key = (int(data["block_num"][index]), int(data["par_num"][index]), int(data["line_num"][index]))
+            line_items.setdefault(key, []).append(item)
+
+        regions: list[TextRegion] = []
+        for items in line_items.values():
+            if not items:
+                continue
+            x0 = max(0, min(item["x"] for item in items) - self.config.mask_padding * 2)
+            y0 = max(0, min(item["y"] for item in items) - self.config.mask_padding * 2)
+            x1 = min(image.width, max(item["x"] + item["width"] for item in items) + self.config.mask_padding * 2)
+            y1 = min(image.height, max(item["y"] + item["height"] for item in items) + self.config.mask_padding * 3)
+            text = " ".join(item["text"] for item in sorted(items, key=lambda value: value["x"]))
+            area = max(1, (x1 - x0) * (y1 - y0))
+            confidence = max(0.0, min(1.0, sum(item["confidence"] for item in items) / (len(items) * 100)))
+            regions.append(
+                TextRegion(
+                    x=x0,
+                    y=y0,
+                    width=max(1, x1 - x0),
+                    height=max(1, y1 - y0),
+                    area=area,
+                    confidence=confidence,
+                    text=text,
+                )
+            )
+        regions.sort(key=lambda region: (region.y, region.x))
+        return regions[: self.config.max_regions]
+
+    def _mask_from_regions(self, size: tuple[int, int], regions: list[TextRegion]) -> Image.Image:
+        mask = Image.new("L", size, 0)
+        draw = ImageDraw.Draw(mask)
+        padding = max(1, self.config.mask_padding * 2)
+        for region in regions:
+            draw.rectangle(
+                (
+                    max(0, region.x - padding),
+                    max(0, region.y - padding),
+                    min(size[0], region.x + region.width + padding),
+                    min(size[1], region.y + region.height + padding),
+                ),
+                fill=255,
+            )
+        return mask
+
+    def _translate_regions(
+        self,
+        regions: list[TextRegion],
+        options: TextProcessingOptions,
+    ) -> tuple[list[TextRegion], list[str]]:
+        warnings: list[str] = []
+        translated: list[TextRegion] = []
+        for region in regions:
+            if not region.text:
+                translated.append(region)
+                continue
+            try:
+                translated_text = self._translate_text_with_memory(
+                    region.text,
+                    options.source_language,
+                    options.target_language,
+                )
+            except Exception as exc:
+                warnings.append(f"Translation failed for one text region: {exc}")
+                translated_text = None
+            translated.append(
+                TextRegion(
+                    x=region.x,
+                    y=region.y,
+                    width=region.width,
+                    height=region.height,
+                    area=region.area,
+                    confidence=region.confidence,
+                    text=region.text,
+                    translated_text=translated_text,
+                )
+            )
+        return translated, warnings
+
+    def _translate_text_with_memory(self, text: str, source_language: str, target_language: str) -> str:
+        normalized = self._normalize_translation_text(text)
+        if not normalized:
+            return ""
+        source = source_language or "auto"
+        target = target_language or self.config.target_language
+        key = self._translation_key(normalized, source, target)
+        cached = self._lookup_translation(key)
+        if cached is not None:
+            return cached
+        context = self._recent_translation_context(source, target)
+        translated = self._translate_text(normalized, source, target, context)
+        self._remember_translation(normalized, translated, source, target)
+        return translated
+
+    def _translate_text(
+        self,
+        text: str,
+        source_language: str,
+        target_language: str,
+        context: list[str] | None = None,
+    ) -> str:
+        """Translate text through a lightweight online endpoint without storing credentials."""
+        normalized = self._normalize_translation_text(text)
+        if not normalized:
+            return ""
+        source = "auto" if source_language == "auto" else source_language
+        context = context or []
+        query_text = "\n".join([*context, normalized]) if context else normalized
+        query = urllib.parse.urlencode(
+            {
+                "client": "gtx",
+                "sl": source,
+                "tl": target_language or self.config.target_language,
+                "dt": "t",
+                "q": query_text,
+            }
+        )
+        request = urllib.request.Request(
+            f"https://translate.googleapis.com/translate_a/single?{query}",
+            headers={"User-Agent": "AI-Manga-Upscaler/0.2"},
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        parts = payload[0] if isinstance(payload, list) and payload else []
+        translated = "".join(str(part[0]) for part in parts if isinstance(part, list) and part).strip()
+        return self._extract_contextual_translation(translated, len(context))
+
+    def _lookup_translation(self, key: tuple[str, str, str]) -> str | None:
+        with self._history_lock:
+            return self._translation_memory.get(key)
+
+    def _remember_translation(self, source_text: str, translated_text: str, source_language: str, target_language: str) -> None:
+        translated_text = self._normalize_translation_text(translated_text)
+        if not source_text or not translated_text:
+            return
+        record = {
+            "timestamp": str(round(time.time(), 3)),
+            "sourceLanguage": source_language or "auto",
+            "targetLanguage": target_language or self.config.target_language,
+            "sourceText": source_text,
+            "translatedText": translated_text,
+        }
+        key = self._translation_key(source_text, record["sourceLanguage"], record["targetLanguage"])
+        with self._history_lock:
+            self._translation_memory[key] = translated_text
+            self._translation_history.append(record)
+            if len(self._translation_history) > self.history_limit:
+                self._translation_history = self._translation_history[-self.history_limit :]
+            self._append_translation_record(record)
+
+    def _recent_translation_context(self, source_language: str, target_language: str) -> list[str]:
+        source = source_language or "auto"
+        target = target_language or self.config.target_language
+        with self._history_lock:
+            matching = [
+                f'{record["sourceText"]} => {record["translatedText"]}'
+                for record in self._translation_history
+                if record.get("sourceLanguage") == source and record.get("targetLanguage") == target
+            ]
+        return matching[-self.context_lines :]
+
+    def _load_translation_history(self) -> None:
+        if not self.history_path or not self.history_path.exists():
+            return
+        loaded: list[dict[str, str]] = []
+        try:
+            with self.history_path.open("r", encoding="utf-8") as history_file:
+                for line in history_file:
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    source_text = self._normalize_translation_text(str(record.get("sourceText", "")))
+                    translated_text = self._normalize_translation_text(str(record.get("translatedText", "")))
+                    source_language = str(record.get("sourceLanguage", "auto") or "auto")
+                    target_language = str(record.get("targetLanguage", self.config.target_language) or self.config.target_language)
+                    if not source_text or not translated_text:
+                        continue
+                    loaded.append(
+                        {
+                            "timestamp": str(record.get("timestamp", "")),
+                            "sourceLanguage": source_language,
+                            "targetLanguage": target_language,
+                            "sourceText": source_text,
+                            "translatedText": translated_text,
+                        }
+                    )
+        except OSError:
+            return
+        with self._history_lock:
+            self._translation_history = loaded[-self.history_limit :]
+            self._translation_memory = {
+                self._translation_key(record["sourceText"], record["sourceLanguage"], record["targetLanguage"]): record[
+                    "translatedText"
+                ]
+                for record in self._translation_history
+            }
+
+    def _append_translation_record(self, record: dict[str, str]) -> None:
+        if not self.history_path:
+            return
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.history_path.open("a", encoding="utf-8") as history_file:
+                history_file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        except OSError:
+            return
+
+    def _translation_key(self, text: str, source_language: str, target_language: str) -> tuple[str, str, str]:
+        return (
+            source_language or "auto",
+            target_language or self.config.target_language,
+            self._normalize_translation_text(text).casefold(),
+        )
+
+    def _normalize_translation_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _extract_contextual_translation(self, translated_text: str, context_count: int) -> str:
+        if context_count <= 0:
+            return translated_text.strip()
+        lines = [line.strip() for line in translated_text.splitlines() if line.strip()]
+        if len(lines) > context_count:
+            return lines[-1]
+        return translated_text.strip()
+
     def _render_translations(self, image: Image.Image, regions: list[TextRegion]) -> Image.Image:
         """Render translated text into cleaned regions."""
         output = image.copy()
         draw = ImageDraw.Draw(output)
-        font = ImageFont.load_default()
         for region in regions:
             text = region.translated_text or ""
             if not text:
                 continue
-            draw.multiline_text((region.x, region.y), text, fill=(20, 20, 20), font=font, spacing=2)
+            font, wrapped = self._fit_text(text, region.width, region.height)
+            draw.multiline_text(
+                (region.x, region.y),
+                wrapped,
+                fill=(20, 20, 20),
+                font=font,
+                spacing=max(1, font.size // 5 if hasattr(font, "size") else 2),
+                align="center",
+            )
         return output
+
+    def _fit_text(self, text: str, width: int, height: int) -> tuple[ImageFont.ImageFont, str]:
+        """Find a readable font size and line wrapping that stays inside a region."""
+        words = re.sub(r"\s+", " ", text).strip().split(" ")
+        for size in range(min(48, max(10, height)), 8, -1):
+            font = self._load_font(size)
+            wrapped = self._wrap_words(words, font, width)
+            bbox = ImageDraw.Draw(Image.new("RGB", (1, 1))).multiline_textbbox((0, 0), wrapped, font=font, spacing=max(1, size // 5))
+            if bbox[2] - bbox[0] <= width and bbox[3] - bbox[1] <= height:
+                return font, wrapped
+        font = self._load_font(9)
+        return font, self._wrap_words(words, font, width)
+
+    def _wrap_words(self, words: list[str], font: ImageFont.ImageFont, width: int) -> str:
+        draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if draw.textlength(candidate, font=font) <= width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            current = word
+        if current:
+            lines.append(current)
+        return "\n".join(lines)
+
+    def _load_font(self, size: int) -> ImageFont.ImageFont:
+        for name in ("arial.ttf", "Arial.ttf", "DejaVuSans.ttf"):
+            try:
+                return ImageFont.truetype(name, size=size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def _ocr_languages(self, options: TextProcessingOptions) -> str:
+        if options.source_language and options.source_language != "auto":
+            return options.source_language
+        return self.config.ocr_languages
 
     def _odd(self, value: int) -> int:
         value = max(3, int(value))

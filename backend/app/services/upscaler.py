@@ -8,12 +8,12 @@ from app.core.config import Settings
 from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
-from app.services.image_pipeline import EncodedImage, ImagePipeline
 from app.services.image_classifier import ClassificationResult, ImageTypeClassifier
+from app.services.image_pipeline import EncodedImage, ImagePipeline
 from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
-from app.services.statistics import MemorySampler, StageTimings
 from app.services.quality import QualityAnalyzer
+from app.services.statistics import MemorySampler, StageTimings
 from app.services.text_processor import TextProcessingOptions, TextProcessor
 from app.utils.hashing import sha256_bytes
 

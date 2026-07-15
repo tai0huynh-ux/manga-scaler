@@ -1,13 +1,13 @@
 """Tiled image inference tests without a real ONNX model."""
 
-import numpy as np
-import threading
 import asyncio
-from PIL import Image
+import threading
 
+import numpy as np
 from app.core.config import EncodingConfig, EnhancementConfig
 from app.services.image_pipeline import ImagePipeline
 from app.services.model_manager import LoadedModel
+from PIL import Image
 
 
 class IdentitySession:

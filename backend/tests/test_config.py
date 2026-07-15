@@ -4,9 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from app.core.config import Settings
+from pydantic import ValidationError
 
 
 def load_payload() -> dict:
@@ -18,6 +17,8 @@ def test_project_config_is_valid() -> None:
     settings = Settings(**load_payload(), root_dir=Path.cwd())
     assert settings.inference.tile_size in settings.inference.allowed_tile_sizes
     assert settings.inference.default_model in settings.inference.models
+    assert settings.inference.max_concurrent_inferences == 1
+    assert settings.inference.worker_count == 1
 
 
 def test_default_model_must_be_configured() -> None:

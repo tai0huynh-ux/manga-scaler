@@ -69,7 +69,7 @@ async def health(request: Request) -> HealthResponse:
         status="ok",
         provider=provider_selection.provider,
         model=str(model_status["activeModel"]),
-        gpu=provider_selection.gpu,
+        gpu={**provider_selection.gpu, "loadedProviders": model_status.get("loadedProviders", {})},
         queue=upscaler.queue.snapshot(),
         cache={
             "directory": str(cache_dir),

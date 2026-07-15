@@ -1,7 +1,6 @@
 """Development entry point for running the local FastAPI service."""
 
 import uvicorn
-
 from app.core.config import get_settings
 
 

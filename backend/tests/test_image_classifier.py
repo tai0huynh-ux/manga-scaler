@@ -1,10 +1,9 @@
 """Universal Auto Mode classification tests."""
 
 import numpy as np
-from PIL import Image
-
 from app.core.config import AutoDetectionConfig
 from app.services.image_classifier import ImageTypeClassifier
+from PIL import Image
 
 
 def classifier() -> ImageTypeClassifier:

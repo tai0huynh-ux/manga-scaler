@@ -1,0 +1,2845 @@
+const assert = require("node:assert/strict");
+const { webcrypto } = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const test = require("node:test");
+const vm = require("node:vm");
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function loadQueueScheduler(options = {}) {
+  const root = path.resolve(__dirname, "..", "..");
+  const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
+  const prefix = background.slice(0, background.indexOf("const statisticsTracker ="));
+  const pageImageRegistry = { update() {} };
+  const context = vm.createContext({
+    AbortController,
+    URL,
+    Uint8Array,
+    Promise,
+    Map,
+    Set,
+    Math,
+    Number,
+    String,
+    Error,
+    performance,
+    crypto: options.crypto || webcrypto,
+    setTimeout: options.timers?.setTimeout || setTimeout,
+    clearTimeout: options.timers?.clearTimeout || clearTimeout,
+    console,
+    importScripts() {},
+    __pageImageRegistry: pageImageRegistry,
+    chrome: { tabs: { sendMessage: options.tabsSendMessage || (async () => undefined) } },
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+  });
+  vm.runInContext(configSource, context);
+  vm.runInContext(`${prefix}\nconst pageImageRegistry = globalThis.__pageImageRegistry; globalThis.__QueueScheduler = QueueScheduler;`, context);
+  return context.__QueueScheduler;
+}
+
+function loadBackgroundHelpers() {
+  const root = path.resolve(__dirname, "..", "..");
+  const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
+  const prefix = background.slice(0, background.indexOf("chrome.runtime.onInstalled"));
+  const context = vm.createContext({
+    AbortController,
+    URL,
+    Uint8Array,
+    Promise,
+    Map,
+    Set,
+    Math,
+    Number,
+    String,
+    Error,
+    performance,
+    crypto: webcrypto,
+    setTimeout,
+    clearTimeout,
+    console,
+    crypto: webcrypto,
+    importScripts() {},
+    chrome: {
+      storage: { local: { get: async () => ({}), set: async () => undefined } },
+      tabs: { sendMessage: async () => undefined },
+      declarativeNetRequest: { updateSessionRules: async () => undefined },
+      runtime: {
+        getURL: () => "chrome-extension://test/",
+        onMessage: { addListener() {} },
+        onStartup: { addListener() {} },
+        sendNativeMessage() {},
+      },
+      alarms: { onAlarm: { addListener() {} }, create() {} },
+      scripting: { executeScript: async () => undefined },
+    },
+  });
+  vm.runInContext(configSource, context);
+  vm.runInContext(`${prefix}\nglobalThis.__resolveOutputLimits = resolveOutputLimits;`, context);
+  return context.__resolveOutputLimits;
+}
+
+function loadBackgroundClasses() {
+  const root = path.resolve(__dirname, "..", "..");
+  const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
+  const prefix = background.slice(0, background.indexOf("const statisticsTracker ="));
+  const context = vm.createContext({
+    AbortController,
+    URL,
+    Uint8Array,
+    Promise,
+    Map,
+    Set,
+    Math,
+    Number,
+    String,
+    Error,
+    performance,
+    crypto: webcrypto,
+    setTimeout,
+    clearTimeout,
+    console,
+    importScripts() {},
+    chrome: {
+      tabs: { sendMessage: async () => undefined },
+      declarativeNetRequest: { updateSessionRules: async () => undefined },
+    },
+    fetch: async () => ({ ok: true }),
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+  });
+  vm.runInContext(configSource, context);
+  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry;`, context);
+  return {
+    QueueScheduler: context.__QueueScheduler,
+    PageImageRegistry: context.__PageImageRegistry,
+  };
+}
+
+function loadBackgroundMessageHarness(options = {}) {
+  const root = path.resolve(__dirname, "..", "..");
+  const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
+  const prefix = background.slice(0, background.indexOf("chrome.runtime.onInstalled"));
+  const messageHandlers = background.slice(
+    background.indexOf("function hasMessageOperationIdentity"),
+    background.indexOf("chrome.tabs.onRemoved.addListener"),
+  );
+  let messageListener = null;
+  const storageGet = options.storageGet || (async (defaults) => defaults);
+  const context = vm.createContext({
+    AbortController,
+    URL,
+    Uint8Array,
+    Promise,
+    Map,
+    Set,
+    Math,
+    Number,
+    String,
+    Error,
+    performance,
+    crypto: webcrypto,
+    setTimeout,
+    clearTimeout,
+    console,
+    importScripts() {},
+    fetch: async () => ({ ok: true }),
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    chrome: {
+      storage: {
+        local: { get: storageGet, set: async () => undefined },
+        onChanged: { addListener() {} },
+      },
+      tabs: {
+        sendMessage: async () => undefined,
+        query: async () => [],
+      },
+      declarativeNetRequest: { updateSessionRules: async () => undefined },
+      runtime: {
+        getURL: () => "chrome-extension://test/",
+        onMessage: { addListener(listener) { messageListener = listener; } },
+        sendNativeMessage() {},
+      },
+      scripting: { executeScript: async () => undefined },
+    },
+  });
+  vm.runInContext(configSource, context);
+  vm.runInContext(
+    `${prefix}\n${messageHandlers}\nglobalThis.__scheduler = scheduler; globalThis.__pageImageRegistry = pageImageRegistry;`,
+    context,
+  );
+  return {
+    dispatch: (message, sender, sendResponse) => messageListener(message, sender, sendResponse),
+    scheduler: context.__scheduler,
+    pageImageRegistry: context.__pageImageRegistry,
+  };
+}
+
+function loadContentClasses(options = {}) {
+  const root = path.resolve(__dirname, "..", "..");
+  const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const content = fs.readFileSync(path.join(root, "extension", "src", "content.js"), "utf8");
+  const prefix = content.slice(0, content.indexOf("const renderer ="));
+  class FakeObserver {
+    observe() {}
+  }
+  class FakeNode {}
+  class FakeHTMLElement extends FakeNode {
+    querySelectorAll() { return []; }
+  }
+  class FakeHtmlImageElement extends FakeHTMLElement {
+    constructor() {
+      super();
+      this.dataset = {};
+      this.style = {};
+      this.listeners = new Map();
+      this.attributes = new Map();
+      this.complete = false;
+      this.naturalWidth = 1;
+      this.naturalHeight = 1;
+      this.clientWidth = 900;
+      this.clientHeight = 1000;
+      let srcValue = "";
+      Object.defineProperty(this, "src", {
+        get: () => srcValue,
+        set: (value) => {
+          srcValue = String(value);
+          this.currentSrc = srcValue;
+          this.attributes.set("src", srcValue);
+        },
+      });
+      this.currentSrc = "";
+      const classes = new Set();
+      this.classList = {
+        add: (...names) => names.forEach((name) => classes.add(name)),
+        remove: (...names) => names.forEach((name) => classes.delete(name)),
+        contains: (name) => classes.has(name),
+      };
+      if (typeof options.onImageCreated === "function") {
+        options.onImageCreated(this);
+      }
+    }
+
+    addEventListener(type, callback, options = {}) {
+      if (!this.listeners.has(type)) this.listeners.set(type, []);
+      this.listeners.get(type).push({ callback, once: options.once === true });
+    }
+
+    removeEventListener(type, callback) {
+      const listeners = this.listeners.get(type) || [];
+      this.listeners.set(type, listeners.filter((listener) => listener.callback !== callback));
+    }
+
+    dispatch(type) {
+      const listeners = [...(this.listeners.get(type) || [])];
+      for (const listener of listeners) {
+        listener.callback({ type, target: this });
+        if (listener.once) this.removeEventListener(type, listener.callback);
+      }
+    }
+
+    removeAttribute(name) {
+      this.attributes.delete(name);
+      if (name === "src") {
+        this.currentSrc = this.src;
+      } else if (name === "srcset" || name === "sizes") {
+        delete this[name];
+      }
+    }
+
+    getAttribute(name) {
+      return this.attributes.get(name) ?? null;
+    }
+
+    hasAttribute(name) {
+      return this.attributes.has(name);
+    }
+
+    setAttribute(name, value) {
+      const normalized = String(value);
+      this.attributes.set(name, normalized);
+      if (name === "src") {
+        this.src = normalized;
+      } else if (name === "srcset" || name === "sizes") {
+        this[name] = normalized;
+      }
+    }
+
+    getBoundingClientRect() {
+      return { width: this.clientWidth, height: this.clientHeight, top: 0, bottom: this.clientHeight, left: 0, right: this.clientWidth };
+    }
+
+    closest() {
+      return null;
+    }
+  }
+  const sentMessages = [];
+  const timers = options.timers || { setTimeout, clearTimeout };
+  const urlApi = options.urlApi || URL;
+  const context = vm.createContext({
+    URL: urlApi,
+    Map,
+    Set,
+    Math,
+    Number,
+    String,
+    console,
+    crypto: options.crypto || webcrypto,
+    MutationObserver: FakeObserver,
+    IntersectionObserver: FakeObserver,
+    window: { innerWidth: 1200, innerHeight: 900, addEventListener() {} },
+    document: {
+      baseURI: "https://example.com/page",
+      getElementById: () => ({}),
+      createElement: (tagName) => {
+        if (typeof options.createElement === "function") return options.createElement(tagName);
+        return {
+          style: {},
+          dataset: {},
+          children: [],
+          appendChild(child) {
+            this.children.push(child);
+            child.parentNode = this;
+          },
+          remove() {
+            this.parentNode?.removeChild?.(this);
+            this.parentNode = null;
+          },
+        };
+      },
+      documentElement: { appendChild() {}, contains: () => true },
+      elementsFromPoint: options.elementsFromPoint,
+    },
+    getComputedStyle: (element) => element.style || {},
+    chrome: { storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }, runtime: { sendMessage: (message) => { sentMessages.push(message); return typeof options.sendMessage === "function" ? options.sendMessage(message) : { catch() {} }; }, onMessage: { addListener() {} } } },
+    HTMLImageElement: FakeHtmlImageElement,
+    HTMLElement: FakeHTMLElement,
+    Node: FakeNode,
+    Image: FakeHtmlImageElement,
+    Blob: class {},
+    URLSearchParams,
+    TextEncoder,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    atob: (value) => Buffer.from(value, "base64").toString("binary"),
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+  });
+  vm.runInContext(configSource, context);
+  vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys;`, context);
+  return {
+    ImageProvider: context.__ImageProvider,
+    ViewportImageProvider: context.__ViewportImageProvider,
+    Renderer: context.__Renderer,
+    HTMLImageElement: context.__HTMLImageElement,
+    sentMessages,
+    trackedImages: context.__trackedImages,
+    trackedImageKeys: context.__trackedImageKeys,
+    completedImageKeys: context.__completedImageKeys,
+  };
+}
+
+function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, sendMessage = undefined } = {}) {
+  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, sendMessage });
+  const viewportProvider = new ViewportImageProvider({
+    imageProvider: imageProvider || {
+      canProcess: () => true,
+      read: (image) => ({
+        imageUrl: image.src,
+        src: image.src,
+        srcset: null,
+        sizes: null,
+        width: image.clientWidth,
+        height: image.clientHeight,
+        pictureSources: [],
+      }),
+    },
+    renderer: renderer || {
+      installRawSlices: () => [],
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  viewportProvider.imageSlicingEnabled = true;
+  viewportProvider.imageSliceMaxHeight = 1000;
+  viewportProvider.preprocessingConcurrency = preprocessingConcurrency;
+  viewportProvider.readDisplayedImage = readDisplayedImage || (async () => "image-data");
+  viewportProvider.cropImageSegments = cropImageSegments || (async () => []);
+  return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys };
+}
+
+function makeFakeTimers() {
+  const timers = [];
+  return {
+    api: {
+      setTimeout(callback) {
+        const timer = { callback, cleared: false };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout(timer) {
+        if (timer) timer.cleared = true;
+      },
+    },
+    runNext() {
+      const timer = timers.find((entry) => !entry.cleared);
+      if (timer) {
+        timer.cleared = true;
+        timer.callback();
+      }
+    },
+  };
+}
+
+function makeTrackedUrlApi() {
+  const revoked = [];
+  function TrackedURL(...args) {
+    return new URL(...args);
+  }
+  Object.assign(TrackedURL, URL, {
+    createObjectURL: (blob) => blob.objectUrl,
+    revokeObjectURL: (objectUrl) => revoked.push(objectUrl),
+    revoked,
+  });
+  return TrackedURL;
+}
+
+function makeClassList(initial = []) {
+  const classes = new Set(initial);
+  return {
+    add: (...names) => names.forEach((name) => classes.add(name)),
+    remove: (...names) => names.forEach((name) => classes.delete(name)),
+    contains: (name) => classes.has(name),
+    values: () => [...classes].sort(),
+  };
+}
+
+function makeRenderElement({ src = "", attributes = {}, dataset = {}, style = {}, classes = [] } = {}) {
+  const attributeMap = new Map(Object.entries(attributes).map(([name, value]) => [name, String(value)]));
+  const listeners = new Map();
+  let srcValue = src;
+  const element = {
+    complete: false,
+    naturalWidth: 100,
+    dataset: { ...dataset },
+    style: { ...style },
+    classList: makeClassList(classes),
+    addEventListener(type, callback, options = {}) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push({ callback, once: options.once === true });
+    },
+    removeEventListener(type, callback) {
+      listeners.set(type, (listeners.get(type) || []).filter((listener) => listener.callback !== callback));
+    },
+    dispatch(type) {
+      for (const listener of [...(listeners.get(type) || [])]) {
+        listener.callback({ type, target: element });
+        if (listener.once) element.removeEventListener(type, listener.callback);
+      }
+    },
+    getAttribute(name) {
+      return attributeMap.get(name) ?? null;
+    },
+    hasAttribute(name) {
+      return attributeMap.has(name);
+    },
+    setAttribute(name, value) {
+      attributeMap.set(name, String(value));
+    },
+    removeAttribute(name) {
+      attributeMap.delete(name);
+    },
+  };
+  Object.defineProperty(element, "src", {
+    get: () => srcValue,
+    set: (value) => {
+      srcValue = String(value);
+      attributeMap.set("src", srcValue);
+      element.currentSrc = srcValue;
+    },
+  });
+  element.currentSrc = src;
+  return element;
+}
+
+function instrumentPreprocessingSlots(viewportProvider) {
+  const stats = {
+    acquired: 0,
+    released: 0,
+    maxActive: 0,
+    minActive: 0,
+  };
+  const acquire = viewportProvider.acquirePreprocessingSlot.bind(viewportProvider);
+  const release = viewportProvider.releasePreprocessingSlot.bind(viewportProvider);
+  viewportProvider.acquirePreprocessingSlot = async () => {
+    await acquire();
+    stats.acquired += 1;
+    stats.maxActive = Math.max(stats.maxActive, viewportProvider.preprocessingActive);
+    assert.ok(viewportProvider.preprocessingActive <= viewportProvider.preprocessingConcurrency);
+  };
+  viewportProvider.releasePreprocessingSlot = () => {
+    release();
+    stats.released += 1;
+    stats.minActive = Math.min(stats.minActive, viewportProvider.preprocessingActive);
+    assert.ok(viewportProvider.preprocessingActive >= 0);
+    assert.ok(viewportProvider.preprocessingActive <= viewportProvider.preprocessingConcurrency);
+  };
+  return stats;
+}
+
+function makeTallImage(index) {
+  const attributes = new Map();
+  const image = {
+    dataset: {},
+    style: {},
+    hidden: false,
+    src: `https://example.com/tall-${index}.png`,
+    currentSrc: `https://example.com/tall-${index}.png`,
+    width: 900,
+    height: 4000,
+    clientWidth: 900,
+    clientHeight: 4000,
+    naturalWidth: 900,
+    naturalHeight: 4000,
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute: (name, value) => attributes.set(name, String(value)),
+    contains: (node) => node === image,
+    getBoundingClientRect: () => ({ width: 900, height: 4000, top: 0, bottom: 4000, left: 0, right: 900 }),
+  };
+  return image;
+}
+
+function makeTransactionalSliceRenderer({ token = "slice-owner-token", onRollback = () => {}, onRender = async () => "rendered" } = {}) {
+  return {
+    prepareRawSlices(image, _metadata, segments) {
+      const rawImages = segments.map((segment) => makeTallImage(`raw-${segment.index}`));
+      const wrapper = {
+        dataset: { aiEnhancerSliceToken: token },
+        children: rawImages,
+      };
+      rawImages.forEach((rawImage) => {
+        rawImage.parentNode = wrapper;
+        rawImage.dataset.aiEnhancerSliceToken = token;
+      });
+      return {
+        token,
+        wrapper,
+        state: "prepared",
+        rawImages,
+        commit() {
+          if (this.state !== "prepared") return this.state === "committed";
+          this.state = "committed";
+          image.style.display = "none";
+          image.dataset.aiEnhancerSliced = "true";
+          return true;
+        },
+        rollback() {
+          if (this.state === "rolledBack") return false;
+          this.state = "rolledBack";
+          image.style.display = "";
+          delete image.dataset.aiEnhancerSliced;
+          onRollback();
+          return true;
+        },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+    render: onRender,
+  };
+}
+
+async function waitForSettled(promise, timeoutMs = 100) {
+  let timeoutId;
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  const result = await Promise.race([
+    Promise.all(promise).then(() => "settled"),
+    timeout,
+  ]);
+  clearTimeout(timeoutId);
+  return result;
+}
+
+function makeJob(imageId = "image-1") {
+  return {
+    tabId: 7,
+    imageId,
+    operationId: `${imageId}-op-1`,
+    sourceRevision: `${imageId}-rev-1`,
+    imageUrl: `https://example.com/${imageId}.png`,
+    pageOrder: 1,
+    viewportDistance: 0,
+    mode: "manga",
+    enhanceLevel: 0.3,
+    maxOutputWidth: 1000,
+    maxOutputHeight: 2000,
+    outputQuality: 90,
+    tileSize: 256,
+    attempt: 1,
+  };
+}
+
+test("same pathname with different query creates distinct content keys", () => {
+  const { viewportProvider } = makeContentProvider();
+  const first = makeTallImage(1);
+  const second = makeTallImage(2);
+  first.src = "https://cdn.example.com/page.jpg?chapter=1";
+  first.currentSrc = first.src;
+  second.src = "https://cdn.example.com/page.jpg?chapter=2";
+  second.currentSrc = second.src;
+
+  assert.notEqual(
+    viewportProvider.imageKey(viewportProvider.imageProvider.read(first), first),
+    viewportProvider.imageKey(viewportProvider.imageProvider.read(second), second),
+  );
+});
+
+test("content fingerprint remains SHA-256 when Web Crypto is unavailable", async () => {
+  const { ViewportImageProvider } = loadContentClasses({ crypto: {} });
+  const viewportProvider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+
+  const fingerprint = await viewportProvider.sourceFingerprint(Buffer.from("abc").toString("base64"));
+
+  assert.equal(fingerprint, "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+});
+
+test("same image element source change starts a new operation identity", async () => {
+  const reads = ["first-data", "second-data"];
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: async () => reads.shift(),
+  });
+  const image = makeTallImage(0);
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  image.src = "https://example.com/page.jpg?rev=1";
+  image.currentSrc = image.src;
+  await viewportProvider.schedule(image);
+  const firstMessage = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE");
+
+  image.src = "https://example.com/page.jpg?rev=2";
+  image.currentSrc = image.src;
+  image.dataset.aiEnhancerSeen = "false";
+  await viewportProvider.schedule(image);
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+
+  assert.equal(enqueued.length, 2);
+  assert.notEqual(enqueued[0].operationId, enqueued[1].operationId);
+  assert.notEqual(enqueued[0].sourceRevision, enqueued[1].sourceRevision);
+  assert.notEqual(enqueued[0].imageId, enqueued[1].imageId);
+  assert.ok(firstMessage.sourceFingerprint);
+});
+
+test("IMAGE_SEEN and enqueue lifecycle share one exact operation identity", async () => {
+  const { viewportProvider, HTMLImageElement, sentMessages } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/identity.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+
+  viewportProvider.observeImage(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const messages = sentMessages.filter((message) => ["IMAGE_SEEN", "PREPROCESSING_STARTED", "ENQUEUE_IMAGE"].includes(message.type));
+  assert.deepEqual(messages.map(({ type, imageId, operationId, sourceRevision }) => ({ type, imageId, operationId, sourceRevision })), [
+    { type: "IMAGE_SEEN", imageId: messages[0].imageId, operationId: messages[0].operationId, sourceRevision: messages[0].sourceRevision },
+    { type: "PREPROCESSING_STARTED", imageId: messages[0].imageId, operationId: messages[0].operationId, sourceRevision: messages[0].sourceRevision },
+    { type: "ENQUEUE_IMAGE", imageId: messages[0].imageId, operationId: messages[0].operationId, sourceRevision: messages[0].sourceRevision },
+  ]);
+  assert.ok(messages.every((message) => message.operationId));
+});
+
+test("same-URL page reload cancels old bytes and starts a new source revision", async () => {
+  const firstRead = deferred();
+  const firstReadStarted = deferred();
+  let readCount = 0;
+  const { viewportProvider, HTMLImageElement, sentMessages } = makeContentProvider({
+    readDisplayedImage: () => {
+      readCount += 1;
+      if (readCount === 1) {
+        firstReadStarted.resolve();
+        return firstRead.promise;
+      }
+      return Promise.resolve("new-bytes-at-same-url");
+    },
+  });
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/reloaded-in-place.png";
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+
+  viewportProvider.observeImage(image);
+  await firstReadStarted.promise;
+  image.dispatch("load");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  firstRead.resolve("old-bytes-at-same-url");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const seen = sentMessages.filter((message) => message.type === "IMAGE_SEEN");
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(seen.length, 2, JSON.stringify(sentMessages));
+  assert.equal(enqueued.length, 1, JSON.stringify(sentMessages));
+  assert.equal(enqueued[0].operationId, seen[1].operationId);
+  assert.notEqual(seen[0].operationId, seen[1].operationId);
+  assert.notEqual(seen[0].sourceRevision, seen[1].sourceRevision);
+  assert.ok(sentMessages.some((message) => message.type === "CANCEL_IMAGE" && message.operationId === seen[0].operationId));
+});
+
+test("page-owned source change after render releases saved metadata and replaces the operation", async () => {
+  let ownedObjectUrl = null;
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    isOwnedSource: (image) => Boolean(ownedObjectUrl && image.src === ownedObjectUrl),
+    releaseImageOwnership(image) {
+      ownedObjectUrl = null;
+      delete image.dataset.aiMangaOriginalSrc;
+      delete image.dataset.aiMangaOriginalSrcset;
+      delete image.dataset.aiMangaOriginalSizes;
+    },
+  };
+  const imageProvider = {
+    canProcess: () => true,
+    read: (image) => {
+      const source = image.dataset.aiMangaOriginalSrc || image.currentSrc || image.src;
+      return {
+        imageUrl: source,
+        src: image.dataset.aiMangaOriginalSrc || image.getAttribute("src"),
+        srcset: null,
+        sizes: null,
+        width: image.clientWidth,
+        height: image.clientHeight,
+        pictureSources: [],
+      };
+    },
+  };
+  const { viewportProvider, HTMLImageElement, sentMessages } = makeContentProvider({ renderer, imageProvider });
+  const image = new HTMLImageElement();
+  const originalUrl = "https://example.com/original-before-render.png";
+  const replacementUrl = "https://example.com/replacement-from-page.png";
+  image.src = originalUrl;
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+
+  viewportProvider.observeImage(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  ownedObjectUrl = "blob:rendered-owned-source";
+  image.dataset.aiMangaOriginalSrc = originalUrl;
+  image.src = ownedObjectUrl;
+  image.src = replacementUrl;
+  image.dispatch("load");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(enqueued.length, 2, JSON.stringify(sentMessages));
+  assert.equal(enqueued[1].imageUrl, replacementUrl);
+  assert.notEqual(enqueued[0].operationId, enqueued[1].operationId);
+  assert.equal(image.dataset.aiMangaOriginalSrc, undefined);
+});
+
+test("source replacement during fingerprint hashing cannot emit stale enqueue", async () => {
+  const oldFingerprint = deferred();
+  const fingerprintStarted = deferred();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: async (imageUrl) => imageUrl.includes("rev=1") ? "old-bytes" : "new-bytes",
+  });
+  viewportProvider.sourceFingerprint = async (imageData) => {
+    if (imageData === "old-bytes") {
+      fingerprintStarted.resolve();
+      return oldFingerprint.promise;
+    }
+    return "sha256:new";
+  };
+  const image = makeTallImage("hash-race");
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  image.src = "https://example.com/page.png?rev=1";
+  image.currentSrc = image.src;
+
+  const staleSchedule = viewportProvider.schedule(image);
+  await fingerprintStarted.promise;
+  image.src = "https://example.com/page.png?rev=2";
+  image.currentSrc = image.src;
+  const currentSchedule = viewportProvider.schedule(image);
+  await currentSchedule;
+  oldFingerprint.resolve("sha256:old");
+  await staleSchedule;
+
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(enqueued.length, 1, JSON.stringify(enqueued));
+  assert.equal(enqueued[0].sourceFingerprint, "sha256:new");
+  assert.ok(enqueued[0].imageUrl.includes("rev=2"));
+});
+
+test("concurrent scheduling of one operation emits exactly one enqueue", async () => {
+  const firstRead = deferred();
+  let reads = 0;
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: () => {
+      reads += 1;
+      return firstRead.promise;
+    },
+  });
+  const image = makeTallImage("duplicate");
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+
+  const first = viewportProvider.schedule(image);
+  const second = viewportProvider.schedule(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  firstRead.resolve("same-bytes");
+  await Promise.all([first, second]);
+
+  assert.equal(reads, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+});
+
+test("old completion after source change is ignored", async () => {
+  const rendered = [];
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    renderer: {
+      render: async (_image, payload) => rendered.push(payload.operationId),
+      installRawSlices: () => [],
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  const image = makeTallImage(0);
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  image.src = "https://example.com/page.jpg?rev=1";
+  image.currentSrc = image.src;
+  await viewportProvider.schedule(image);
+  const stale = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE");
+  image.src = "https://example.com/page.jpg?rev=2";
+  image.currentSrc = image.src;
+  image.dataset.aiEnhancerSeen = "false";
+  await viewportProvider.schedule(image);
+  const current = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE")[1];
+
+  await viewportProvider.complete({ type: "UPSCALE_COMPLETE", imageId: stale.imageId, operationId: stale.operationId, sourceRevision: stale.sourceRevision, sourceFingerprint: stale.sourceFingerprint, imageBase64: "old" });
+  await viewportProvider.complete({ type: "UPSCALE_COMPLETE", imageId: current.imageId, operationId: current.operationId, sourceRevision: current.sourceRevision, sourceFingerprint: current.sourceFingerprint, imageBase64: "new" });
+
+  assert.deepEqual(rendered, [current.operationId]);
+});
+
+test("old failure after source change cannot remove current operation", () => {
+  const { viewportProvider, trackedImages, trackedImageKeys } = makeContentProvider();
+  const image = makeTallImage("shared");
+  const current = {
+    imageId: "shared-image",
+    operationId: "current-op",
+    sourceRevision: "current-rev",
+    image,
+    metadata: { imageUrl: image.src },
+    baseKey: "current-rev",
+  };
+  trackedImages.set(current.imageId, current);
+  trackedImageKeys.set(current.baseKey, current);
+
+  viewportProvider.fail(current.imageId, false, "stale-op", "stale-rev");
+
+  assert.equal(trackedImages.get(current.imageId), current);
+  assert.equal(trackedImageKeys.get(current.baseKey), current);
+});
+
+test("canceling a stale content entry cannot delete its replacement", () => {
+  const { viewportProvider, trackedImages, trackedImageKeys } = makeContentProvider();
+  const image = makeTallImage("cancel-current");
+  const current = {
+    imageId: "shared-image",
+    operationId: "new-op",
+    sourceRevision: "shared-revision",
+    image,
+    metadata: { imageUrl: image.src },
+    baseKey: "shared-revision",
+  };
+  const stale = { ...current, operationId: "old-op" };
+  trackedImages.set(current.imageId, current);
+  trackedImageKeys.set(current.baseKey, current);
+
+  viewportProvider.cancel(stale);
+
+  assert.equal(trackedImages.get(current.imageId), current);
+  assert.equal(trackedImageKeys.get(current.baseKey), current);
+});
+
+test("renderer aborts if operation becomes stale during fade", async () => {
+  const urlApi = makeTrackedUrlApi();
+  let nextObjectUrl = 0;
+  urlApi.createObjectURL = () => `blob:render-${nextObjectUrl++}`;
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async () => undefined;
+  const image = {
+    dataset: {},
+    style: {},
+    src: "https://example.com/original.png",
+    complete: true,
+    classList: { add() {} },
+    removeAttribute() {},
+    addEventListener() {},
+  };
+  const current = {
+    imageId: "shared-image",
+    operationId: "current-op",
+    sourceRevision: "current-rev",
+    metadata: { width: 100, height: 100, src: image.src, srcset: "", sizes: "", pictureSources: [] },
+  };
+  trackedImages.set(current.imageId, current);
+  renderer.fadeOut = async () => {
+    trackedImages.set(current.imageId, { ...current, operationId: "new-op", sourceRevision: "new-rev" });
+  };
+  const isCurrent = () => {
+    const entry = trackedImages.get(current.imageId);
+    return entry?.operationId === current.operationId && entry?.sourceRevision === current.sourceRevision;
+  };
+
+  await renderer.render(image, {
+    imageId: current.imageId,
+    operationId: current.operationId,
+    sourceRevision: current.sourceRevision,
+    imageBase64: Buffer.from("new-image").toString("base64"),
+  }, isCurrent);
+
+  assert.equal(image.src, "https://example.com/original.png");
+  assert.deepEqual(urlApi.revoked, ["blob:render-0"]);
+});
+
+test("renderer rolls back its own stale src assignment after load", async () => {
+  const urlApi = makeTrackedUrlApi();
+  let nextObjectUrl = 0;
+  urlApi.createObjectURL = () => `blob:render-${nextObjectUrl++}`;
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async () => undefined;
+  const current = {
+    imageId: "shared-image",
+    operationId: "current-op",
+    sourceRevision: "current-rev",
+    metadata: { width: 100, height: 100, src: "https://example.com/original.png", srcset: "", sizes: "", pictureSources: [] },
+  };
+  trackedImages.set(current.imageId, current);
+  const image = {
+    dataset: {},
+    style: {},
+    complete: false,
+    naturalWidth: 100,
+    classList: { add() {} },
+    listeners: new Map(),
+    addEventListener(type, callback) {
+      this.listeners.set(type, callback);
+    },
+    removeAttribute() {},
+  };
+  let srcValue = "https://example.com/original.png";
+  Object.defineProperty(image, "src", {
+    get: () => srcValue,
+    set: (value) => {
+      srcValue = value;
+      if (value === "blob:render-0") {
+        trackedImages.set(current.imageId, { ...current, operationId: "new-op", sourceRevision: "new-rev" });
+      }
+    },
+  });
+  const isCurrent = () => {
+    const entry = trackedImages.get(current.imageId);
+    return entry?.operationId === current.operationId && entry?.sourceRevision === current.sourceRevision;
+  };
+
+  const rendering = renderer.render(image, {
+    imageId: current.imageId,
+    operationId: current.operationId,
+    sourceRevision: current.sourceRevision,
+    imageBase64: Buffer.from("new-image").toString("base64"),
+  }, isCurrent);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.complete = true;
+  image.listeners.get("load")();
+  await rendering;
+
+  assert.equal(image.src, "https://example.com/original.png");
+  assert.deepEqual(urlApi.revoked, ["blob:render-0"]);
+});
+
+test("renderer stale rollback does not overwrite a newer src assignment", async () => {
+  const urlApi = makeTrackedUrlApi();
+  let nextObjectUrl = 0;
+  urlApi.createObjectURL = () => `blob:render-${nextObjectUrl++}`;
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async () => undefined;
+  const current = {
+    imageId: "shared-image",
+    operationId: "current-op",
+    sourceRevision: "current-rev",
+    metadata: { width: 100, height: 100, src: "https://example.com/original.png", srcset: "", sizes: "", pictureSources: [] },
+  };
+  trackedImages.set(current.imageId, current);
+  const image = {
+    dataset: {},
+    style: {},
+    complete: false,
+    naturalWidth: 100,
+    classList: { add() {} },
+    listeners: new Map(),
+    addEventListener(type, callback) {
+      this.listeners.set(type, callback);
+    },
+    removeAttribute() {},
+  };
+  let srcValue = "https://example.com/original.png";
+  Object.defineProperty(image, "src", {
+    get: () => srcValue,
+    set: (value) => {
+      srcValue = value;
+      if (value === "blob:render-0") {
+        trackedImages.set(current.imageId, { ...current, operationId: "new-op", sourceRevision: "new-rev" });
+        srcValue = "blob:new-operation";
+      }
+    },
+  });
+  const isCurrent = () => {
+    const entry = trackedImages.get(current.imageId);
+    return entry?.operationId === current.operationId && entry?.sourceRevision === current.sourceRevision;
+  };
+
+  const rendering = renderer.render(image, {
+    imageId: current.imageId,
+    operationId: current.operationId,
+    sourceRevision: current.sourceRevision,
+    imageBase64: Buffer.from("new-image").toString("base64"),
+  }, isCurrent);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.complete = true;
+  image.listeners.get("load")();
+  await rendering;
+
+  assert.equal(image.src, "blob:new-operation");
+  assert.deepEqual(urlApi.revoked, ["blob:render-0"]);
+});
+
+test("renderer stale during fade restores the complete captured DOM state", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:stale-fade";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const pictureSource = makeRenderElement({
+    attributes: { srcset: "picture-old 2x", sizes: "80vw" },
+    dataset: { aiMangaOriginalSrcset: "prior-picture-data", aiMangaOriginalSizes: "prior-picture-size" },
+  });
+  const image = makeRenderElement({
+    src: "https://example.com/original.png",
+    attributes: { srcset: "old-1x.png 1x", sizes: "50vw" },
+    dataset: {
+      aiMangaOriginalSrc: "prior-original-data",
+      aiMangaOriginalSrcset: "prior-srcset-data",
+      aiMangaOriginalSizes: "prior-sizes-data",
+    },
+    style: { width: "37px", height: "41px" },
+    classes: ["ai-manga-upscaler-ready"],
+  });
+  const entry = {
+    imageId: "fade-image",
+    operationId: "fade-op",
+    sourceRevision: "fade-rev",
+    metadata: {
+      width: 300,
+      height: 500,
+      src: image.src,
+      srcset: image.getAttribute("srcset"),
+      sizes: image.getAttribute("sizes"),
+      pictureSources: [{ source: pictureSource, srcset: "picture-old 2x", sizes: "80vw" }],
+    },
+  };
+  trackedImages.set(entry.imageId, entry);
+  renderer.fadeOut = async (target) => {
+    target.classList.add("ai-manga-upscaler-fading");
+    trackedImages.set(entry.imageId, { ...entry, operationId: "replacement-op", sourceRevision: "replacement-rev" });
+  };
+
+  const outcome = await renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("new-image").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+
+  assert.equal(outcome, "stale");
+  assert.equal(image.src, "https://example.com/original.png");
+  assert.equal(image.getAttribute("srcset"), "old-1x.png 1x");
+  assert.equal(image.getAttribute("sizes"), "50vw");
+  assert.deepEqual(image.style, { width: "37px", height: "41px" });
+  assert.deepEqual(image.dataset, {
+    aiMangaOriginalSrc: "prior-original-data",
+    aiMangaOriginalSrcset: "prior-srcset-data",
+    aiMangaOriginalSizes: "prior-sizes-data",
+  });
+  assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
+  assert.equal(image.classList.contains("ai-manga-upscaler-ready"), true);
+  assert.equal(pictureSource.getAttribute("srcset"), "picture-old 2x");
+  assert.equal(pictureSource.getAttribute("sizes"), "80vw");
+  assert.deepEqual(pictureSource.dataset, {
+    aiMangaOriginalSrcset: "prior-picture-data",
+    aiMangaOriginalSizes: "prior-picture-size",
+  });
+  assert.deepEqual(urlApi.revoked, ["blob:stale-fade"]);
+});
+
+test("renderer converts blob load error into load-error and exact rollback", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:broken-render";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const pictureSource = makeRenderElement({
+    attributes: { srcset: "picture-original 2x", sizes: "90vw" },
+    dataset: { aiMangaOriginalSrcset: "source-dataset", aiMangaOriginalSizes: "sizes-dataset" },
+  });
+  const image = makeRenderElement({
+    src: "https://example.com/original.png",
+    attributes: { srcset: "original-1x.png 1x", sizes: "60vw" },
+    dataset: { aiMangaOriginalSrc: "old-data", aiMangaOriginalSrcset: "old-set", aiMangaOriginalSizes: "old-sizes" },
+    style: { width: "111px", height: "222px" },
+    classes: ["ai-manga-upscaler-ready"],
+  });
+  const entry = {
+    imageId: "broken-image",
+    operationId: "broken-op",
+    sourceRevision: "broken-rev",
+    metadata: {
+      width: 400,
+      height: 800,
+      src: image.src,
+      srcset: image.getAttribute("srcset"),
+      sizes: image.getAttribute("sizes"),
+      pictureSources: [{ source: pictureSource, srcset: "picture-original 2x", sizes: "90vw" }],
+    },
+  };
+  trackedImages.set(entry.imageId, entry);
+  renderer.activeObjectUrls.set(image, "blob:previous-active");
+  renderer.fadeOut = async (target) => target.classList.add("ai-manga-upscaler-fading");
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("broken-image").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.dispatch("error");
+  const outcome = await rendering;
+
+  assert.equal(outcome, "load-error");
+  assert.equal(image.src, "https://example.com/original.png");
+  assert.equal(image.getAttribute("srcset"), "original-1x.png 1x");
+  assert.equal(image.getAttribute("sizes"), "60vw");
+  assert.deepEqual(image.style, { width: "111px", height: "222px" });
+  assert.deepEqual(image.dataset, { aiMangaOriginalSrc: "old-data", aiMangaOriginalSrcset: "old-set", aiMangaOriginalSizes: "old-sizes" });
+  assert.deepEqual(pictureSource.dataset, { aiMangaOriginalSrcset: "source-dataset", aiMangaOriginalSizes: "sizes-dataset" });
+  assert.equal(pictureSource.getAttribute("srcset"), "picture-original 2x");
+  assert.equal(pictureSource.getAttribute("sizes"), "90vw");
+  assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
+  assert.equal(image.classList.contains("ai-manga-upscaler-ready"), true);
+  assert.equal(renderer.activeObjectUrls.get(image), "blob:previous-active");
+  assert.deepEqual(urlApi.revoked, ["blob:broken-render"]);
+});
+
+test("renderer success returns rendered and removes fading ownership class", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:render-success";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const image = makeRenderElement({ src: "https://example.com/original.png" });
+  const entry = {
+    imageId: "success-image",
+    operationId: "success-op",
+    sourceRevision: "success-rev",
+    metadata: { width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+  };
+  trackedImages.set(entry.imageId, entry);
+  renderer.fadeOut = async (target) => target.classList.add("ai-manga-upscaler-fading");
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("success-image").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.complete = true;
+  image.dispatch("load");
+  const outcome = await rendering;
+
+  assert.equal(outcome, "rendered");
+  assert.equal(image.src, "blob:render-success");
+  assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
+  assert.equal(image.classList.contains("ai-manga-upscaler-ready"), true);
+  assert.equal(renderer.activeObjectUrls.get(image), "blob:render-success");
+});
+
+test("renderer rollback preserves an originally absent src attribute", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:responsive-error";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const image = makeRenderElement({
+    src: "https://example.com/selected-from-srcset.png",
+    attributes: { srcset: "selected-from-srcset.png 2x", sizes: "100vw" },
+  });
+  const entry = {
+    imageId: "responsive-error-image",
+    operationId: "responsive-error-op",
+    sourceRevision: "responsive-error-rev",
+    metadata: {
+      imageUrl: image.currentSrc,
+      width: 100,
+      height: 100,
+      src: null,
+      srcset: image.getAttribute("srcset"),
+      sizes: image.getAttribute("sizes"),
+      pictureSources: [],
+    },
+  };
+  trackedImages.set(entry.imageId, entry);
+  renderer.fadeOut = async () => undefined;
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("broken-responsive").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.dispatch("error");
+
+  assert.equal(await rendering, "load-error");
+  assert.equal(image.hasAttribute("src"), false);
+  assert.equal(image.getAttribute("srcset"), "selected-from-srcset.png 2x");
+});
+
+test("superseding a render settles the old load wait without a DOM event", async () => {
+  const urlApi = makeTrackedUrlApi();
+  let objectUrlSequence = 0;
+  urlApi.createObjectURL = () => `blob:overlap-${objectUrlSequence++}`;
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async () => undefined;
+  const image = makeRenderElement({ src: "https://example.com/original-overlap.png", attributes: { src: "https://example.com/original-overlap.png" } });
+  const firstEntry = {
+    imageId: "overlap-image",
+    operationId: "overlap-op-1",
+    sourceRevision: "overlap-rev-1",
+    metadata: { imageUrl: image.src, width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+  };
+  trackedImages.set(firstEntry.imageId, firstEntry);
+  const firstRender = renderer.render(image, {
+    imageId: firstEntry.imageId,
+    operationId: firstEntry.operationId,
+    sourceRevision: firstEntry.sourceRevision,
+    imageBase64: Buffer.from("first-render").toString("base64"),
+  }, () => trackedImages.get(firstEntry.imageId) === firstEntry);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(image.src, "blob:overlap-0");
+
+  const secondEntry = {
+    ...firstEntry,
+    operationId: "overlap-op-2",
+    sourceRevision: "overlap-rev-2",
+  };
+  trackedImages.set(secondEntry.imageId, secondEntry);
+  const secondRender = renderer.render(image, {
+    imageId: secondEntry.imageId,
+    operationId: secondEntry.operationId,
+    sourceRevision: secondEntry.sourceRevision,
+    imageBase64: Buffer.from("second-render").toString("base64"),
+  }, () => trackedImages.get(secondEntry.imageId) === secondEntry);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(await waitForSettled([firstRender], 50), "settled");
+  assert.equal(await firstRender, "stale");
+  assert.equal(image.src, "blob:overlap-1");
+  image.complete = true;
+  image.dispatch("load");
+  assert.equal(await secondRender, "rendered");
+  assert.deepEqual(urlApi.revoked, ["blob:overlap-0"]);
+});
+
+test("responsive-only render preserves the selected original source identity", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:responsive-success";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async () => undefined;
+  const selectedUrl = "https://example.com/responsive-selected.png";
+  const image = makeRenderElement({
+    src: selectedUrl,
+    attributes: { srcset: "responsive-selected.png 2x", sizes: "100vw" },
+  });
+  const entry = {
+    imageId: "responsive-success-image",
+    operationId: "responsive-success-op",
+    sourceRevision: "responsive-success-rev",
+    metadata: {
+      imageUrl: selectedUrl,
+      width: 100,
+      height: 100,
+      src: null,
+      srcset: image.getAttribute("srcset"),
+      sizes: image.getAttribute("sizes"),
+      pictureSources: [],
+    },
+  };
+  trackedImages.set(entry.imageId, entry);
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("responsive-success").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.complete = true;
+  image.dispatch("load");
+
+  assert.equal(await rendering, "rendered");
+  assert.equal(image.dataset.aiMangaOriginalSrc, selectedUrl);
+  assert.equal(renderer.isOwnedSource(image), true);
+});
+
+test("content completion clears a load-error without marking the source completed", async () => {
+  const { viewportProvider, trackedImages, trackedImageKeys, completedImageKeys } = makeContentProvider({
+    renderer: {
+      render: async () => "load-error",
+      installRawSlices: () => [],
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  const image = makeTallImage("load-error");
+  const entry = {
+    imageId: "load-error-image",
+    operationId: "load-error-op",
+    sourceRevision: "load-error-rev",
+    baseKey: "load-error-rev",
+    image,
+    metadata: { imageUrl: image.src },
+    state: "waiting",
+  };
+  trackedImages.set(entry.imageId, entry);
+  trackedImageKeys.set(entry.baseKey, entry);
+
+  const outcome = await viewportProvider.complete({
+    type: "UPSCALE_COMPLETE",
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: "broken",
+  });
+
+  assert.equal(outcome, "load-error");
+  assert.equal(trackedImages.has(entry.imageId), false);
+  assert.equal(trackedImageKeys.has(entry.baseKey), false);
+  assert.equal(completedImageKeys.has(entry.baseKey), false);
+});
+
+test("queue distinguishes operations with the same image id", () => {
+  const QueueScheduler = loadQueueScheduler();
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+
+  scheduler.enqueue(makeJob("same"));
+  scheduler.enqueue({ ...makeJob("same"), operationId: "same-op-2", sourceRevision: "same-rev-2" });
+
+  assert.equal(scheduler.pending.size, 2);
+});
+
+test("operationless scheduler cancel cannot use image id as authority", () => {
+  const QueueScheduler = loadQueueScheduler();
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+  scheduler.enqueue(makeJob("shared"));
+  scheduler.enqueue({ ...makeJob("shared"), operationId: "shared-op-2", sourceRevision: "shared-rev-2" });
+
+  scheduler.cancel(7, "shared", null);
+
+  assert.equal(scheduler.pending.size, 2);
+});
+
+test("scheduler cancel is isolated by tab and operation", () => {
+  const QueueScheduler = loadQueueScheduler();
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+  scheduler.enqueue(makeJob("collision"));
+  scheduler.enqueue({ ...makeJob("collision"), tabId: 8 });
+
+  scheduler.cancel(8, "collision", "collision-op-1");
+
+  assert.deepEqual([...scheduler.pending.values()].map((job) => job.tabId), [7]);
+});
+
+test("delayed retry from an old operation cannot resurrect after replacement", async () => {
+  const fakeTimers = makeFakeTimers();
+  const QueueScheduler = loadQueueScheduler({ timers: fakeTimers.api });
+  const replacementRun = deferred();
+  const calls = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: (_url, options) => {
+        calls.push(options.jobId);
+        if (options.jobId.endsWith(":old-op")) return Promise.reject(new Error("retry old"));
+        return replacementRun.promise;
+      },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+  scheduler.enqueue({ ...makeJob("retry-image"), operationId: "old-op", sourceRevision: "old-rev" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  scheduler.cancel(7, "retry-image", "old-op");
+  scheduler.enqueue({ ...makeJob("retry-image"), operationId: "new-op", sourceRevision: "new-rev" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  fakeTimers.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal([...scheduler.pending.values()].some((job) => job.operationId === "old-op"), false);
+  assert.equal([...scheduler.active.values()].some((job) => job.operationId === "old-op"), false);
+  assert.deepEqual(calls, ["7:retry-image:old-op", "7:retry-image:new-op"]);
+  scheduler.cancelAll();
+  replacementRun.resolve({});
+});
+
+test("cancel during cache-hit statistics cannot send stale completion", async () => {
+  const statistics = deferred();
+  const statisticsStarted = deferred();
+  const sent = [];
+  const QueueScheduler = loadQueueScheduler({
+    tabsSendMessage: async (_tabId, message) => { sent.push(message); },
+  });
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: {
+      get: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }),
+      set: async () => undefined,
+    },
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {
+      recordSuccess: async () => {
+        statisticsStarted.resolve();
+        await statistics.promise;
+      },
+      recordError: async () => undefined,
+    },
+  });
+  const job = makeJob("cache-race");
+  scheduler.enqueue(job);
+  await statisticsStarted.promise;
+
+  scheduler.cancel(job.tabId, job.imageId, job.operationId);
+  statistics.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sent.some((message) => message.type === "UPSCALE_COMPLETE"), false);
+});
+
+test("cache identity prefers source fingerprint for different bytes under same url", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const keys = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async (key) => { keys.push(key); return null; }, set: async () => undefined },
+    upscaleProvider: { upscale: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }), cancel() {} },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue({ ...makeJob("same"), imageUrl: "https://example.com/page.jpg?v=1", imageData: "AAAA", sourceFingerprint: "sha256-a" });
+  scheduler.enqueue({ ...makeJob("other"), imageUrl: "https://example.com/page.jpg?v=1", imageData: "BBBB", sourceFingerprint: "sha256-b" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.ok(keys[0].includes("sha256-a"));
+  assert.ok(keys[1].includes("sha256-b"));
+});
+
+test("cache identity preserves full query when source fingerprint is unavailable", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const keys = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async (key) => { keys.push(key); return null; }, set: async () => undefined },
+    upscaleProvider: { upscale: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }), cancel() {} },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue({ ...makeJob("signed-a"), imageUrl: "https://cdn.example.com/page.jpg?token=a&signature=one", sourceFingerprint: null });
+  scheduler.enqueue({ ...makeJob("signed-b"), imageUrl: "https://cdn.example.com/page.jpg?token=b&signature=two", sourceFingerprint: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.ok(keys[0].includes("token=a"));
+  assert.ok(keys[1].includes("token=b"));
+});
+
+test("segment cache identity includes parent fingerprint as well as coordinates", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const keys = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async (key) => { keys.push(key); return null; }, set: async () => undefined },
+    upscaleProvider: { upscale: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }), cancel() {} },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+  const segmentJob = {
+    ...makeJob("parent-a-seg-0"),
+    sourceFingerprint: "sha256:same-segment-bytes",
+    parentSourceFingerprint: "sha256:parent-a",
+    cacheVariant: "segment-0-0-1000",
+  };
+  scheduler.enqueue(segmentJob);
+  scheduler.enqueue({
+    ...segmentJob,
+    imageId: "parent-b-seg-0",
+    operationId: "parent-b-op-seg-0",
+    sourceRevision: "parent-b-rev#segment:0:0:1000",
+    parentSourceFingerprint: "sha256:parent-b",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.ok(keys[0].includes("sha256:parent-a"));
+  assert.ok(keys[1].includes("sha256:parent-b"));
+});
+
+test("tall images can enter slicing even when max input height is enabled", () => {
+  const { ImageProvider, ViewportImageProvider } = loadContentClasses();
+  const viewportProvider = new ViewportImageProvider({
+    imageProvider: new ImageProvider({
+      minInputWidthEnabled: true,
+      minInputHeightEnabled: true,
+      maxInputWidthEnabled: true,
+      maxInputHeightEnabled: true,
+      minInputWidth: 128,
+      minInputHeight: 128,
+      maxInputWidth: 8000,
+      maxInputHeight: 12000,
+    }),
+    renderer: {},
+  });
+  viewportProvider.imageSlicingEnabled = true;
+  viewportProvider.imageSliceMaxHeight = 2200;
+  const tallImage = {
+    naturalWidth: 900,
+    naturalHeight: 20000,
+    clientWidth: 900,
+    clientHeight: 20000,
+    getBoundingClientRect: () => ({ width: 900, height: 20000 }),
+  };
+
+  assert.equal(viewportProvider.shouldSliceImage(tallImage), true);
+  assert.equal(viewportProvider.canProcessCandidate(tallImage), true);
+});
+
+test("candidate evaluator rejects hidden and transparent images", () => {
+  const { viewportProvider } = makeContentProvider();
+  const hidden = makeTallImage("hidden");
+  hidden.style.display = "none";
+  const transparent = makeTallImage("transparent");
+  transparent.style.opacity = "0";
+
+  assert.equal(viewportProvider.canProcessCandidate(hidden), false);
+  assert.equal(viewportProvider.canProcessCandidate(transparent), false);
+});
+
+test("candidate evaluator rejects mostly occluded images", () => {
+  const image = makeTallImage("occluded");
+  const overlay = { id: "overlay" };
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [overlay, image],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), false);
+});
+
+test("candidate evaluator rejects an opaque blocker covering three of five probes", () => {
+  const image = makeTallImage("majority-occluded");
+  const overlay = { style: { opacity: "1", pointerEvents: "auto" } };
+  let probe = 0;
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => {
+      probe += 1;
+      return probe <= 3 ? [overlay, image] : [image];
+    },
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), false);
+});
+
+test("candidate evaluator accepts an anchor or container covering its image", () => {
+  const image = makeTallImage("anchor");
+  const anchor = { style: {}, contains: (node) => node === image };
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [anchor, image],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), true);
+});
+
+test("candidate evaluator ignores pointer-events none overlays", () => {
+  const image = makeTallImage("pointer-overlay");
+  const overlay = { style: { pointerEvents: "none", opacity: "1" } };
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [overlay, image],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), true);
+});
+
+test("candidate evaluator ignores nearly transparent overlays", () => {
+  const image = makeTallImage("transparent-overlay");
+  const overlay = { style: { pointerEvents: "auto", opacity: "0.02" } };
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [overlay, image],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), true);
+});
+
+test("candidate evaluator accepts partially visible tall comic images", () => {
+  const image = makeTallImage("comic");
+  image.getBoundingClientRect = () => ({ width: 900, height: 4000, top: -1200, bottom: 2800, left: 0, right: 900 });
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [image],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(image), true);
+});
+
+test("intersection prefetch schedules offscreen images inside root margin", async () => {
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+  const image = makeTallImage("prefetch");
+  Object.setPrototypeOf(image, HTMLImageElement.prototype);
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 950, bottom: 1850, left: 0, right: 900 });
+
+  viewportProvider.handleIntersections([{ target: image, isIntersecting: true }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+});
+
+test("candidate evaluator rejects fixed banner overlays", () => {
+  const banner = makeTallImage("banner");
+  banner.naturalHeight = 500;
+  banner.clientHeight = 500;
+  banner.height = 500;
+  banner.style.position = "fixed";
+  banner.getBoundingClientRect = () => ({ width: 1200, height: 500, top: 0, bottom: 500, left: 0, right: 1200 });
+  const { viewportProvider } = makeContentProvider({
+    elementsFromPoint: () => [banner],
+  });
+
+  assert.equal(viewportProvider.canProcessCandidate(banner), false);
+});
+
+test("raw slices are not rediscovered as candidates", () => {
+  const { viewportProvider } = makeContentProvider();
+  const raw = makeTallImage("raw");
+  raw.dataset.aiEnhancerRawSlice = "true";
+
+  assert.equal(viewportProvider.canProcessCandidate(raw), false);
+});
+
+test("segmentation fallback settles when all preprocessing slots are held by null reads", async () => {
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: async () => null,
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  const images = [0, 1, 2].map(makeTallImage);
+
+  const result = await waitForSettled(images.map((image) => viewportProvider.schedule(image)));
+
+  assert.equal(result, "settled");
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 3, JSON.stringify(sentMessages));
+  assert.equal(slotStats.acquired, slotStats.released);
+  assert.ok(slotStats.maxActive <= viewportProvider.preprocessingConcurrency);
+  assert.ok(slotStats.minActive >= 0);
+});
+
+test("read-null fallback reuses the failed read and does not read the image twice", async () => {
+  let readCount = 0;
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: async () => {
+      readCount += 1;
+      return null;
+    },
+  });
+  const image = makeTallImage(0);
+
+  const result = await waitForSettled([viewportProvider.schedule(image)]);
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+
+  assert.equal(result, "settled");
+  assert.equal(readCount, 1);
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].imageData, null);
+});
+
+test("slicing fallback reports reason without sending REMOVE_IMAGE for an unenqueued parent", async () => {
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    cropImageSegments: () => {
+      throw new Error("slice failed");
+    },
+  });
+
+  const result = await waitForSettled([viewportProvider.schedule(makeTallImage(0))]);
+
+  assert.equal(result, "settled");
+  assert.equal(sentMessages.filter((message) => message.type === "REMOVE_IMAGE").length, 0);
+  assert.deepEqual(
+    sentMessages.filter((message) => message.type === "PREPROCESSING_FALLBACK").map((message) => message.reason),
+    ["slice-encode-error"],
+  );
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+});
+
+test("segmentation fallback settles when all preprocessing slots are held by slicing errors", async () => {
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    cropImageSegments: () => {
+      throw new Error("slice failed");
+    },
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  const images = [0, 1, 2].map(makeTallImage);
+
+  const result = await waitForSettled(images.map((image) => viewportProvider.schedule(image)));
+
+  assert.equal(result, "settled");
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 3);
+  assert.equal(sentMessages.filter((message) => message.type === "REMOVE_IMAGE").length, 0);
+  assert.equal(slotStats.acquired, slotStats.released);
+  assert.ok(slotStats.maxActive <= viewportProvider.preprocessingConcurrency);
+  assert.ok(slotStats.minActive >= 0);
+});
+
+test("late slicing completion after timeout is ignored", async () => {
+  const lateSlice = deferred();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    cropImageSegments: () => lateSlice.promise,
+    renderer: {
+      installRawSlices: () => {
+        throw new Error("late segments must not render");
+      },
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  viewportProvider.withTimeout = (promise) => {
+    promise.catch(() => {});
+    return Promise.reject(new Error("Image segmentation timed out."));
+  };
+  const image = makeTallImage(0);
+
+  const result = await waitForSettled([viewportProvider.schedule(image)]);
+  lateSlice.resolve([{
+    index: 0,
+    sourceY: 0,
+    sourceHeight: 1000,
+    renderedHeight: 1000,
+    objectUrl: "blob:late",
+    imageData: "late-segment",
+  }]);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result, "settled");
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+  assert.equal(sentMessages.find((message) => message.type === "ENQUEUE_IMAGE").cacheVariant, "full");
+  assert.equal(slotStats.acquired, slotStats.released);
+});
+
+test("slice timeout settles fallback once and revokes late segment object URLs", async () => {
+  const lateSlice = deferred();
+  const fakeTimers = makeFakeTimers();
+  const urlApi = makeTrackedUrlApi();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    cropImageSegments: () => lateSlice.promise,
+    timers: fakeTimers.api,
+    urlApi,
+    renderer: {
+      installRawSlices: () => {
+        throw new Error("late segments must not render");
+      },
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  const scheduled = viewportProvider.schedule(makeTallImage(0));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  fakeTimers.runNext();
+  const result = await waitForSettled([scheduled]);
+  lateSlice.resolve([{
+    index: 0,
+    sourceY: 0,
+    sourceHeight: 1000,
+    renderedHeight: 1000,
+    objectUrl: "blob:late",
+    imageData: "late-segment",
+  }]);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result, "settled");
+  assert.equal(viewportProvider.preprocessingActive, 0);
+  assert.equal(viewportProvider.preprocessingWaiters.length, 0);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+  assert.equal(sentMessages.find((message) => message.type === "ENQUEUE_IMAGE").cacheVariant, "full");
+  assert.equal(sentMessages.filter((message) => String(message.cacheVariant).startsWith("segment-")).length, 0);
+  assert.equal(sentMessages.filter((message) => message.type === "REMOVE_IMAGE").length, 0);
+  assert.deepEqual(urlApi.revoked, ["blob:late"]);
+  assert.equal(slotStats.acquired, slotStats.released);
+});
+
+test("raw slice load error rolls back DOM and does not enqueue segments", async () => {
+  const urlApi = makeTrackedUrlApi();
+  const rawImages = [];
+  const { Renderer } = loadContentClasses({
+    urlApi,
+    onImageCreated: (rawImage) => rawImages.push(rawImage),
+  });
+  const renderer = new Renderer();
+  const image = makeTallImage("rollback");
+  image.parentNode = {
+    inserted: [],
+    insertBefore(wrapper) {
+      this.inserted.push(wrapper);
+      wrapper.parentNode = this;
+    },
+  };
+  image.parentNode.removeChild = (wrapper) => {
+    wrapper.removed = true;
+  };
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    urlApi,
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:segment-0",
+      imageData: "segment-data",
+    }],
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+
+  const scheduled = viewportProvider.schedule(image);
+  while (rawImages.length === 0) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  rawImages[0].dispatch("error");
+  const result = await scheduled.then(() => "settled", () => "rejected");
+
+  assert.equal(result, "settled");
+  assert.equal(image.style.display || "", "");
+  assert.equal(image.dataset.aiEnhancerSliced, undefined);
+  assert.deepEqual(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE"), []);
+  assert.deepEqual(sentMessages.filter((message) => message.type === "REMOVE_IMAGE"), []);
+  assert.deepEqual(urlApi.revoked, ["blob:segment-0"]);
+});
+
+test("raw slice rollback removes active object URLs and is idempotent", () => {
+  const urlApi = makeTrackedUrlApi();
+  const rawImages = [];
+  const { Renderer } = loadContentClasses({
+    urlApi,
+    onImageCreated: (rawImage) => rawImages.push(rawImage),
+  });
+  const renderer = new Renderer();
+  const image = makeTallImage("rollback-idempotent");
+  image.parentNode = {
+    insertBefore(wrapper) {
+      wrapper.parentNode = this;
+    },
+    removeChild(wrapper) {
+      wrapper.removed = true;
+      wrapper.parentNode = null;
+    },
+  };
+  const transaction = renderer.prepareRawSlices(
+    image,
+    { width: 900 },
+    [{ index: 0, renderedHeight: 1000, objectUrl: "blob:segment-0" }],
+  );
+  const [rawImage] = rawImages;
+
+  assert.equal(renderer.activeObjectUrls.get(rawImage), "blob:segment-0");
+  transaction.rollback();
+  transaction.rollback();
+
+  assert.equal(renderer.activeObjectUrls.get(rawImage), undefined);
+  assert.deepEqual(urlApi.revoked, ["blob:segment-0"]);
+});
+
+test("raw slice transaction has terminal idempotent state transitions", () => {
+  const urlApi = makeTrackedUrlApi();
+  const { Renderer } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const image = makeTallImage("transaction-state");
+  const inserted = [];
+  image.parentNode = {
+    insertBefore(wrapper) {
+      inserted.push(wrapper);
+      wrapper.parentNode = this;
+    },
+    removeChild(wrapper) {
+      const index = inserted.indexOf(wrapper);
+      if (index >= 0) inserted.splice(index, 1);
+      wrapper.parentNode = null;
+    },
+  };
+  const transaction = renderer.prepareRawSlices(
+    image,
+    { width: 900 },
+    [{ index: 0, sourceY: 0, sourceHeight: 1000, renderedHeight: 1000, objectUrl: "blob:state" }],
+    { operationId: "parent-op", sourceRevision: "parent-rev" },
+  );
+
+  assert.equal(transaction.state, "prepared");
+  transaction.commit();
+  transaction.commit();
+  assert.equal(transaction.state, "committed");
+  assert.equal(inserted.length, 1);
+  assert.equal(image.style.display, "none");
+  transaction.rollback();
+  transaction.rollback();
+  transaction.commit();
+
+  assert.equal(transaction.state, "rolledBack");
+  assert.equal(inserted.length, 0);
+  assert.equal(image.style.display || "", "");
+  assert.equal(image.dataset.aiEnhancerSliced, undefined);
+  assert.deepEqual(urlApi.revoked, ["blob:state"]);
+});
+
+test("prepared stale slice rollback cannot unhide a newer committed wrapper", () => {
+  const urlApi = makeTrackedUrlApi();
+  const { Renderer } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  const image = makeTallImage("transaction-owner");
+  const inserted = [];
+  image.parentNode = {
+    insertBefore(wrapper) {
+      inserted.push(wrapper);
+      wrapper.parentNode = this;
+    },
+    removeChild(wrapper) {
+      const index = inserted.indexOf(wrapper);
+      if (index >= 0) inserted.splice(index, 1);
+      wrapper.parentNode = null;
+    },
+  };
+  const stale = renderer.prepareRawSlices(
+    image,
+    { width: 900 },
+    [{ index: 0, sourceY: 0, sourceHeight: 1000, renderedHeight: 1000, objectUrl: "blob:stale-group" }],
+    { operationId: "old-op", sourceRevision: "old-rev" },
+  );
+  const current = renderer.prepareRawSlices(
+    image,
+    { width: 900 },
+    [{ index: 0, sourceY: 0, sourceHeight: 1000, renderedHeight: 1000, objectUrl: "blob:current-group" }],
+    { operationId: "new-op", sourceRevision: "new-rev" },
+  );
+  current.commit();
+
+  stale.rollback();
+
+  assert.equal(current.state, "committed");
+  assert.equal(inserted.length, 1);
+  assert.equal(image.style.display, "none");
+  assert.equal(image.dataset.aiEnhancerSliced, "true");
+  assert.deepEqual(urlApi.revoked, ["blob:stale-group"]);
+});
+
+test("renderer rejects already-complete broken images", async () => {
+  const { Renderer } = loadContentClasses();
+  const renderer = new Renderer();
+
+  await assert.rejects(
+    renderer.waitForImageLoad({ complete: true, naturalWidth: 0 }),
+    /Image failed to load/,
+  );
+});
+
+test("partial segment encoding failure revokes every earlier object URL", async () => {
+  const urlApi = makeTrackedUrlApi();
+  const { ViewportImageProvider } = loadContentClasses({
+    urlApi,
+    createElement: () => ({
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage() {} }),
+    }),
+  });
+  const viewportProvider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  viewportProvider.imageSliceMaxHeight = 1000;
+  viewportProvider.decodeBase64Image = async () => ({ width: 900, height: 2500 });
+  let encoded = 0;
+  viewportProvider.canvasToSegmentPayload = async () => {
+    encoded += 1;
+    if (encoded === 1) return { objectUrl: "blob:first-segment", imageData: "first" };
+    throw viewportProvider.preprocessingError("slice-encode-error");
+  };
+  const image = makeTallImage("partial-crop");
+  image.getBoundingClientRect = () => ({ width: 900, height: 2500, top: 0, bottom: 2500, left: 0, right: 900 });
+
+  await assert.rejects(viewportProvider.cropImageSegments("source", image), /slice-encode-error/);
+
+  assert.deepEqual(urlApi.revoked, ["blob:first-segment"]);
+});
+
+test("stale raw-load failure preserves a newer same-key operation", async () => {
+  const rawLoad = deferred();
+  const prepared = deferred();
+  const renderer = {
+    prepareRawSlices(_image, _metadata, segments) {
+      prepared.resolve();
+      return {
+        state: "prepared",
+        rawImages: segments.map((segment) => makeTallImage(`commit-race-raw-${segment.index}`)),
+        commit() { this.state = "committed"; },
+        rollback() { this.state = "rolledBack"; },
+      };
+    },
+    waitForImageLoad: () => rawLoad.promise,
+  };
+  const { viewportProvider, trackedImageKeys } = makeContentProvider({
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:raw-failure",
+      imageData: "segment-data",
+    }],
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  const image = makeTallImage("raw-race");
+  const scheduled = viewportProvider.schedule(image);
+  await prepared.promise;
+  const [baseKey] = trackedImageKeys.keys();
+  const replacement = { imageId: "replacement", operationId: "replacement-op", sourceRevision: baseKey, image };
+  trackedImageKeys.set(baseKey, replacement);
+  rawLoad.reject(new Error("raw load failed"));
+  await scheduled;
+
+  assert.equal(trackedImageKeys.get(baseKey), replacement);
+});
+
+test("stale immediately after slice commit rolls back before segment enqueue", async () => {
+  let trackedImageKeysRef;
+  let rollbackCount = 0;
+  const renderer = {
+    prepareRawSlices(image, _metadata, segments) {
+      return {
+        state: "prepared",
+        rawImages: segments.map((segment) => makeTallImage(`commit-race-raw-${segment.index}`)),
+        commit() {
+          this.state = "committed";
+          image.style.display = "none";
+          image.dataset.aiEnhancerSliced = "true";
+          const [baseKey] = trackedImageKeysRef.keys();
+          trackedImageKeysRef.set(baseKey, { imageId: "replacement", operationId: "replacement-op", sourceRevision: baseKey, image });
+        },
+        rollback() {
+          rollbackCount += 1;
+          this.state = "rolledBack";
+          image.style.display = "";
+          delete image.dataset.aiEnhancerSliced;
+        },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+  };
+  const setup = makeContentProvider({
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:commit-race",
+      imageData: "segment-data",
+    }],
+  });
+  trackedImageKeysRef = setup.trackedImageKeys;
+  setup.viewportProvider.withTimeout = async (promise) => promise;
+  const image = makeTallImage("commit-race");
+
+  await setup.viewportProvider.schedule(image);
+
+  assert.equal(rollbackCount, 1);
+  assert.equal(image.style.display || "", "");
+  assert.equal(image.dataset.aiEnhancerSliced, undefined);
+  assert.equal(setup.sentMessages.filter((message) => String(message.cacheVariant).startsWith("segment-")).length, 0);
+});
+
+test("stale operation after raw slice prepare rolls back without committing DOM", async () => {
+  const urlApi = makeTrackedUrlApi();
+  const rawLoaded = deferred();
+  const prepared = deferred();
+  const calls = { commit: 0, rollback: 0 };
+  const image = makeTallImage("stale-prepare");
+  image.parentNode = {
+    insertBefore() {
+      calls.commit += 1;
+      image.style.display = "none";
+      image.dataset.aiEnhancerSliced = "true";
+    },
+  };
+  const renderer = {
+    prepareRawSlices(_image, _metadata, segments) {
+      prepared.resolve();
+      return {
+        rawImages: segments.map((segment) => ({ segment })),
+        commit() {
+          image.parentNode.insertBefore({}, image);
+        },
+        rollback() {
+          calls.rollback += 1;
+          image.style.display = "";
+          delete image.dataset.aiEnhancerSliced;
+          segments.forEach((segment) => urlApi.revokeObjectURL(segment.objectUrl));
+        },
+      };
+    },
+    installRawSlices(imageArg, metadata, segments) {
+      const transaction = this.prepareRawSlices(imageArg, metadata, segments);
+      transaction.commit();
+      return transaction.rawImages;
+    },
+    waitForImageLoad: () => rawLoaded.promise,
+  };
+  const { viewportProvider } = makeContentProvider({
+    urlApi,
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:segment-0",
+      imageData: "segment-data",
+    }],
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  const scheduled = viewportProvider.schedule(image);
+  await prepared.promise;
+
+  image.src = "https://example.com/stale-prepare.png?rev=2";
+  image.currentSrc = image.src;
+  image.dataset.aiEnhancerSeen = "false";
+  await viewportProvider.schedule(image, false);
+  rawLoaded.resolve();
+  await scheduled;
+
+  assert.equal(calls.commit, 0);
+  assert.equal(calls.rollback, 1);
+  assert.equal(image.style.display || "", "");
+  assert.equal(image.dataset.aiEnhancerSliced, undefined);
+  assert.deepEqual(urlApi.revoked, ["blob:segment-0"]);
+});
+
+test("cancellation during preprocessing settles without enqueueing", async () => {
+  const read = deferred();
+  let readStarted = false;
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    readDisplayedImage: () => {
+      readStarted = true;
+      return read.promise;
+    },
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  const image = makeTallImage(0);
+  image.naturalHeight = 900;
+  image.clientHeight = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  const scheduled = viewportProvider.schedule(image);
+  while (!readStarted) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  viewportProvider.cancel(trackedImages.get(image.dataset.aiEnhancerImageId));
+  read.resolve("image-data");
+  await scheduled;
+
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+  assert.equal(sentMessages.filter((message) => message.type === "CANCEL_IMAGE").length, 1);
+  assert.equal(slotStats.acquired, slotStats.released);
+});
+
+test("successful segments and fallback images each enqueue once", async () => {
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: async (imageUrl) => (imageUrl.endsWith("0.png") ? "segment-source" : null),
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:segment",
+      imageData: "segment-data",
+    }],
+    renderer: {
+      installRawSlices: (_image, _metadata, segments) => segments.map((segment) => makeTallImage(`raw-${segment.index}`)),
+      waitForImageLoad: async () => undefined,
+    },
+  });
+  const slotStats = instrumentPreprocessingSlots(viewportProvider);
+  viewportProvider.withTimeout = async (promise) => promise;
+  const images = [0, 1, 2].map(makeTallImage);
+
+  const result = await waitForSettled(images.map((image) => viewportProvider.schedule(image)));
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+
+  assert.equal(result, "settled");
+  assert.equal(enqueued.length, 3, JSON.stringify(sentMessages));
+  assert.equal(enqueued.filter((message) => message.cacheVariant === "full").length, 2, JSON.stringify(sentMessages));
+  assert.equal(enqueued.filter((message) => String(message.cacheVariant).startsWith("segment-")).length, 1, JSON.stringify(sentMessages));
+  assert.equal(slotStats.acquired, slotStats.released);
+  assert.ok(slotStats.maxActive <= viewportProvider.preprocessingConcurrency);
+  assert.ok(slotStats.minActive >= 0);
+});
+
+test("one segment failure rolls back the entire committed slice group", async () => {
+  let rollbackCount = 0;
+  const parent = makeTallImage("group-failure");
+  const renderer = {
+    prepareRawSlices(image, _metadata, segments) {
+      const rawImages = segments.map((segment) => {
+        const raw = makeTallImage(`group-raw-${segment.index}`);
+        raw.segmentIndex = segment.index;
+        return raw;
+      });
+      return {
+        state: "prepared",
+        rawImages,
+        commit() {
+          if (this.state !== "prepared") return;
+          this.state = "committed";
+          image.style.display = "none";
+          image.dataset.aiEnhancerSliced = "true";
+        },
+        rollback() {
+          if (this.state === "rolledBack") return;
+          this.state = "rolledBack";
+          rollbackCount += 1;
+          image.style.display = "";
+          delete image.dataset.aiEnhancerSliced;
+        },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    renderer,
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:group-${index}`,
+      imageData: `segment-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(parent);
+  const segmentMessages = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+
+  viewportProvider.fail(
+    segmentMessages[0].imageId,
+    false,
+    segmentMessages[0].operationId,
+    segmentMessages[0].sourceRevision,
+  );
+
+  assert.equal(rollbackCount, 1);
+  assert.equal(parent.style.display || "", "");
+  assert.equal(parent.dataset.aiEnhancerSliced, undefined);
+  assert.equal(segmentMessages.some((message) => trackedImages.has(message.imageId)), false);
+  assert.ok(sentMessages.some((message) => message.type === "CANCEL_IMAGE" && message.operationId === segmentMessages[1].operationId));
+});
+
+test("segment completion rejects a raw node that lost exact slice ownership", async () => {
+  let renderCount = 0;
+  const renderer = makeTransactionalSliceRenderer({
+    token: "exact-owner-token",
+    onRender: async () => {
+      renderCount += 1;
+      return "rendered";
+    },
+  });
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:ownership-segment",
+      imageData: "ownership-segment-data",
+    }],
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(makeTallImage("ownership-parent"));
+  const completion = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+  const entry = trackedImages.get(completion.imageId);
+  delete entry.image.dataset.aiEnhancerSliceToken;
+
+  const outcome = await viewportProvider.complete({ ...completion, type: "UPSCALE_COMPLETE", imageBase64: "enhanced" });
+
+  assert.equal(outcome, "stale");
+  assert.equal(renderCount, 0);
+  assert.equal(trackedImages.get(entry.imageId), entry);
+});
+
+test("segment registration transport failure rolls back the committed group atomically", async () => {
+  let rollbackCount = 0;
+  const renderer = makeTransactionalSliceRenderer({ onRollback: () => { rollbackCount += 1; } });
+  const { viewportProvider, trackedImages } = makeContentProvider({
+    renderer,
+    sendMessage: (message) => {
+      if (message.type === "ENQUEUE_IMAGE" && message.cacheVariant === "segment-1-1000-1000") {
+        throw new Error("segment transport failed");
+      }
+      return Promise.resolve();
+    },
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:transport-${index}`,
+      imageData: `transport-data-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  const parent = makeTallImage("transport-parent");
+
+  await assert.doesNotReject(viewportProvider.schedule(parent));
+
+  assert.equal(rollbackCount, 1);
+  assert.equal(parent.style.display || "", "");
+  assert.equal(parent.dataset.aiEnhancerSliced, undefined);
+  assert.equal(viewportProvider.sliceGroups.size, 0);
+  assert.equal([...trackedImages.values()].some((entry) => entry.isSegment), false);
+});
+
+test("slice rollback finishes cleanup when cancellation transport throws", async () => {
+  let rejectCancellation = false;
+  let rollbackCount = 0;
+  const renderer = makeTransactionalSliceRenderer({ onRollback: () => { rollbackCount += 1; } });
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    renderer,
+    sendMessage: (message) => {
+      if (rejectCancellation && message.type === "CANCEL_IMAGE") throw new Error("cancel transport failed");
+      return Promise.resolve();
+    },
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:cancel-throw-${index}`,
+      imageData: `cancel-throw-data-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  const parent = makeTallImage("cancel-throw-parent");
+  await viewportProvider.schedule(parent);
+  const segment = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+  rejectCancellation = true;
+
+  assert.doesNotThrow(() => viewportProvider.fail(segment.imageId, false, segment.operationId, segment.sourceRevision));
+
+  assert.equal(rollbackCount, 1);
+  assert.equal(parent.style.display || "", "");
+  assert.equal(viewportProvider.sliceGroups.size, 0);
+  assert.equal([...trackedImages.values()].some((entry) => entry.isSegment), false);
+});
+
+test("removing only the hidden sliced parent preserves committed segment jobs", async () => {
+  const renderer = makeTransactionalSliceRenderer();
+  const { viewportProvider, HTMLImageElement, trackedImages } = makeContentProvider({
+    renderer,
+    sendMessage: () => Promise.resolve(),
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:detached-parent-${index}`,
+      imageData: `detached-parent-data-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  const parent = makeTallImage("detached-parent");
+  Object.setPrototypeOf(parent, HTMLImageElement.prototype);
+  await viewportProvider.schedule(parent);
+  const group = [...viewportProvider.sliceGroups.values()][0];
+
+  viewportProvider.cleanupRemovedNode(parent);
+
+  assert.equal(viewportProvider.sliceGroups.get(group.token), group);
+  assert.equal(group.state, "committed");
+  assert.equal(group.records.length, 2);
+  assert.ok(group.records.every((record) => trackedImages.get(record.entry.imageId) === record.entry));
+});
+
+test("parent source reprocess rolls back old segments before scheduling replacement", async () => {
+  let rollbackCount = 0;
+  const parent = makeTallImage("parent-reprocess");
+  parent.src = "https://example.com/parent.png?rev=1";
+  parent.currentSrc = parent.src;
+  const renderer = {
+    prepareRawSlices(image, _metadata, segments) {
+      return {
+        state: "prepared",
+        rawImages: segments.map((segment) => makeTallImage(`reprocess-raw-${segment.index}`)),
+        commit() {
+          if (this.state !== "prepared") return;
+          this.state = "committed";
+          image.style.display = "none";
+          image.dataset.aiEnhancerSliced = "true";
+        },
+        rollback() {
+          if (this.state === "rolledBack") return;
+          this.state = "rolledBack";
+          rollbackCount += 1;
+          image.style.display = "";
+          delete image.dataset.aiEnhancerSliced;
+        },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    renderer,
+    readDisplayedImage: async () => "parent-bytes",
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:reprocess-${index}`,
+      imageData: `segment-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(parent);
+
+  parent.src = "https://example.com/parent.png?rev=2";
+  parent.currentSrc = parent.src;
+  parent.naturalHeight = 900;
+  parent.clientHeight = 900;
+  parent.height = 900;
+  parent.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  await viewportProvider.schedule(parent, false);
+
+  const fullMessages = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && message.cacheVariant === "full");
+  assert.equal(rollbackCount, 1);
+  assert.equal(parent.style.display || "", "");
+  assert.equal(parent.dataset.aiEnhancerSliced, undefined);
+  assert.equal(fullMessages.length, 1);
+  assert.ok(fullMessages[0].imageUrl.includes("rev=2"));
+});
+
+test("ten reversed segment completions render only their recorded raw positions", async () => {
+  const rendered = [];
+  const renderer = {
+    prepareRawSlices(_image, _metadata, segments) {
+      return {
+        state: "prepared",
+        rawImages: segments.map((segment) => ({
+          segmentIndex: segment.index,
+          dataset: {},
+          style: {},
+          naturalWidth: 900,
+          naturalHeight: 1000,
+          clientWidth: 900,
+          clientHeight: 1000,
+          getBoundingClientRect: () => ({ width: 900, height: 1000, top: 0, bottom: 1000, left: 0, right: 900 }),
+        })),
+        commit() { this.state = "committed"; },
+        rollback() { this.state = "rolledBack"; },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+    render: async (raw, payload) => {
+      rendered.push({ segmentIndex: raw.segmentIndex, imageId: payload.imageId });
+      return "rendered";
+    },
+  };
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    renderer,
+    cropImageSegments: () => Array.from({ length: 10 }, (_, index) => ({
+      index,
+      sourceY: index * 1000,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: `blob:reverse-${index}`,
+      imageData: `segment-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(makeTallImage("reverse"));
+  const completions = sentMessages
+    .filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"))
+    .reverse();
+
+  for (const message of completions) {
+    await viewportProvider.complete({ ...message, type: "UPSCALE_COMPLETE", imageBase64: "enhanced" });
+  }
+
+  assert.equal(rendered.length, 10);
+  for (const result of rendered) {
+    assert.ok(result.imageId.endsWith(`-seg-${result.segmentIndex}`));
+  }
+  assert.notEqual(rendered.find((entry) => entry.segmentIndex === 1).imageId, rendered.find((entry) => entry.segmentIndex === 2).imageId);
+});
+
+test("segment priority update carries the exact segment operation id", async () => {
+  const renderer = {
+    prepareRawSlices(_image, _metadata, segments) {
+      return {
+        state: "prepared",
+        rawImages: segments.map((segment) => makeTallImage(`priority-raw-${segment.index}`)),
+        commit() { this.state = "committed"; },
+        rollback() { this.state = "rolledBack"; },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+  };
+  const { viewportProvider, sentMessages, trackedImages } = makeContentProvider({
+    renderer,
+    cropImageSegments: () => [{
+      index: 0,
+      sourceY: 0,
+      sourceHeight: 1000,
+      renderedHeight: 1000,
+      objectUrl: "blob:priority-segment",
+      imageData: "segment-priority",
+    }],
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(makeTallImage("priority-parent"));
+  const segmentEntry = [...trackedImages.values()].find((entry) => entry.isSegment);
+
+  viewportProvider.updateImagePriority(segmentEntry.image, segmentEntry.imageId);
+
+  const update = sentMessages.filter((message) => message.type === "UPDATE_PRIORITY").at(-1);
+  assert.equal(update.imageId, segmentEntry.imageId);
+  assert.equal(update.operationId, segmentEntry.operationId);
+});
+
+test("auto output limits use configured caps for raw image segments", () => {
+  const resolveOutputLimits = loadBackgroundHelpers();
+  const limits = resolveOutputLimits(
+    {
+      sizingMode: "auto",
+      maxOutputWidthEnabled: true,
+      maxOutputHeightEnabled: true,
+      maxOutputWidth: 2048,
+      maxOutputHeight: 8192,
+    },
+    {
+      cacheVariant: "segment-0-0-2200",
+      renderedWidth: 900,
+      renderedHeight: 900,
+      viewportWidth: 1920,
+      viewportHeight: 900,
+      screenWidth: 1920,
+      screenHeight: 1080,
+      devicePixelRatio: 1,
+    },
+  );
+
+  assert.equal(limits.width, 2048);
+  assert.equal(limits.height, 8192);
+});
+
+test("stale completion cannot remove a replacement job with the same image id", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const runs = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: () => {
+        const run = deferred();
+        runs.push(run);
+        return run.promise;
+      },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs.length, 1);
+  scheduler.cancel(7, "image-1", "image-1-op-1");
+  scheduler.enqueue({ ...makeJob(), operationId: "image-1-op-2", sourceRevision: "image-1-rev-2" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs.length, 2);
+  const replacement = [...scheduler.active.values()].find((job) => job.imageId === "image-1");
+
+  runs[0].resolve({});
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal([...scheduler.active.values()].find((job) => job.imageId === "image-1"), replacement);
+  scheduler.cancelAll();
+  runs[1].resolve({});
+});
+
+test("backend job id and active cancel use operation queue identity", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const run = deferred();
+  const jobIds = [];
+  const canceled = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: (_url, options) => {
+        jobIds.push(options.jobId);
+        return run.promise;
+      },
+      cancel: (jobId) => canceled.push(jobId),
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("image-identity"));
+  await new Promise((resolve) => setImmediate(resolve));
+  scheduler.cancel(7, "image-identity", "image-identity-op-1");
+
+  assert.deepEqual(jobIds, ["7:image-identity:image-identity-op-1"]);
+  assert.deepEqual(canceled, ["7:image-identity:image-identity-op-1"]);
+  run.resolve({});
+});
+
+test("page image registry ignores stale operation updates", async () => {
+  const { PageImageRegistry } = loadBackgroundClasses();
+  const registry = new PageImageRegistry();
+  await registry.seen(7, {
+    imageId: "image-1",
+    operationId: "op-old",
+    imageUrl: "https://example.com/old.png",
+    pageUrl: "https://example.com/page",
+    pageOrder: 1,
+  });
+  await registry.seen(7, {
+    imageId: "image-1",
+    operationId: "op-new",
+    imageUrl: "https://example.com/new.png",
+    pageUrl: "https://example.com/page",
+    pageOrder: 1,
+  });
+
+  registry.update(7, "image-1", { operationId: "op-old", status: "fixed" });
+
+  const [entry] = registry.list(7);
+  assert.equal(entry.operationId, "op-new");
+  assert.equal(entry.status, "seen");
+});
+
+test("page image registry seen stores current operation identity", async () => {
+  const { PageImageRegistry } = loadBackgroundClasses();
+  const registry = new PageImageRegistry();
+
+  await registry.seen(7, {
+    imageId: "image-1",
+    operationId: "op-current",
+    sourceRevision: "rev-current",
+    imageUrl: "https://example.com/current.png",
+    pageUrl: "https://example.com/page",
+    pageOrder: 1,
+  });
+
+  const [entry] = registry.list(7);
+  assert.equal(entry.operationId, "op-current");
+  assert.equal(entry.sourceRevision, "rev-current");
+});
+
+test("page image registry stale remove does not delete current operation", async () => {
+  const { PageImageRegistry } = loadBackgroundClasses();
+  const registry = new PageImageRegistry();
+  await registry.seen(7, {
+    imageId: "image-1",
+    operationId: "op-new",
+    sourceRevision: "rev-new",
+    imageUrl: "https://example.com/current.png",
+    pageUrl: "https://example.com/page",
+    pageOrder: 1,
+  });
+
+  registry.removeImage(7, "image-1", "op-old");
+
+  const [entry] = registry.list(7);
+  assert.equal(entry.operationId, "op-new");
+  assert.equal(entry.sourceRevision, "rev-new");
+});
+
+test("page image registry rejects operationless update and remove for owned entry", async () => {
+  const { PageImageRegistry } = loadBackgroundClasses();
+  const registry = new PageImageRegistry();
+  await registry.seen(7, {
+    imageId: "owned-image",
+    operationId: "owned-op",
+    sourceRevision: "owned-rev",
+    imageUrl: "https://example.com/current.png",
+    pageUrl: "https://example.com/page",
+    pageOrder: 1,
+  });
+
+  registry.update(7, "owned-image", { status: "fixed" });
+  registry.removeImage(7, "owned-image");
+
+  const [entry] = registry.list(7);
+  assert.ok(entry, "operationless remove deleted the owned entry");
+  assert.equal(entry.operationId, "owned-op");
+  assert.equal(entry.status, "seen");
+});
+
+test("canceling a tab rejects jobs from an older generation", () => {
+  const QueueScheduler = loadQueueScheduler();
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+  scheduler.paused = true;
+  scheduler.setPaused(false);
+  scheduler.maxConcurrentRequests = 0;
+  scheduler.enqueue(makeJob("old"));
+  const oldGeneration = [...scheduler.pending.values()].find((job) => job.imageId === "old").generation;
+  scheduler.cancelTab(7);
+  scheduler.enqueue({ ...makeJob("stale"), generation: oldGeneration });
+  assert.equal([...scheduler.pending.values()].some((job) => job.imageId === "stale"), false);
+});
+
+test("delayed enqueue storage read cannot resurrect a pre-navigation job", async () => {
+  const storageRead = deferred();
+  const responses = [];
+  const { dispatch, scheduler } = loadBackgroundMessageHarness({
+    storageGet: () => storageRead.promise,
+  });
+  scheduler.maxConcurrentRequests = 0;
+  const message = {
+    type: "ENQUEUE_IMAGE",
+    imageId: "delayed-image",
+    operationId: "delayed-op",
+    sourceRevision: "delayed-rev",
+    imageUrl: "https://example.com/delayed.png",
+    pageOrder: 1,
+    viewportDistance: 0,
+    displayMetrics: {},
+  };
+
+  assert.equal(dispatch(message, { tab: { id: 7, url: "https://example.com/page" } }, (response) => responses.push(response)), true);
+  scheduler.cancelTab(7);
+  storageRead.resolve({ enabled: true, outputQuality: 90 });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal([...scheduler.pending.values()].some((job) => job.imageId === message.imageId), false);
+  assert.equal([...scheduler.active.values()].some((job) => job.imageId === message.imageId), false);
+  assert.equal(responses.at(-1)?.accepted, false);
+});
+
+test("delayed image-seen storage read cannot resurrect a pre-navigation registry entry", async () => {
+  const storageRead = deferred();
+  const responses = [];
+  const { dispatch, scheduler, pageImageRegistry } = loadBackgroundMessageHarness({
+    storageGet: () => storageRead.promise,
+  });
+  const message = {
+    type: "IMAGE_SEEN",
+    imageId: "delayed-seen-image",
+    operationId: "delayed-seen-op",
+    sourceRevision: "delayed-seen-rev",
+    imageUrl: "https://example.com/delayed-seen.png",
+    width: 900,
+    height: 1200,
+    pageOrder: 1,
+  };
+
+  assert.equal(dispatch(message, { tab: { id: 7, url: "https://example.com/page" } }, (response) => responses.push(response)), true);
+  scheduler.cancelTab(7);
+  storageRead.resolve({ enabled: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(pageImageRegistry.list(7), []);
+  assert.equal(responses.at(-1)?.recorded, false);
+});
