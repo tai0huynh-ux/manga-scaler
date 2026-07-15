@@ -39,6 +39,39 @@ function Add-ExactIgnore([string]$RelativePath) {
     }
 }
 
+function Test-PathLooksSensitive([string]$RelativePath) {
+    $normalized = $RelativePath -replace "\\", "/"
+    $namePattern = '(?i)(^|/)(\.env($|\.)|credentials?($|\.|-|_)|secrets?($|\.|-|_)|tokens?($|\.|-|_)|service-account|firebase-adminsdk|client_secret|oauth|id_rsa($|\.)|id_ed25519($|\.))'
+    $extensionPattern = '(?i)\.(pem|key|pfx|p12|cert|crt|csr|asc|gpg|sqlite3?|db)$'
+    return ($normalized -match $namePattern -or $normalized -match $extensionPattern)
+}
+
+function Test-FileContainsSecret([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.Length -gt 1048576) {
+        return $false
+    }
+
+    $secretPattern = @(
+        'AIza[0-9A-Za-z_-]{35}',
+        'AKIA[0-9A-Z]{16}',
+        'ASIA[0-9A-Z]{16}',
+        'gh[pousr]_[A-Za-z0-9_]{20,}',
+        'github_pat_[A-Za-z0-9_]{20,}',
+        'glpat-[A-Za-z0-9_-]{20,}',
+        'sk-[A-Za-z0-9_-]{20,}',
+        'xox[baprs]-[A-Za-z0-9-]{10,}',
+        '-----BEGIN (RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----',
+        '(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|password)\s*[:=]\s*["''][^"'']{12,}["'']'
+    ) -join '|'
+
+    return [bool](Select-String -LiteralPath $Path -Pattern $secretPattern -Quiet -ErrorAction SilentlyContinue)
+}
+
 $createdNew = $false
 $mutex = [Threading.Mutex]::new($true, "Local\AiMangaUpscalerGitUpdate", [ref]$createdNew)
 if (-not $createdNew) {
@@ -50,18 +83,12 @@ try {
     Write-UpdateLog "Starting repository update."
     Invoke-Git rev-parse --is-inside-work-tree | Out-Null
 
-    $namePattern = '(?i)(^|/)(\.env($|\.)|credentials?($|\.)|secrets?($|\.)|tokens?($|\.)|id_rsa|id_ed25519|desktop\.ini$)|\.(pem|key|pfx|p12|sqlite3?|db)$'
-    $secretPattern = '(AIza[0-9A-Za-z_-]{35}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)'
-
     $untracked = @(Invoke-Git ls-files --others --exclude-standard)
     foreach ($relativePath in $untracked) {
         if (-not $relativePath) { continue }
         $fullPath = Join-Path $Repository $relativePath
-        $sensitiveName = $relativePath -match $namePattern
-        $sensitiveContent = $false
-        if (-not $sensitiveName -and (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            $sensitiveContent = [bool](Select-String -LiteralPath $fullPath -Pattern $secretPattern -Quiet -ErrorAction SilentlyContinue)
-        }
+        $sensitiveName = Test-PathLooksSensitive $relativePath
+        $sensitiveContent = (-not $sensitiveName -and (Test-FileContainsSecret $fullPath))
         if ($sensitiveName -or $sensitiveContent) {
             Add-ExactIgnore $relativePath
         }
@@ -76,8 +103,7 @@ try {
             Write-UpdateLog "Removed Windows metadata from Git tracking: $relativePath"
             continue
         }
-        if ((Test-Path -LiteralPath $fullPath -PathType Leaf) -and
-            (Select-String -LiteralPath $fullPath -Pattern $secretPattern -Quiet -ErrorAction SilentlyContinue)) {
+        if ((Test-PathLooksSensitive $relativePath) -or (Test-FileContainsSecret $fullPath)) {
             throw "Possible secret detected in tracked file '$relativePath'. Nothing was committed or pushed."
         }
     }
