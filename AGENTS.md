@@ -19,6 +19,12 @@ Do not read the whole repository by default. Start from the changed file, the ro
 5. Run `powershell -ExecutionPolicy Bypass -File scripts/verify.ps1` before completion.
 6. Never weaken an existing assertion merely to make a patch pass unless the product contract intentionally changed.
 
+## Codex auto sync
+
+- After Codex completes a project change and focused verification succeeds, run `powershell -ExecutionPolicy Bypass -File scripts/auto-git-update.ps1` from the repository root to commit and push safe changes.
+- Do not use a long-running file watcher for Git sync. Sync once at the end of each completed Codex change set.
+- If `scripts/auto-git-update.ps1` stops because it detected a possible secret in a tracked file, do not bypass it; report the blocked file and fix the leak first.
+
 ## Critical invariants
 
 - A stale completion must never remove or overwrite a newer job with the same image ID.
