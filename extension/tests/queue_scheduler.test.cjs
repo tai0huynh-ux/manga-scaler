@@ -151,7 +151,7 @@ function loadBackgroundMessageHarness(options = {}) {
     clearTimeout,
     console,
     importScripts() {},
-    fetch: async () => ({ ok: true }),
+    fetch: options.fetch || (async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) })),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     chrome: {
       storage: {
@@ -162,7 +162,7 @@ function loadBackgroundMessageHarness(options = {}) {
         sendMessage: async () => undefined,
         query: async () => [],
       },
-      declarativeNetRequest: { updateSessionRules: async () => undefined },
+      declarativeNetRequest: { updateSessionRules: options.updateSessionRules || (async () => undefined) },
       runtime: {
         getURL: () => "chrome-extension://test/",
         onMessage: { addListener(listener) { messageListener = listener; } },
@@ -492,6 +492,110 @@ function instrumentPreprocessingSlots(viewportProvider) {
   };
   return stats;
 }
+
+test("content reads slicing image data through the background boundary", async () => {
+  const { ViewportImageProvider, sentMessages } = loadContentClasses({
+    sendMessage: async (message) => {
+      assert.equal(message.type, "READ_IMAGE_FOR_SLICING");
+      assert.equal(message.imageUrl, "https://cdn.example.test/page.webp");
+      return { ok: true, imageData: "background-image-data" };
+    },
+  });
+  const viewportProvider = new ViewportImageProvider({
+    imageProvider: { canProcess: () => true, read: () => ({}) },
+    renderer: { waitForImageLoad: async () => undefined },
+  });
+
+  const result = await viewportProvider.readDisplayedImage("https://cdn.example.test/page.webp");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.imageData, "background-image-data");
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].type, "READ_IMAGE_FOR_SLICING");
+  assert.equal(sentMessages[0].imageUrl, "https://cdn.example.test/page.webp");
+});
+
+test("content returns a read reason when the background cannot read a slicing image", async () => {
+  const { ViewportImageProvider } = loadContentClasses({
+    sendMessage: async () => ({ ok: false, reason: "read-fetch-error", message: "CORS blocked" }),
+  });
+  const viewportProvider = new ViewportImageProvider({
+    imageProvider: { canProcess: () => true, read: () => ({}) },
+    renderer: { waitForImageLoad: async () => undefined },
+  });
+
+  const result = await viewportProvider.readDisplayedImage("https://cdn.example.test/page.webp");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.imageData, null);
+  assert.equal(result.reason, "read-fetch-error");
+});
+
+test("background READ_IMAGE_FOR_SLICING uses the existing browser image reader for CDN images", async () => {
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const fetchedUrls = [];
+  const ruleUpdates = [];
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    fetch: async (url) => {
+      fetchedUrls.push(url);
+      return { ok: true, arrayBuffer: async () => pngBytes.buffer };
+    },
+    updateSessionRules: async (update) => {
+      ruleUpdates.push(update);
+    },
+  });
+
+  assert.equal(dispatch(
+    { type: "READ_IMAGE_FOR_SLICING", imageUrl: "https://cdn.example.test/chapter/page.png" },
+    { tab: { id: 7, url: "https://reader.example.test/chapter/1" } },
+    (response) => responses.push(response),
+  ), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(fetchedUrls, ["https://cdn.example.test/chapter/page.png"]);
+  assert.equal(responses.at(-1).ok, true);
+  assert.equal(responses.at(-1).imageData, Buffer.from(pngBytes).toString("base64"));
+  assert.ok(ruleUpdates.some((update) => update.addRules?.[0]?.action?.requestHeaders?.[0]?.value === "https://reader.example.test/chapter/1"));
+});
+
+test("background READ_IMAGE_FOR_SLICING rejects unsupported URLs", () => {
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness();
+
+  assert.equal(dispatch(
+    { type: "READ_IMAGE_FOR_SLICING", imageUrl: "data:image/png;base64,abc" },
+    { tab: { id: 7, url: "https://reader.example.test/" } },
+    (response) => responses.push(response),
+  ), false);
+
+  assert.equal(responses.at(-1).ok, false);
+  assert.equal(responses.at(-1).reason, "read-invalid-url");
+  assert.equal(responses.at(-1).message, "Only http and https image URLs are supported.");
+});
+
+test("background READ_IMAGE_FOR_SLICING reports read timeouts", async () => {
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    fetch: async () => {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    },
+  });
+
+  assert.equal(dispatch(
+    { type: "READ_IMAGE_FOR_SLICING", imageUrl: "https://cdn.example.test/slow.png" },
+    { tab: { id: 7, url: "https://reader.example.test/" } },
+    (response) => responses.push(response),
+  ), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(responses.at(-1).ok, false);
+  assert.equal(responses.at(-1).reason, "read-timeout");
+});
 
 function makeTallImage(index) {
   const attributes = new Map();

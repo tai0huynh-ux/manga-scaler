@@ -586,6 +586,13 @@ class BackendUpscaleProvider {
     }
   }
 
+  readImageFailureReason(error) {
+    if (error?.name === "AbortError") return "read-timeout";
+    if (/non-image|HTML/i.test(error?.message || "")) return "read-non-image";
+    if (/timed out|timeout/i.test(error?.message || "")) return "read-timeout";
+    return "read-fetch-error";
+  }
+
   escapeRegex(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
@@ -1257,6 +1264,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     sendResponse({ recorded: true });
     return false;
+  }
+
+  if (message.type === "READ_IMAGE_FOR_SLICING") {
+    const imageUrl = String(message.imageUrl || "");
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(imageUrl);
+    } catch {
+      sendResponse({ ok: false, reason: "read-invalid-url", message: "Invalid image URL." });
+      return false;
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      sendResponse({ ok: false, reason: "read-invalid-url", message: "Only http and https image URLs are supported." });
+      return false;
+    }
+    if (!Number.isInteger(sender.tab?.id)) {
+      sendResponse({ ok: false, reason: "read-fetch-error", message: "Missing sender tab." });
+      return false;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
+    upscaleProvider.readBrowserImage(parsedUrl.href, sender.tab.url || "", controller.signal).then(
+      (imageData) => sendResponse({ ok: true, imageData }),
+      (error) => sendResponse({
+        ok: false,
+        reason: upscaleProvider.readImageFailureReason(error),
+        message: error?.message || "Unable to read image for slicing.",
+      }),
+    ).finally(() => clearTimeout(timeout));
+    return true;
   }
 
   if (message.type === "PREPROCESSING_FALLBACK") {

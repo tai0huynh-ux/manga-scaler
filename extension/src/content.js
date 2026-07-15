@@ -861,6 +861,12 @@ class ViewportImageProvider {
       }
       const readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
       if (!readResult.ok) {
+        this.logSliceFailure(readResult.reason, {
+          imageUrl: metadata.imageUrl,
+          operationId,
+          imageWidth: metadata.width,
+          imageHeight: metadata.height,
+        });
         outcome = { type: "fallback", reason: readResult.reason, imageData: null };
       } else {
         const parentFingerprintPromise = Promise.resolve(this.sourceFingerprint(readResult.imageData));
@@ -890,6 +896,13 @@ class ViewportImageProvider {
       if (reason === "cancelled" || reason === "superseded") {
         outcome = { type: "cancel", reason };
       } else {
+        this.logSliceFailure(reason, {
+          imageUrl: metadata.imageUrl,
+          operationId,
+          imageWidth: metadata.width,
+          imageHeight: metadata.height,
+          error,
+        });
         outcome = { type: "fallback", reason, imageData: null };
       }
     } finally {
@@ -923,7 +936,15 @@ class ViewportImageProvider {
         };
     try {
       await Promise.all(transaction.rawImages.map((rawImage) => this.renderer.waitForImageLoad(rawImage)));
-    } catch {
+    } catch (error) {
+      this.logSliceFailure("slice-load-error", {
+        imageUrl: metadata.imageUrl,
+        operationId,
+        imageWidth: metadata.width,
+        imageHeight: metadata.height,
+        segmentCount: segments.length,
+        error,
+      });
       transaction.rollback();
       this.removeTrackedEntry(operation);
       return;
@@ -938,7 +959,15 @@ class ViewportImageProvider {
     let segmentFingerprints;
     try {
       segmentFingerprints = await Promise.all(segments.map((segment) => this.sourceFingerprint(segment.imageData)));
-    } catch {
+    } catch (error) {
+      this.logSliceFailure("slice-encode-error", {
+        imageUrl: metadata.imageUrl,
+        operationId,
+        imageWidth: metadata.width,
+        imageHeight: metadata.height,
+        segmentCount: segments.length,
+        error,
+      });
       transaction.rollback();
       this.removeTrackedEntry(operation);
       return;
@@ -1071,7 +1100,15 @@ class ViewportImageProvider {
           },
         });
       }
-    } catch {
+    } catch (error) {
+      this.logSliceFailure("segment-enqueue-error", {
+        imageUrl: metadata.imageUrl,
+        operationId,
+        imageWidth: metadata.width,
+        imageHeight: metadata.height,
+        segmentCount: segments.length,
+        error,
+      });
       this.rollbackSliceGroup(group, "segment-registration-failed");
       return;
     }
@@ -1238,6 +1275,28 @@ class ViewportImageProvider {
     const error = new Error(message);
     error.reason = reason;
     return error;
+  }
+
+  logSliceFailure(reason, details = {}) {
+    const payload = {
+      imageUrl: details.imageUrl,
+      operationId: details.operationId,
+      imageWidth: details.imageWidth,
+      imageHeight: details.imageHeight,
+      sliceIndex: details.sliceIndex,
+      segmentCount: details.segmentCount,
+      error: this.serializeError(details.error),
+    };
+    console.warn("[AI Enhancer][slice]", reason, payload);
+  }
+
+  serializeError(error) {
+    if (!error) return null;
+    return {
+      name: error.name || "Error",
+      message: error.message || String(error),
+      reason: error.reason || null,
+    };
   }
 
   reasonFromError(error, fallbackReason) {
@@ -1464,7 +1523,12 @@ class ViewportImageProvider {
   }
 
   async cropImageSegments(imageData, image, signal = null) {
-    const source = await this.decodeBase64Image(imageData);
+    let source;
+    try {
+      source = await this.decodeBase64Image(imageData);
+    } catch (error) {
+      throw this.preprocessingError("slice-decode-error", error?.message || "Unable to decode displayed image for segmentation.");
+    }
     if (this.isPreprocessingCancelled(signal)) {
       throw this.preprocessingError(signal.reason || "cancelled");
     }
@@ -1484,7 +1548,14 @@ class ViewportImageProvider {
         canvas.width = source.width;
         canvas.height = sourceHeight;
         const context = canvas.getContext("2d", { alpha: false });
-        context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
+        if (!context) {
+          throw this.preprocessingError("slice-crop-error", "Unable to create image segment canvas.");
+        }
+        try {
+          context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
+        } catch (error) {
+          throw this.preprocessingError("slice-crop-error", error?.message || "Unable to crop image segment.");
+        }
         const payload = await this.canvasToSegmentPayload(canvas, signal);
         if (this.isPreprocessingCancelled(signal)) {
           this.discardSegments([payload]);
@@ -1663,40 +1734,30 @@ class ViewportImageProvider {
   }
 
   async readDisplayedImage(imageUrl) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
     try {
-      const response = await fetch(imageUrl, {
-        cache: "force-cache",
-        credentials: "include",
-        signal: controller.signal,
+      if (!chrome?.runtime?.sendMessage) {
+        return { ok: false, imageData: null, reason: "read-fetch-error" };
+      }
+      const response = await chrome.runtime.sendMessage({
+        type: "READ_IMAGE_FOR_SLICING",
+        imageUrl,
       });
-      if (!response.ok) {
-        return { ok: false, imageData: null, reason: "read-http-error" };
+      if (!response || typeof response !== "object") {
+        return { ok: false, imageData: null, reason: "read-fetch-error" };
       }
-      const buffer = await response.arrayBuffer();
-      if (!this.isImageBuffer(buffer)) {
-        return { ok: false, imageData: null, reason: "read-non-image" };
-      }
-      const bytes = new Uint8Array(buffer);
-      const chunkSize = 0x8000;
-      let binary = "";
-      for (let index = 0; index < bytes.length; index += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-      }
-      return { ok: true, imageData: btoa(binary) };
+      return response.ok === true
+        ? { ok: true, imageData: response.imageData || "" }
+        : {
+            ok: false,
+            imageData: null,
+            reason: typeof response.reason === "string" ? response.reason : "read-fetch-error",
+          };
     } catch (error) {
       return {
         ok: false,
         imageData: null,
-        reason: timedOut || error?.name === "AbortError" ? "read-timeout" : "read-fetch-error",
+        reason: /context invalidated|receiving end|message port closed/i.test(error?.message || "") ? "read-fetch-error" : "read-fetch-error",
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 

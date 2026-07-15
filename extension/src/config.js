@@ -11,7 +11,7 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     indexedDbMaxEntries: 500,
   },
   images: {
-    browserReadTimeoutMs: 4000,
+    browserReadTimeoutMs: 15000,
     minWidthPx: 128,
     minHeightPx: 128,
     maxWidthPx: 8000,
