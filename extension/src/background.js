@@ -1446,14 +1446,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "GET_STATS") {
     chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-      const activeTabId = tab?.url?.startsWith(chrome.runtime.getURL("")) ? lastContentTabId : tab?.id;
+      const requestedTabId = Number.isInteger(message.tabId) ? message.tabId : null;
+      const activeTabId = requestedTabId ?? (tab?.url?.startsWith(chrome.runtime.getURL("")) ? lastContentTabId : tab?.id);
       statisticsTracker.snapshot(scheduler.snapshot(), activeTabId).then(sendResponse);
     });
     return true;
   }
 
   if (message.type === "GET_PAGE_IMAGES") {
-    sendResponse({ tabId: lastContentTabId, images: pageImageRegistry.listAll() });
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : lastContentTabId;
+    sendResponse({ tabId, images: Number.isInteger(tabId) ? pageImageRegistry.list(tabId) : [] });
     return false;
   }
 

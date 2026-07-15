@@ -16,11 +16,14 @@ const limitTogglePairs = {
   maxInputWidthEnabled: "maxInputWidth",
   maxInputHeightEnabled: "maxInputHeight",
 };
+const requestedTabIdValue = new URLSearchParams(window.location.search).get("tabId");
+const requestedTabId = requestedTabIdValue === null ? null : Number(requestedTabIdValue);
+const contentTabId = Number.isInteger(requestedTabId) && requestedTabId >= 0 ? requestedTabId : null;
 
 async function refresh() {
   const [stats, page] = await Promise.all([
-    chrome.runtime.sendMessage({ type: "GET_STATS" }),
-    chrome.runtime.sendMessage({ type: "GET_PAGE_IMAGES" }),
+    chrome.runtime.sendMessage({ type: "GET_STATS", tabId: contentTabId }),
+    chrome.runtime.sendMessage({ type: "GET_PAGE_IMAGES", tabId: contentTabId }),
   ]);
   document.getElementById("mode").value = stats.mode || "auto";
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);

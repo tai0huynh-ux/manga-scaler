@@ -54,7 +54,12 @@ class PopupController {
     this.previewOriginal.addEventListener("change", () => {
       chrome.runtime.sendMessage({ type: "SET_PREVIEW_ORIGINAL", enabled: this.previewOriginal.checked });
     });
-    this.openDashboard.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") }));
+    this.openDashboard.addEventListener("click", async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const dashboardUrl = new URL(chrome.runtime.getURL("dashboard.html"));
+      if (Number.isInteger(tab?.id)) dashboardUrl.searchParams.set("tabId", String(tab.id));
+      await chrome.tabs.create({ url: dashboardUrl.toString() });
+    });
     this.refresh();
     this.refreshTimer = setInterval(() => this.refreshStats(), 2000);
   }

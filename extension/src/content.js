@@ -19,11 +19,33 @@ class ImageProvider {
     const height = image.naturalHeight || image.height || image.clientHeight;
     const allowTallImage = options.allowTallImage === true;
     return (
+      !this.isInterfaceOrAdvertisement(image) &&
       (this.limits.minInputWidthEnabled === false || width >= this.limits.minInputWidth) &&
       (this.limits.minInputHeightEnabled === false || height >= this.limits.minInputHeight) &&
       (this.limits.maxInputWidthEnabled === false || width <= this.limits.maxInputWidth) &&
       (allowTallImage || this.limits.maxInputHeightEnabled === false || height <= this.limits.maxInputHeight)
     );
+  }
+
+  isInterfaceOrAdvertisement(image) {
+    const attributes = [
+      image?.alt,
+      image?.title,
+      image?.id,
+      image?.className,
+      image?.getAttribute?.("aria-label"),
+      image?.currentSrc,
+      image?.src,
+    ].filter((value) => typeof value === "string").join(" ").toLowerCase();
+    const explicitAssetPattern = /(^|[\s_./-])(advert(?:isement|ising)?|ads?|adserver|adservice|doubleclick|googleads|avatar|badge|emoji|icon|logo|sprite)(?=$|[\s_./-])/i;
+    if (explicitAssetPattern.test(attributes)) return true;
+    if (typeof image?.closest !== "function") return false;
+    return Boolean(image.closest([
+      "header", "nav", "aside", "footer",
+      '[role="banner"]', '[role="navigation"]', '[role="complementary"]',
+      '[aria-label*="advert" i]', '[data-ad]', '[data-ad-slot]',
+      '[class*="advert" i]', '[id*="advert" i]',
+    ].join(",")));
   }
 
   read(image) {
@@ -463,7 +485,7 @@ class Renderer {
     });
   }
 
-  waitForImageLoad(image, signal = null) {
+  waitForImageLoad(image, signal = null, timeoutMs = AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs) {
     if (signal?.aborted) {
       return Promise.reject(new Error("Image load cancelled."));
     }
@@ -476,10 +498,12 @@ class Renderer {
 
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timeoutId = null;
       const cleanup = () => {
         image.removeEventListener?.("load", onLoad);
         image.removeEventListener?.("error", onError);
         signal?.removeEventListener?.("abort", onAbort);
+        if (timeoutId !== null) clearTimeout(timeoutId);
       };
       const settle = (callback, value) => {
         if (settled) return;
@@ -490,9 +514,13 @@ class Renderer {
       const onLoad = () => settle(resolve);
       const onError = () => settle(reject, new Error("Image failed to load."));
       const onAbort = () => settle(reject, new Error("Image load cancelled."));
+      const onTimeout = () => settle(reject, new Error("Image load timed out."));
       image.addEventListener("load", onLoad, { once: true });
       image.addEventListener("error", onError, { once: true });
       signal?.addEventListener?.("abort", onAbort, { once: true });
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutId = setTimeout(onTimeout, timeoutMs);
+      }
     });
   }
 
@@ -672,7 +700,7 @@ class ViewportImageProvider {
         const currentGeneration = Number(image.dataset.aiEnhancerSourceGeneration || "0");
         image.dataset.aiEnhancerSourceGeneration = String(currentGeneration + 1);
       }
-      if (!this.canProcessCandidate(image)) {
+      if (!this.canProcessCandidate(image, { allowPrefetch: true })) {
         return;
       }
       const metadata = this.imageProvider.read(image);
@@ -723,7 +751,7 @@ class ViewportImageProvider {
         height: metadata.height,
         pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
       });
-      this.schedule(image);
+      this.schedule(image, true, { allowPrefetch: true });
     };
     reportSeen();
     image.addEventListener("load", reportSeen);
@@ -850,6 +878,15 @@ class ViewportImageProvider {
   async scheduleSegments(image, metadata, imageId, operationId, baseKey) {
     const operation = trackedImageKeys.get(baseKey);
     if (!operation || operation.operationId !== operationId || trackedImages.get(imageId) !== operation) return;
+    operation.state = "preprocessing";
+    await chrome.runtime.sendMessage({
+      type: "PREPROCESSING_STARTED",
+      imageId,
+      operationId,
+      sourceRevision: baseKey,
+      pageOrder: operation.pageOrder,
+    });
+    if (!this.isCurrentKeyOperation(baseKey, operation)) return;
     const signal = this.createPreprocessingSignal();
     operation.preprocessingSignal = signal;
     await this.acquirePreprocessingSlot();
@@ -888,7 +925,7 @@ class ViewportImageProvider {
           throw this.preprocessingError("superseded");
         }
         outcome = segments.length
-          ? { type: "segments", segments, parentSourceFingerprint }
+          ? { type: "segments", segments, parentSourceFingerprint, imageData: readResult.imageData }
           : { type: "fallback", reason: "slice-encode-error", imageData: readResult.imageData, parentSourceFingerprint };
       }
     } catch (error) {
@@ -922,6 +959,7 @@ class ViewportImageProvider {
     }
 
     if (outcome.type !== "segments") {
+      if (outcome.type === "cancel") this.cancel(operation);
       return;
     }
 
@@ -946,13 +984,21 @@ class ViewportImageProvider {
         error,
       });
       transaction.rollback();
-      this.removeTrackedEntry(operation);
+      await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, {
+        reason: "slice-load-error",
+        imageData: outcome.imageData,
+        parentSourceFingerprint: outcome.parentSourceFingerprint,
+      });
       return;
     }
     if (!this.isCurrentKeyOperation(baseKey, operation)) {
       this.cancelPreprocessingSignal(signal, "superseded");
       transaction.rollback();
-      this.removeTrackedEntry(operation);
+      await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, {
+        reason: "slice-encode-error",
+        imageData: outcome.imageData,
+        parentSourceFingerprint: outcome.parentSourceFingerprint,
+      });
       return;
     }
 
@@ -1010,7 +1056,11 @@ class ViewportImageProvider {
     });
     if (records.some((record) => !record.rawImage)) {
       transaction.rollback();
-      this.removeTrackedEntry(operation);
+      await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, {
+        reason: "slice-load-error",
+        imageData: outcome.imageData,
+        parentSourceFingerprint: outcome.parentSourceFingerprint,
+      });
       return;
     }
 
@@ -1029,7 +1079,11 @@ class ViewportImageProvider {
     };
     if (transaction.commit() === false) {
       transaction.rollback();
-      this.removeTrackedEntry(operation);
+      await this.enqueueFullImageFallback(image, metadata, imageId, operationId, baseKey, operation, {
+        reason: "slice-commit-error",
+        imageData: outcome.imageData,
+        parentSourceFingerprint: outcome.parentSourceFingerprint,
+      });
       return;
     }
     if (!this.isCurrentKeyOperation(baseKey, operation)) {
@@ -1186,6 +1240,16 @@ class ViewportImageProvider {
         this.removeTrackedEntry(entry);
       }
       if (entry?.baseKey) completedImageKeys.delete(entry.baseKey);
+    }
+    try {
+      const cleanup = chrome.runtime.sendMessage({
+        type: "REMOVE_IMAGE",
+        imageId: group.parentImageId,
+        operationId: group.operationId,
+      });
+      cleanup?.catch?.(() => {});
+    } catch {
+      // Local rollback must still settle if the extension context is gone.
     }
     this.removeTrackedEntry(group.parentEntry);
     this.sliceGroups.delete(group.token);

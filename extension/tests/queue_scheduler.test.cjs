@@ -1786,6 +1786,47 @@ test("intersection prefetch schedules offscreen images inside root margin", asyn
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
 });
 
+test("initial discovery registers and schedules eligible offscreen page images", async () => {
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/offscreen-discovery.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 5000, bottom: 5900, left: 0, right: 900 });
+
+  viewportProvider.observeImage(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+});
+
+test("candidate evaluator rejects explicitly marked interface and advertising images", () => {
+  const { ImageProvider, ViewportImageProvider } = loadContentClasses();
+  const viewportProvider = new ViewportImageProvider({
+    imageProvider: new ImageProvider({
+      minInputWidthEnabled: false,
+      minInputHeightEnabled: false,
+      maxInputWidthEnabled: false,
+      maxInputHeightEnabled: false,
+    }),
+    renderer: {},
+  });
+  const advertisement = makeTallImage("advertisement");
+  advertisement.alt = "Advertisement";
+  const navigationIcon = makeTallImage("navigation-icon");
+  navigationIcon.closest = (selector) => selector.includes("nav") ? { tagName: "NAV" } : null;
+
+  assert.equal(viewportProvider.canProcessCandidate(advertisement), false);
+  assert.equal(viewportProvider.canProcessCandidate(navigationIcon), false);
+});
+
 test("candidate evaluator rejects fixed banner overlays", () => {
   const banner = makeTallImage("banner");
   banner.naturalHeight = 500;
@@ -1822,6 +1863,20 @@ test("segmentation fallback settles when all preprocessing slots are held by nul
   assert.equal(slotStats.acquired, slotStats.released);
   assert.ok(slotStats.maxActive <= viewportProvider.preprocessingConcurrency);
   assert.ok(slotStats.minActive >= 0);
+});
+
+test("slicing reports preprocessing before reading or cropping the long image", async () => {
+  const read = deferred();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    readDisplayedImage: () => read.promise,
+  });
+  const scheduled = viewportProvider.schedule(makeTallImage("preprocessing-state"));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 1);
+
+  read.resolve(null);
+  await scheduled;
 });
 
 test("read-null fallback reuses the failed read and does not read the image twice", async () => {
@@ -1957,7 +2012,7 @@ test("slice timeout settles fallback once and revokes late segment object URLs",
   assert.equal(slotStats.acquired, slotStats.released);
 });
 
-test("raw slice load error rolls back DOM and does not enqueue segments", async () => {
+test("raw slice load error rolls back DOM and falls back to the full image", async () => {
   const urlApi = makeTrackedUrlApi();
   const rawImages = [];
   const { Renderer } = loadContentClasses({
@@ -2000,7 +2055,10 @@ test("raw slice load error rolls back DOM and does not enqueue segments", async 
   assert.equal(result, "settled");
   assert.equal(image.style.display || "", "");
   assert.equal(image.dataset.aiEnhancerSliced, undefined);
-  assert.deepEqual(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE"), []);
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].cacheVariant, "full");
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_FALLBACK").length, 1);
   assert.deepEqual(sentMessages.filter((message) => message.type === "REMOVE_IMAGE"), []);
   assert.deepEqual(urlApi.revoked, ["blob:segment-0"]);
 });
@@ -2127,6 +2185,23 @@ test("renderer rejects already-complete broken images", async () => {
     renderer.waitForImageLoad({ complete: true, naturalWidth: 0 }),
     /Image failed to load/,
   );
+});
+
+test("renderer image load wait has a finite timeout", async () => {
+  const { Renderer, HTMLImageElement } = loadContentClasses();
+  const renderer = new Renderer();
+  const image = new HTMLImageElement();
+  image.complete = false;
+
+  const outcome = await Promise.race([
+    renderer.waitForImageLoad(image, null, 1).then(
+      () => "loaded",
+      (error) => error.message,
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 20)),
+  ]);
+
+  assert.match(outcome, /timed out/i);
 });
 
 test("partial segment encoding failure revokes every earlier object URL", async () => {
@@ -2466,7 +2541,7 @@ test("segment completion rejects a raw node that lost exact slice ownership", as
 test("segment registration transport failure rolls back the committed group atomically", async () => {
   let rollbackCount = 0;
   const renderer = makeTransactionalSliceRenderer({ onRollback: () => { rollbackCount += 1; } });
-  const { viewportProvider, trackedImages } = makeContentProvider({
+  const { viewportProvider, trackedImages, sentMessages } = makeContentProvider({
     renderer,
     sendMessage: (message) => {
       if (message.type === "ENQUEUE_IMAGE" && message.cacheVariant === "segment-1-1000-1000") {
@@ -2487,12 +2562,20 @@ test("segment registration transport failure rolls back the committed group atom
   const parent = makeTallImage("transport-parent");
 
   await assert.doesNotReject(viewportProvider.schedule(parent));
+  const groupParentIdentity = sentMessages.find((message) => (
+    message.type === "PREPROCESSING_STARTED" && !message.imageId.includes("-seg-")
+  ));
 
   assert.equal(rollbackCount, 1);
   assert.equal(parent.style.display || "", "");
   assert.equal(parent.dataset.aiEnhancerSliced, undefined);
   assert.equal(viewportProvider.sliceGroups.size, 0);
   assert.equal([...trackedImages.values()].some((entry) => entry.isSegment), false);
+  assert.ok(sentMessages.some((message) => (
+    message.type === "REMOVE_IMAGE" &&
+    message.imageId === groupParentIdentity.imageId &&
+    message.operationId === groupParentIdentity.operationId
+  )));
 });
 
 test("slice rollback finishes cleanup when cancellation transport throws", async () => {
@@ -2871,6 +2954,30 @@ test("page image registry rejects operationless update and remove for owned entr
   assert.ok(entry, "operationless remove deleted the owned entry");
   assert.equal(entry.operationId, "owned-op");
   assert.equal(entry.status, "seen");
+});
+
+test("GET_PAGE_IMAGES returns only the requested content tab", async () => {
+  const responses = [];
+  const { dispatch, pageImageRegistry } = loadBackgroundMessageHarness();
+  await pageImageRegistry.seen(7, {
+    imageId: "tab-7-image",
+    operationId: "tab-7-op",
+    imageUrl: "https://example.com/tab-7.png",
+    pageUrl: "https://example.com/reader-7",
+    pageOrder: 1,
+  });
+  await pageImageRegistry.seen(8, {
+    imageId: "tab-8-image",
+    operationId: "tab-8-op",
+    imageUrl: "https://example.com/tab-8.png",
+    pageUrl: "https://example.com/reader-8",
+    pageOrder: 1,
+  });
+
+  dispatch({ type: "GET_PAGE_IMAGES", tabId: 7 }, {}, (response) => responses.push(response));
+
+  assert.equal(responses.at(-1).tabId, 7);
+  assert.deepEqual(responses.at(-1).images.map((entry) => entry.imageId), ["tab-7-image"]);
 });
 
 test("canceling a tab rejects jobs from an older generation", () => {
