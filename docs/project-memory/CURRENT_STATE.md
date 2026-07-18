@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
 
 - Backend: 52 tests passed.
-- Extension: 141 tests passed.
+- Extension: 148 tests passed.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 72%, above the 45% gate.
@@ -73,6 +73,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Live reader acceptance for the HTTP 422 checkpoint was not rerun without an `AI_MANGA_LIVE_URL`; current runtime proof is the deterministic Edge fixture with the real loopback backend/model.
 
 ## Next likely work
+
+Live-reader checkpoint (2026-07-19): clean Manga 1188 reached 64/64 stable Blob replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and settled queue/DNR state. Hive 293 remained 66/75 (88%) with nine bottom reader images left in `seen` after controlled viewport passes; Manhua and hentaivnx remain unverified. Extreme-image work is intentionally blocked until this live gate is green.
 
 1. Repair the live scheduling path for the nine detected-but-unreplaced Hive images and re-run with a clean isolated backend.
 2. Re-run sanitized Edge DOM-replacement acceptance on TruyenQQ Manga/Manhwa/Manhua and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.

@@ -136,13 +136,24 @@ function safeTracePrefix(value, length = 16) {
   return value.slice(0, length);
 }
 
-function sanitizeTraceMetadata(metadata = {}) {
+function sanitizeTraceValue(key, value, depth = 0) {
+  const lower = String(key).toLowerCase();
+  if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) return undefined;
+  if (typeof value === "string") return value.length > 256 ? `${value.slice(0, 253)}...` : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (depth >= 2) return undefined;
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeTraceValue(key, item, depth + 1)).filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object") return sanitizeTraceMetadata(value, depth + 1);
+  return undefined;
+}
+
+function sanitizeTraceMetadata(metadata = {}, depth = 0) {
   const sanitized = {};
   for (const [key, value] of Object.entries(metadata || {})) {
-    const lower = key.toLowerCase();
-    if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) continue;
-    if (typeof value === "string") sanitized[key] = value.length > 256 ? `${value.slice(0, 253)}...` : value;
-    else if (typeof value === "number" || typeof value === "boolean" || value === null) sanitized[key] = value;
+    const safeValue = sanitizeTraceValue(key, value, depth);
+    if (safeValue !== undefined) sanitized[key] = safeValue;
   }
   return sanitized;
 }

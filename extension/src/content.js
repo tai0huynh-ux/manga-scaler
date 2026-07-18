@@ -2170,9 +2170,13 @@ class ViewportImageProvider {
       return;
     }
 
-    trackedImages.forEach((entry) => {
+    // Include discovered-but-not-yet-scheduled entries so a later viewport
+    // pass can promote them from `seen` into preprocessing.
+    trackedImageKeys.forEach((entry) => {
       this.updateImagePriority(entry.image, entry.imageId);
-      if (entry.state === "preprocessing_queued") {
+      if (entry.state === "seen" && this.isWithinPrefetch(entry.image)) {
+        this.schedule(entry.image, true, { allowPrefetch: true });
+      } else if (entry.state === "preprocessing_queued") {
         const distance = this.viewportDistance(entry.image);
         if (entry.preprocessingWaiter) entry.preprocessingWaiter.viewportDistance = distance;
         if (distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {

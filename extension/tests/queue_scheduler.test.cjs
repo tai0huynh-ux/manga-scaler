@@ -1062,6 +1062,44 @@ test("request metadata sanitizer records shape without URL tokens or image bytes
   assert.doesNotMatch(serialized, /token=private|secret-image-payload|iVBOR/);
 });
 
+test("request-start trace preserves nested sanitized normalization evidence", async () => {
+  const traceEvents = [];
+  const secret = "secret-image-payload";
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    traceEvents,
+    fetch: async (url) => String(url).endsWith("/upscale") ? {
+      ok: true,
+      status: 200,
+      json: async () => ({ imageUrl: "http://127.0.0.1:8765/cache/images/result.webp", contentType: "image/webp" }),
+    } : {
+      ok: true,
+      status: 200,
+      headers: { get: () => "image/webp" },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.upscale("https://cdn.example.test/page.png?token=private", {
+    imageData: Buffer.from(secret).toString("base64"),
+    jobId: "job-1",
+    operationId: "operation-1",
+    traceId: "trace-1",
+    attempt: 1,
+    maxProcessingSeconds: 60,
+    maxOutputWidth: 256,
+    maxOutputHeight: 256,
+    outputQuality: 90,
+    tileSize: 256,
+  });
+
+  const started = traceEvents.find((event) => event.event === "background.backend.request.started");
+  assert.equal(started.metadata.request_metadata.image_data_present, true);
+  assert.equal(started.metadata.request_metadata.max_output_width, 256);
+  assert.equal(started.metadata.request_metadata.image_url_hostname, "cdn.example.test");
+  assert.doesNotMatch(JSON.stringify(started), /token=private|secret-image-payload/);
+});
+
 test("provider dispatches the normalized request contract", async () => {
   const requests = [];
   const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
@@ -2434,6 +2472,32 @@ test("initial discovery registers but does not preprocess images outside the pre
 
   assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1);
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+});
+
+test("viewport refresh requeues a discovered image when it enters prefetch", async () => {
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/deferred-discovery.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+  let top = 5000;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+
+  viewportProvider.observeImage(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+
+  top = 100;
+  viewportProvider.refreshPriorities();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
 });
 
 test("preprocessing started is emitted only after an operation owns a slot", async () => {
