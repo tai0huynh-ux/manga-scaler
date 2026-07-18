@@ -249,6 +249,7 @@ async function main() {
     browserClient = await new CdpClient(await browserWebSocketUrl(port)).open();
     const extensionWorker = await waitForExtensionWorker(port);
     assert.ok(extensionWorker.url.startsWith("chrome-extension://"));
+    const initialWorkerClient = await connectTarget(extensionWorker);
 
     const targets = await listTargets(port);
     const pageTarget = targets.find((target) => target.type === "page" && target.url === "about:blank")
@@ -299,6 +300,12 @@ async function main() {
       assert.match(rejected.src, /^http:/);
     }
     assert.ok(pageState.health.queue.completed >= healthBefore.queue.completed + 2);
+    const monitorState = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
+    const completedMonitorJobs = monitorState.jobs.filter((job) => job.stage === "COMPLETED");
+    assert.ok(completedMonitorJobs.length >= 2, "monitor must record DOM-committed completions");
+    assert.ok(completedMonitorJobs.every((job) => job.renderCommit?.confirmed === true), "monitor completion must include renderer confirmation");
+    assert.equal(JSON.stringify(monitorState).includes("imageData"), false, "monitor snapshot must exclude image bytes");
+    initialWorkerClient.close();
 
     const lifecycleEvidence = {};
     const unrelatedRuleId = 900000;

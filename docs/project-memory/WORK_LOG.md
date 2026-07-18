@@ -121,3 +121,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Full extension suite passed 152 tests, including a 500-job snapshot/filter load gate; backend 47 tests; JavaScript checks; Ruff; 71% coverage; deterministic Edge fixture/lifecycle E2E passed with zero browser exceptions, zero failed/cancelled jobs, and settled queues. The existing worktree-equivalent Python runtime was used because `.venv` is absent in this isolated checkout.
 - Git: Pending automatic isolated-branch sync for `feat(monitor): expose image job lifecycle`.
 - Remaining: Add monitor-specific browser dashboard/recovery/load assertions and complete the final acceptance matrix; representative heavy Manhwa remains a known external throughput limitation.
+
+## 2026-07-19 - Processing Monitor deterministic browser evidence
+
+- Request: Close the monitor E2E assertion gap in the isolated worktree without changing the main checkout.
+- Changes: Connected to the initial Edge service worker, asserted the monitor snapshot after two real DOM Blob commits, verified every completed row has `renderCommit.confirmed === true`, excluded image bytes, and closed the initial CDP client before worker-stop lifecycle checks.
+- Invariant/decision: The monitor assertion must observe the same live worker that processed the successful page, while the lifecycle stop test must not keep that worker target artificially alive.
+- Verification: `npm.cmd test` passed 152 extension tests; backend pytest passed 47 tests; Ruff and 71% coverage passed; `npm.cmd run test:e2e:edge-fixture` passed with two completed jobs, zero browser exceptions, zero failed/cancelled jobs, settled queues, worker restart, navigation, and reload evidence.
+- Git: Pending automatic isolated-branch sync; main checkout remains untouched.
+- Remaining: Dashboard UI interaction coverage and representative heavy Manhwa/hentaivnx acceptance remain open.

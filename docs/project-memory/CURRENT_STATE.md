@@ -53,6 +53,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Live Edge acceptance passed on public `truyenqqko.com` for one Manga chapter (64/64 image replacements, including two sliced images) and one Manhua chapter (3/3 replacements, including one sliced image); both runs had zero false positives, duplicate jobs, browser exceptions, and residual Referer rules.
 - Reader comment avatars using lazy `noavatar.png` are rejected as UI assets, and live-reader E2E diagnostics redact source URL values while detecting backend uptime/counter resets.
 - Processing Monitor schema version 1 is wired through content/background lifecycle events and a bounded sanitized session/local snapshot. `COMPLETED` is emitted only after content confirms the Blob DOM commit; backend receipt remains `RECEIVING_RESULT`.
+- Deterministic Edge monitor acceptance now reads the live service-worker snapshot after two Blob replacements, proves renderer-confirmed `COMPLETED` rows, and verifies that image bytes are absent from the snapshot.
 
 ## Known limitations
 
