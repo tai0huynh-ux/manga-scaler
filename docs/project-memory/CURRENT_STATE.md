@@ -2,7 +2,7 @@
 
 ## Baseline
 
-- Verified date: 2026-07-18, Asia/Bangkok.
+- Verified date: 2026-07-19, Asia/Bangkok.
 - Branch: `main`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
@@ -11,10 +11,10 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the baseline:
+Full `scripts/verify.ps1` result on integrated commit `c7b687e`:
 
-- Backend: 47 tests passed.
-- Extension: 126 tests passed in the protected-read lifecycle gate.
+- Backend: 49 tests passed.
+- Extension: 139 tests passed.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.

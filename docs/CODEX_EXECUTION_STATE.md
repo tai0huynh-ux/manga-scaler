@@ -63,6 +63,7 @@ Repair and re-run the live reader gate with a clean isolated backend. Hive still
 - Hive 293 measured 75/75 detected, 66/75 replacements (88%), 184/184 backend successes, zero sanitized failures, zero residual rules, and zero extension exceptions; nine originals remained unreplaced.
 - Manhua 320 measured 26/26 replacements with 110/110 backend successes in the clean first-pass run, but two reader-chrome false positives blocked PASS.
 - Backend `/health` stopped responding after repeated live runs; no hentaivnx or clean Manga result is claimed.
+- Integrated commit/push: `c7b687e3be6acbbf9dc944fb3be959cf6edf3106` reached `origin/main`; full verification passed 49 backend tests, 139 extension tests, JavaScript checks, Ruff, and 71% coverage.
 
 ## Worker-restart Referer cleanup checkpoint
 
