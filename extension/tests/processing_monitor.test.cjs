@@ -329,3 +329,25 @@ test("MON-013 aggregates segment terminal state without inventing percentage pro
     progress: null,
   });
 });
+
+test("MON-LOAD retains and filters 500 synthetic jobs without dropping terminal events", () => {
+  const monitor = loadMonitor();
+  const store = new monitor.ProcessingMonitorStore({ maxActiveHistory: 500, retentionHours: 1000 });
+  const started = Date.now();
+  for (let index = 0; index < 500; index += 1) {
+    store.ingest(monitor.createEvent({
+      tabId: index % 4,
+      imageId: `load-image-${index}`,
+      operationId: `load-operation-${index}`,
+      eventId: `load-event-${index}`,
+      stage: "DETECTED",
+      mode: index % 2 ? "manga" : "auto",
+      timestamp: new Date(started + index).toISOString(),
+    }));
+  }
+  const snapshot = store.snapshot();
+  const filtered = snapshot.jobs.filter((job) => job.mode === "manga" && job.status !== "TERMINAL");
+  assert.equal(snapshot.jobs.length, 500);
+  assert.equal(filtered.length, 250);
+  assert.ok(Date.now() - started < 3000, "500-job monitor snapshot/filter should remain bounded");
+});

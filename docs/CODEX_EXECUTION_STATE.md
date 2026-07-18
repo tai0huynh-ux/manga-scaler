@@ -116,5 +116,5 @@ Manga and Manhua live-reader gates are green on current public `truyenqqko.com` 
 - Added `ProcessingMonitorStore` persistence through `chrome.storage.session` plus sanitized local history, deterministic prune, worker-restart interruption recovery, segment aggregation, and dashboard snapshot APIs.
 - Background queue/cache/backend paths now report queue, backend send, result receipt, retry/deferred, timeout/failure, and cancellation events. Content reports render preparation/rendering and DOM commit/failure. Processed statistics increment only after a confirmed commit.
 - Dashboard monitor uses the existing Dashboard page and exposes summary cards, filters, keyed rows, timeline/detail diagnostics, trace copy, sanitized export, cancel, retry, and terminal-history clearing.
-- Verification: 151 extension tests, 47 backend tests, JavaScript checks, Ruff, 71% coverage, and deterministic Edge lifecycle E2E passed. No main-checkout files were changed.
+- Verification: 152 extension tests, 47 backend tests, JavaScript checks, Ruff, 71% coverage, a 500-job snapshot/filter load gate, and deterministic Edge lifecycle E2E passed. No main-checkout files were changed.
 - Next exact action: add dashboard-specific Edge assertions for persistence/cancel/retry/export and a 100-500 synthetic-job load gate before final acceptance.
