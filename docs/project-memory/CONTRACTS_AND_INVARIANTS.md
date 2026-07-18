@@ -23,6 +23,7 @@
 ```text
 imageUrl             -> image_url
 imageData            -> image_data
+schemaVersion        -> schema_version
 jobId                -> job_id
 tileSize             -> tile_size
 enhanceLevel          -> enhance_level
@@ -37,6 +38,10 @@ sourceFingerprint    -> source_fingerprint
 ```
 
 `attempt` keeps the same name. Any request-field change requires simultaneous checks in background request construction, Pydantic schemas, API route forwarding, service signatures, and `backend/tests/test_api_contract.py`.
+
+Request schema version 1 requires HTTP/HTTPS when browser-owned bytes are absent. When valid `imageData` is present, `imageUrl` may be omitted or may carry Blob/Data source metadata; the backend must use the supplied bytes and must not download that metadata URL. `file:` and arbitrary schemes are always rejected.
+
+Recoverable numeric drift is normalized before dispatch, including output dimensions below the backend minimum. Non-finite values, unsupported modes/tile sizes, malformed text-processing objects, and overlong identifiers fail locally as non-retryable request-normalization errors.
 
 ## Cache identity
 

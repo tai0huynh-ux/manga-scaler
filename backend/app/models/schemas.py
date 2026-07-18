@@ -104,9 +104,9 @@ class UpscaleResponse(BaseModel):
     trace_id: str | None = Field(default=None, alias="traceId")
 
     @field_serializer("image_url")
-    def serialize_image_url(self, value: str | None) -> str | None:
+    def serialize_image_url(self, value: HttpUrl) -> str:
         """Serialize HttpUrl values as plain strings for browser clients."""
-        return value
+        return str(value)
 
 
 class SwitchModelRequest(BaseModel):

@@ -299,7 +299,7 @@ async function main() {
       kind: READER_KIND,
       title: reader.title,
       url: reader.url,
-      eligibleImages: final.page.loaded,
+      eligibleImages: final.page.eligible,
       chapterImageElements: final.page.originalElements,
       detectedImages: final.page.detected,
       browserReadSuccesses: final.page.replacements,

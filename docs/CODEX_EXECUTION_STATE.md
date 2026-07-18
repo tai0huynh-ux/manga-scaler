@@ -42,6 +42,17 @@
 
 Repair and re-run the live reader gate with a clean isolated backend. Hive still has 66/75 stable original-image replacements (88%) and nine detected-but-unreplaced images. Manhua reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix. The local backend became unresponsive after repeated live runs, so hentaivnx and a clean Manga rerun remain blocked.
 
+## HTTP 422 and browser-owned request checkpoint
+
+- Root cause: persisted/output-limit drift could send `body.maxOutputWidth=128`; FastAPI rejects it with validation type `greater_than_equal` because the contract minimum is `256`.
+- Backend validation failures now return only sanitized field/type/message plus trace ID. The extension preserves those fields through the registry and Dashboard, and treats 422 as non-retryable.
+- Every backend dispatch passes through one request normalizer. It clamps recoverable numeric drift, rejects non-finite values, unsupported modes/tile sizes and malformed text settings, emits only sanitized request metadata, and declares request schema version 1.
+- Stored settings migrate idempotently to schema version 1, keep known valid values, bound numeric fields, reject wrong boolean types/unknown keys, and reset the unsupported historical value `anime` to the documented default instead of claiming an unproven legacy mapping.
+- With browser-owned `imageData`, the API accepts Blob/Data metadata or no source URL and does not invoke the downloader. Without bytes, only HTTP/HTTPS URLs are accepted.
+- Verification: 52 backend tests, 141 extension tests, JavaScript checks, Ruff, 72% coverage, secret/runtime-artifact scans with zero findings, and deterministic Edge lifecycle E2E PASS. Edge produced stable Blob replacements, duplicate replacements `0`, stale Chapter A entries `0`, residual Referer rules `0`, browser exceptions `0`, and queue processing/waiting/size `0`.
+- Commit/push: `f0da83c7c94d796b0e240d02d4945ef7d190133d` reached `origin/main` with zero divergence.
+- Live-site URL acceptance was not rerun because `AI_MANGA_LIVE_URL` was not supplied; the deterministic contract-equivalent fixture is the current runtime proof.
+
 ## Protected-read lifecycle acceptance checkpoint
 
 - Startup cleanup now recognizes the smallest current exact-rule signature instead of deleting any Referer rule in a broad numeric range; unrelated and non-Referer session rules remain untouched.

@@ -11,13 +11,13 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on integrated commit `c7b687e`:
+Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
 
-- Backend: 49 tests passed.
-- Extension: 139 tests passed.
+- Backend: 52 tests passed.
+- Extension: 141 tests passed.
 - JavaScript syntax checks passed.
 - Ruff passed.
-- Total backend coverage: 71%, above the 45% gate.
+- Total backend coverage: 72%, above the 45% gate.
 
 Git integrity recovery also passed `git fsck --full` after injected `desktop.ini` files were moved to a recoverable external backup. Git reported one dangling blob but no corruption.
 
@@ -50,6 +50,10 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Real Edge acceptance stops and reactivates the actual MV3 worker during a stalled protected read, proves orphan cleanup and unrelated-rule preservation, and settles queue/registry/lock state.
 - Full same-tab navigation invalidates Chapter A while Chapter B discovers and renders normally with no stale registry entry or residual rule.
 - Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
+- FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
+- Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
+- Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
+- Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
 
 ## Known limitations
 
@@ -66,6 +70,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Translation uses an unofficial best-effort Google endpoint and requires network access.
 - Backend network exposure is not hardened; keep it loopback-only.
 - Native-host generated manifest/executable are machine-specific artifacts even if present in this checkout.
+- Live reader acceptance for the HTTP 422 checkpoint was not rerun without an `AI_MANGA_LIVE_URL`; current runtime proof is the deterministic Edge fixture with the real loopback backend/model.
 
 ## Next likely work
 

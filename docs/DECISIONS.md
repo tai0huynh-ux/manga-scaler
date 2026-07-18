@@ -1,5 +1,15 @@
 # Engineering decisions
 
+## 2026-07-19 - Browser-owned bytes are authoritative request input
+
+Context: Protected and Blob/Data images may already be available to the browser while the backend cannot safely or meaningfully download their display URL.
+
+Decision: Request schema version 1 accepts Blob/Data metadata or no URL only when `imageData` is present. The backend uses those bytes directly; URL-only requests remain restricted to HTTP/HTTPS.
+
+Reason: This closes the 422 contract gap without loosening the downloader's SSRF boundary or adding intrusive browser permissions.
+
+Consequence: The extension normalizes and sanitizes every request before dispatch, persisted settings migrate idempotently, and invalid local contracts are non-retryable.
+
 ## 2026-07-16 - Trace Core MVP uses append-only JSONL
 
 Context: The project needs trace/debug correlation before adding a dashboard or artifact capture.
