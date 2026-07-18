@@ -4,9 +4,9 @@
 
 - Verified date: 2026-07-18, Asia/Bangkok.
 - Branch: `main`.
-- Baseline commit before project-memory creation: `4a2e304`.
-- Upstream at baseline: `origin/main` matched `4a2e304`.
-- Repository was clean before this documentation change.
+- Recovered baseline commit: `7b8da56`.
+- Upstream after recovery: `origin/main` matched `7b8da56` with zero divergence.
+- Repository was clean before the mandatory-state documentation checkpoint.
 - Runtime stack: Python 3.12, FastAPI, ONNX Runtime DirectML, Pillow/NumPy, Chrome/Edge MV3.
 
 ## Verified quality gate
@@ -18,6 +18,8 @@ Full `scripts/verify.ps1` result on the baseline:
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
+
+Git integrity recovery also passed `git fsck --full` after injected `desktop.ini` files were moved to a recoverable external backup. Git reported one dangling blob but no corruption.
 
 ## Implemented capabilities
 
@@ -49,10 +51,10 @@ Full `scripts/verify.ps1` result on the baseline:
 
 ## Next likely work
 
-1. Run real Chrome/Edge validation on representative manga and webtoon hosts.
-2. Record anti-hotlink/browser-read failures with structured logs and network evidence.
-3. Add site-specific handling only for repeatable, evidenced incompatibilities.
-4. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
-5. Decide whether to replace the translation endpoint with an explicit provider abstraction.
+1. Build the deterministic offline reader fixture and boundary/extreme-aspect tests.
+2. Run real Chrome/Edge validation on representative manga and webtoon hosts.
+3. Record anti-hotlink/browser-read failures with structured logs and network evidence.
+4. Add site-specific handling only for repeatable, evidenced incompatibilities.
+5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

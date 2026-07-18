@@ -7,3 +7,5 @@ Trace Core MVP is implemented as a lightweight correlation layer across content,
 Current extension lifecycle and queue design are documented in [ARCHITECTURE.md](ARCHITECTURE.md). Active limitations are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md), implementation history in [CHANGELOG.md](CHANGELOG.md), and manual follow-up in [CODEX_TASKS.md](CODEX_TASKS.md).
 
 Durable engineering context for new Codex sessions starts at [project-memory/README.md](project-memory/README.md). It contains the ownership tree, runtime flows, contracts, invariants, change/test routing, verified current state, and append-only work log.
+
+Repository-wide execution rules live in [`../AI_PROJECT_RULES.md`](../AI_PROJECT_RULES.md), while the concise recovery baseline and current checkpoint are recorded in [`../PROJECT_STATE.md`](../PROJECT_STATE.md) and [`CODEX_EXECUTION_STATE.md`](CODEX_EXECUTION_STATE.md).
