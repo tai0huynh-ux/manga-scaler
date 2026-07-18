@@ -62,6 +62,7 @@ Full verification runs:
 - Protected-reader transport endpoints for exact per-page Referer bytes, slow/hanging/disconnected bodies, invalid image payloads, and abortable large streams.
 - Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, Blob rendering, false-positive rejection, and queue settlement.
 - Background operation isolation, retry invalidation, cache identity, tab generation.
+- Exact-URL Referer rule serialization, terminal cleanup, and discovery-time rule rejection.
 - Dashboard stable keyed rows and safe preview policy.
 
 ## Manual gaps

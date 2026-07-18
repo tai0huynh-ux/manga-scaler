@@ -112,7 +112,7 @@ function loadBackgroundClasses(options = {}) {
     importScripts() {},
     chrome: {
       tabs: { sendMessage: async () => undefined },
-      declarativeNetRequest: { updateSessionRules: async () => undefined },
+      declarativeNetRequest: { updateSessionRules: options.updateSessionRules || (async () => undefined) },
     },
     fetch: options.fetch || (async () => ({ ok: true })),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
@@ -3316,6 +3316,123 @@ test("page image registry seen stores current operation identity", async () => {
   const [entry] = registry.list(7);
   assert.equal(entry.operationId, "op-current");
   assert.equal(entry.sourceRevision, "rev-current");
+});
+
+test("page image registry seen does not install persistent Referer rules", async () => {
+  const ruleUpdates = [];
+  const { PageImageRegistry } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+  });
+  const registry = new PageImageRegistry();
+
+  await registry.seen(7, {
+    imageId: "protected-image",
+    operationId: "protected-op",
+    imageUrl: "https://cdn.example.test/chapter/page.png",
+    pageUrl: "https://reader.example.test/chapter/1",
+    pageOrder: 1,
+  });
+
+  assert.equal(ruleUpdates.length, 0, "discovery leaked a broad session Referer rule");
+});
+
+test("same image URL reads serialize temporary Referer rules", async () => {
+  const firstBody = deferred();
+  const ruleUpdates = [];
+  let fetchCount = 0;
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => {
+      fetchCount += 1;
+      return {
+        ok: true,
+        arrayBuffer: async () => fetchCount === 1 ? firstBody.promise : pngBytes.buffer,
+      };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const imageUrl = "https://cdn.example.test/protected/page.png";
+
+  const chapterA = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/a");
+  await new Promise((resolve) => setImmediate(resolve));
+  const chapterB = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/b");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const overlappingFetchCount = fetchCount;
+  const overlappingAddCount = ruleUpdates.filter((update) => update.addRules?.length).length;
+  firstBody.resolve(pngBytes.buffer);
+  await Promise.all([chapterA, chapterB]);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(overlappingFetchCount, 1, "a second fetch started while the first exact-URL Referer rule was active");
+  assert.equal(overlappingAddCount, 1);
+  assert.equal(fetchCount, 2);
+  assert.equal(provider.imageReadLocks.size, 0, "the exact-URL read lock did not settle");
+  assert.deepEqual(ruleUpdates.map((update) => update.addRules?.[0]?.action.requestHeaders[0].value || "removed"), [
+    "https://reader.example.test/chapter/a",
+    "removed",
+    "https://reader.example.test/chapter/b",
+    "removed",
+  ]);
+});
+
+test("temporary Referer rules are removed on every browser-read terminal path", async () => {
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const cases = [
+    { name: "success", response: { ok: true, arrayBuffer: async () => pngBytes.buffer } },
+    { name: "non-image", response: { ok: true, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer } },
+    { name: "disconnect", response: { ok: true, arrayBuffer: async () => { throw new Error("socket disconnected"); } } },
+  ];
+
+  for (const scenario of cases) {
+    const ruleUpdates = [];
+    const { BackendUpscaleProvider } = loadBackgroundClasses({
+      updateSessionRules: async (update) => ruleUpdates.push(update),
+      fetch: async () => scenario.response,
+    });
+    const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+    const read = provider.readBrowserImage(
+      `https://cdn.example.test/${scenario.name}.png`,
+      "https://reader.example.test/chapter/a",
+    );
+    if (scenario.name === "success") await read;
+    else await assert.rejects(read);
+
+    const addedRuleId = ruleUpdates.find((update) => update.addRules?.length)?.addRules[0].id;
+    assert.ok(Number.isInteger(addedRuleId), `${scenario.name} did not install its temporary rule`);
+    assert.ok(
+      ruleUpdates.some((update) => update.removeRuleIds?.includes(addedRuleId) && !update.addRules),
+      `${scenario.name} leaked temporary rule ${addedRuleId}`,
+    );
+  }
+
+  const ruleUpdates = [];
+  const bodyStarted = deferred();
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => ({
+      ok: true,
+      arrayBuffer: async () => {
+        bodyStarted.resolve();
+        return new Promise(() => {});
+      },
+    }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const controller = new AbortController();
+  const abortedRead = provider.readBrowserImage(
+    "https://cdn.example.test/aborted.png",
+    "https://reader.example.test/chapter/a",
+    controller.signal,
+  );
+  await bodyStarted.promise;
+  controller.abort();
+  await assert.rejects(abortedRead, { name: "AbortError" });
+
+  const addedRuleId = ruleUpdates.find((update) => update.addRules?.length)?.addRules[0].id;
+  assert.ok(Number.isInteger(addedRuleId));
+  assert.ok(ruleUpdates.some((update) => update.removeRuleIds?.includes(addedRuleId) && !update.addRules));
 });
 
 test("page image registry stale remove does not delete current operation", async () => {

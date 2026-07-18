@@ -68,3 +68,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: The new tests first failed with HTTP 404 before the fixture routes existed. Focused fixture tests passed 6/6; the full repository gate passed 47 backend tests and 110 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; the real Edge fixture E2E passed with two `768x768` Blob replacements and all queue counters at zero.
 - Git: Introduced by the automatic sync commit for the protected reader transport fixture; use `git log -- extension/tests/fixtures/reader/server.cjs` to recover its exact hash.
 - Remaining: Add failing DNR lifecycle/isolation regressions, then apply the smallest production fix and repeat real browser acceptance.
+
+## 2026-07-18 - Exact-URL Referer rule isolation
+
+- Request: Continue Phase A1 and prevent protected-reader DNR rules from leaking or crossing page Referers.
+- Changes: Removed broad persistent Referer rules from image discovery; serialized temporary browser reads per exact image URL while preserving concurrency across different URLs; proved rule removal after success, invalid image data, mid-body failure, and abort.
+- Invariant/decision: At most one temporary Referer rule may govern a given exact image URL at a time. Discovery creates no DNR mutation, every terminal read removes its rule, and the per-URL lock registry settles to zero.
+- Verification: Both regressions failed before the fix: discovery produced one broad session rule and concurrent same-URL reads started two fetches. Seven focused DNR/read tests passed after the fix; the full gate passed 47 backend tests and 113 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; real Edge fixture E2E passed with two `768x768` Blob replacements, zero failures/cancellations, and settled queues.
+- Git: Introduced by the automatic sync commit for exact-URL Referer rule isolation; use `git log -- extension/src/background.js` to recover its exact hash.
+- Remaining: Prove navigation and extension reload cleanup while a protected read is active, then resume representative live-site acceptance.

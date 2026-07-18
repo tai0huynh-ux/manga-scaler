@@ -227,8 +227,6 @@ class StatisticsTracker {
 class PageImageRegistry {
   constructor() {
     this.pages = new Map();
-    this.domainRules = new Map();
-    this.nextDomainRuleId = 100000;
     this.sequence = 0;
   }
 
@@ -248,7 +246,6 @@ class PageImageRegistry {
       order: existing?.order ?? (Number.isFinite(image.pageOrder) ? image.pageOrder : this.sequence++),
       seenAt: existing?.seenAt ?? performance.now(),
     });
-    await this.ensureDomainAccess(image.imageUrl, image.pageUrl);
   }
 
   update(tabId, imageId, patch) {
@@ -309,23 +306,6 @@ class PageImageRegistry {
 
   remove(tabId) {
     this.pages.delete(tabId);
-  }
-
-  async ensureDomainAccess(imageUrl, pageUrl) {
-    if (!imageUrl || !pageUrl) return;
-    const hostname = new URL(imageUrl).hostname;
-    const key = `${hostname}|${new URL(pageUrl).origin}`;
-    if (this.domainRules.has(key)) return;
-    const ruleId = this.nextDomainRuleId++;
-    await chrome.declarativeNetRequest.updateSessionRules({
-      addRules: [{
-        id: ruleId,
-        priority: 1,
-        action: { type: "modifyHeaders", requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }] },
-        condition: { urlFilter: `||${hostname}^`, resourceTypes: ["image", "xmlhttprequest", "other", "main_frame"] },
-      }],
-    }).catch(() => {});
-    this.domainRules.set(key, ruleId);
   }
 }
 
@@ -522,6 +502,7 @@ class BackendUpscaleProvider {
     this.baseUrl = baseUrl;
     this.requestTimeoutMs = requestTimeoutMs;
     this.nextHeaderRuleId = 1000;
+    this.imageReadLocks = new Map();
   }
 
   async upscale(imageUrl, options, abortSignal) {
@@ -670,6 +651,26 @@ class BackendUpscaleProvider {
   }
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
+    const previousRead = this.imageReadLocks.get(imageUrl) || Promise.resolve();
+    let releaseRead;
+    const currentRead = new Promise((resolve) => { releaseRead = resolve; });
+    const readTail = previousRead.catch(() => {}).then(() => currentRead);
+    this.imageReadLocks.set(imageUrl, readTail);
+
+    try {
+      const waitForPrevious = previousRead.catch(() => {});
+      if (signal) await Promise.race([waitForPrevious, this.rejectOnAbort(signal)]);
+      else await waitForPrevious;
+      return await this.readBrowserImageWithRule(imageUrl, pageUrl, signal);
+    } finally {
+      releaseRead();
+      readTail.finally(() => {
+        if (this.imageReadLocks.get(imageUrl) === readTail) this.imageReadLocks.delete(imageUrl);
+      });
+    }
+  }
+
+  async readBrowserImageWithRule(imageUrl, pageUrl, signal) {
     const ruleId = this.nextHeaderRuleId++;
     const readController = new AbortController();
     const timeout = setTimeout(() => readController.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);

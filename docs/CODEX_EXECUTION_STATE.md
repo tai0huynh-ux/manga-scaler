@@ -7,8 +7,8 @@
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
 - Starting recovered HEAD: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- Current committed HEAD before the active fixture checkpoint: `8495a7704d324a1b3108ddda985cf85ff8fc525e`.
-- `origin/main`: matched `8495a7704d324a1b3108ddda985cf85ff8fc525e` after a successful fetch.
+- Current committed HEAD before the active DNR checkpoint: `5a015f5c93afbed79e2e925cc9a88c7e61e2cec2`.
+- `origin/main`: matched `5a015f5c93afbed79e2e925cc9a88c7e61e2cec2` after a successful fetch.
 - Divergence: `0` local-only / `0` remote-only commits.
 - Working tree at recovery: clean; no staged, unstaged, or untracked source/test files.
 - Git integrity: `git fsck --full` passed after exactly 250 injected `desktop.ini` files were moved out of `.git` into a recoverable external backup. One unreachable blob remained and Git classified it as dangling, not corruption.
@@ -40,7 +40,17 @@
 
 ## Next exact action
 
-Add failing regressions for DNR rule lifecycle and concurrent same-image reads with different page Referers. Remove persistent broad Referer mutation only when the regression proves the defect, serialize or otherwise isolate exact-URL temporary rules, and prove cleanup after success, abort, body failure, and disconnect.
+Extend deterministic Edge acceptance to navigation and extension reload while a protected browser read is active. Prove cancellation settles, temporary DNR rules do not remain, the per-URL read registry clears, and no unhandled rejection occurs.
+
+## Exact-URL Referer isolation checkpoint
+
+- The regressions first failed because discovery installed one broad session rule and two same-URL reads started concurrently under different Referers.
+- Image discovery no longer mutates DNR state.
+- Temporary Referer rules remain exact-URL scoped and reads for the same URL are serialized; different image URLs retain normal concurrency.
+- Success, invalid image bytes, body disconnect/failure, and body-consumption abort all remove their temporary rule.
+- The exact-URL read-lock registry returns to zero after settlement.
+- Full verification passed 47 backend tests and 113 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage.
+- Real Edge fixture E2E passed with two completed `768x768` Blob replacements and queue size/waiting/processing all zero.
 
 ## Protected reader transport fixture checkpoint
 
