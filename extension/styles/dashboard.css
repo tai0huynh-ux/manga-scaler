@@ -5,6 +5,40 @@ main { width: min(1400px, 96vw); margin: 0 auto; padding: 28px 0 48px; }
 header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 h1, h2, h3, p { margin-top: 0; }
 .card { padding: 18px; border: 1px solid #d8dfdc; border-radius: 12px; background: #fff; box-shadow: 0 4px 16px #13212e0d; }
+.monitor-panel { margin-bottom: 18px; border-color: #b8d8d2; }
+.muted { color: #5b6d78; font-size: 13px; }
+.monitor-summary { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 9px; margin: 16px 0; }
+.monitor-summary article { padding: 11px; border-radius: 8px; background: #edf5f5; }
+.monitor-summary strong, .monitor-summary span { display: block; }
+.monitor-summary strong { font-size: 21px; }
+.monitor-summary span { color: #5b6d78; font-size: 12px; margin-top: 4px; }
+.monitor-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-bottom: 14px; }
+.monitor-filters label { display: grid; gap: 5px; min-width: 120px; font-size: 12px; font-weight: 700; }
+.monitor-filters button { padding: 8px 10px; border: 0; border-radius: 7px; background: #274e59; color: #fff; cursor: pointer; }
+.monitor-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .8fr); gap: 14px; }
+.monitor-table-wrap { overflow-x: auto; }
+.monitor-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.monitor-table th, .monitor-table td { padding: 9px 7px; border-top: 1px solid #dfe5e2; text-align: left; vertical-align: top; }
+.monitor-table th { color: #5b6d78; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.monitor-table tr[data-selected="true"] { background: #e9f5f2; }
+.monitor-table button { padding: 5px 7px; border: 0; border-radius: 5px; background: #216e8f; color: #fff; cursor: pointer; }
+.monitor-table button[data-action="cancel"] { background: #9b271e; }
+.monitor-table button:disabled { opacity: .45; cursor: default; }
+.monitor-stage { font-weight: 750; white-space: nowrap; }
+.monitor-status { display: inline-block; padding: 3px 6px; border-radius: 999px; background: #dfe8ea; font-size: 10px; text-transform: uppercase; }
+.monitor-status-terminal { background: #d8f2e4; color: #17643c; }
+.monitor-status-failed, .monitor-status-timeout, .monitor-status-cancelled { background: #fde2df; color: #9b271e; }
+.monitor-detail { padding: 14px; border-radius: 9px; background: #f5f8f7; min-height: 220px; }
+.monitor-detail h3 { margin-bottom: 8px; }
+.monitor-detail dl { margin: 0 0 14px; }
+.monitor-detail dl div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid #dfe5e2; }
+.monitor-detail dt { color: #5b6d78; }
+.monitor-detail dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.monitor-timeline { margin: 0; padding: 0; list-style: none; }
+.monitor-timeline li { position: relative; padding: 7px 0 7px 14px; border-left: 2px solid #abd0c8; }
+.monitor-timeline small, .monitor-timeline strong { display: block; }
+.monitor-timeline small { color: #5b6d78; }
+.monitor-error { padding: 9px; border-radius: 7px; background: #fff0ee; color: #7b211b; }
 .settings { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 18px; }
 .settings label { display: grid; flex: 1 1 190px; gap: 7px; min-width: 180px; font-weight: 650; }
 .settings .limit-control span { display: flex; align-items: center; gap: 7px; }
@@ -51,4 +85,5 @@ figure img { display: block; width: 100%; max-height: 72vh; object-fit: contain;
 dl { margin: 0; }
 dl div { display: flex; justify-content: space-between; padding: 5px 0; }
 dd { margin: 0; font-weight: 750; }
-@media (max-width: 800px) { .comparison, .image-row, .scope-cards, .metrics { grid-template-columns: 1fr; } .settings { flex-direction: column; } }
+@media (max-width: 1000px) { .monitor-layout { grid-template-columns: 1fr; } .monitor-summary { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 800px) { .comparison, .image-row, .scope-cards, .metrics, .monitor-summary { grid-template-columns: 1fr; } .settings { flex-direction: column; } }

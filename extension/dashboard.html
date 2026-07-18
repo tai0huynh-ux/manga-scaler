@@ -9,6 +9,22 @@
   <body>
     <main>
       <header><div><h1>Universal AI Image Enhancer</h1><p>Original versus AI verification</p></div><span id="status">Loading…</span></header>
+      <section class="card monitor-panel" aria-labelledby="monitorTitle">
+        <div class="section-heading"><div><h2 id="monitorTitle">Processing Monitor</h2><p class="muted">Only measured stages are shown. Completed means the enhanced image was committed to the page.</p></div><button id="refreshMonitor" type="button">Refresh</button></div>
+        <div id="monitorSummary" class="monitor-summary" aria-live="polite"></div>
+        <div class="monitor-filters" aria-label="Processing filters">
+          <label>Status<select id="monitorStatusFilter"><option value="ALL">All</option><option value="ACTIVE">Active</option><option value="FAILED">Failed</option><option value="COMPLETED">Completed</option><option value="CANCELLED">Cancelled</option><option value="TIMED_OUT">Timed out</option></select></label>
+          <label>Stage<select id="monitorStageFilter"><option value="ALL">All</option></select></label>
+          <label>Mode<select id="monitorModeFilter"><option value="ALL">All</option></select></label>
+          <label>Provider<select id="monitorProviderFilter"><option value="ALL">All</option></select></label>
+          <label>Cache<select id="monitorCacheFilter"><option value="ALL">All</option><option value="HIT">Hit</option><option value="MISS">Miss</option><option value="UNKNOWN">Unknown</option></select></label>
+          <button id="exportMonitor" type="button">Export sanitized diagnostics</button><button id="clearMonitorHistory" type="button">Clear terminal history</button>
+        </div>
+        <div class="monitor-layout">
+          <div class="monitor-table-wrap"><table class="monitor-table"><thead><tr><th>Image</th><th>Stage</th><th>Status</th><th>Elapsed</th><th>Input</th><th>Cache</th><th>Error</th><th>Actions</th></tr></thead><tbody id="monitorJobs"></tbody></table><p id="monitorEmpty" class="muted">No processing records yet.</p></div>
+          <aside id="monitorDetail" class="monitor-detail" aria-live="polite"><h3>Select a job</h3><p class="muted">Timeline and sanitized diagnostics appear here.</p></aside>
+        </div>
+      </section>
       <section class="settings card">
         <label>Mode<select id="mode"><option value="auto">Auto</option><option value="manga">Manga</option><option value="artwork">Anime / Artwork</option><option value="photo">Photo</option></select></label>
         <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"></label>

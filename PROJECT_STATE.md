@@ -14,7 +14,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-Complete the Processing Monitor in the isolated `c518` worktree. Schema version 1 and its security/state-machine contract are verified; runtime lifecycle storage, DOM-commit terminal authority, Dashboard timeline/details, safe previews, cancel/retry, recovery, and load/E2E acceptance remain in progress. Manga and Manhua live acceptance stays green; heavy Manhwa and hentaivnx limitations remain unchanged.
+Complete Processing Monitor acceptance in the isolated `c518` worktree. Schema v1, bounded recovery storage, operation-aware lifecycle, DOM-commit terminal authority, Dashboard timeline/details/filters, safe export, and cancel/retry boundaries are implemented and test-backed. Monitor-specific browser dashboard/load acceptance remains; Manga/Manhua live acceptance stays green and heavy Manhwa/hentaivnx limitations remain unchanged.
 
 ## Required reading
 

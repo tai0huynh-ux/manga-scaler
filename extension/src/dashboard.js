@@ -20,6 +20,8 @@ const requestedTabIdValue = new URLSearchParams(window.location.search).get("tab
 const requestedTabId = requestedTabIdValue === null ? null : Number(requestedTabIdValue);
 const contentTabId = Number.isInteger(requestedTabId) && requestedTabId >= 0 ? requestedTabId : null;
 const imageRows = new Map();
+let monitorSnapshot = null;
+let selectedMonitorKey = null;
 const statusPresentation = {
   seen: ["Detected", "Detected, not queued for preprocessing."],
   preprocessing_queued: ["Waiting for preprocessing slot", "This image is queued behind images closer to the viewport."],
@@ -35,10 +37,12 @@ const statusPresentation = {
 };
 
 async function refresh() {
-  const [stats, page] = await Promise.all([
+  const [stats, page, monitor] = await Promise.all([
     chrome.runtime.sendMessage({ type: "GET_STATS", tabId: contentTabId }),
     chrome.runtime.sendMessage({ type: "GET_PAGE_IMAGES", tabId: contentTabId }),
+    chrome.runtime.sendMessage({ type: "GET_PROCESSING_MONITOR", tabId: contentTabId }),
   ]);
+  monitorSnapshot = monitor || { jobs: [], summary: {} };
   document.getElementById("mode").value = stats.mode || "auto";
   document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
   document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
@@ -57,6 +61,204 @@ async function refresh() {
   renderQuality([...images].reverse().find((item) => item.quality)?.quality || stats.lastQuality);
   renderScopes(stats.scopes || {});
   renderBlacklist(stats.blacklistRules || []);
+  renderMonitor(monitorSnapshot, images, stats);
+}
+
+function monitorJobKey(job) {
+  return job.key || `${job.tabId}:${job.imageId}:${job.operationId}`;
+}
+
+function monitorFilterValue(id) {
+  return document.getElementById(id)?.value || "ALL";
+}
+
+function renderMonitor(snapshot, pageImages = [], stats = {}) {
+  const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
+  const summary = snapshot?.summary || {};
+  const summaryTarget = document.getElementById("monitorSummary");
+  if (!summaryTarget) return;
+  summaryTarget.replaceChildren();
+  const cards = [
+    ["active", "Active"], ["queued", "Queued"], ["deferred", "Deferred"],
+    ["completed", "Completed"], ["failed", "Failed"], ["timedOut", "Timed out"],
+    ["cancelled", "Cancelled"], ["skipped", "Skipped"], ["cacheHits", "Cache hits"],
+    ["averageDurationMs", "Average duration"],
+  ];
+  cards.forEach(([key, label]) => {
+    const card = document.createElement("article");
+    const value = document.createElement("strong");
+    const caption = document.createElement("span");
+    value.textContent = summary[key] === null || summary[key] === undefined
+      ? "Unavailable"
+      : key === "averageDurationMs" ? `${summary[key]} ms` : String(summary[key] ?? 0);
+    caption.textContent = label;
+    card.append(value, caption);
+    summaryTarget.appendChild(card);
+  });
+  [["backend", "Backend status", stats.backendLaunchStatus || "Unavailable"], ["model", "Model", stats.lastModel || "Unavailable"], ["provider", "Provider", stats.lastProvider || "Unavailable"]].forEach(([, label, value]) => {
+    const card = document.createElement("article");
+    const strong = document.createElement("strong");
+    const caption = document.createElement("span");
+    strong.textContent = value;
+    caption.textContent = label;
+    card.append(strong, caption);
+    summaryTarget.appendChild(card);
+  });
+  const stageValues = [...new Set(jobs.map((job) => job.stage).filter(Boolean))].sort();
+  const modeValues = [...new Set(jobs.map((job) => job.mode).filter(Boolean))].sort();
+  const providerValues = [...new Set(jobs.map((job) => job.provider).filter(Boolean))].sort();
+  updateMonitorOptions("monitorStageFilter", stageValues);
+  updateMonitorOptions("monitorModeFilter", modeValues);
+  updateMonitorOptions("monitorProviderFilter", providerValues);
+  const filtered = jobs.filter((job) => {
+    const statusFilter = monitorFilterValue("monitorStatusFilter");
+    const stageFilter = monitorFilterValue("monitorStageFilter");
+    const modeFilter = monitorFilterValue("monitorModeFilter");
+    const providerFilter = monitorFilterValue("monitorProviderFilter");
+    const cacheFilter = monitorFilterValue("monitorCacheFilter");
+    return (statusFilter === "ALL" || (statusFilter === "ACTIVE" ? job.status !== "TERMINAL" : job.stage === statusFilter)) &&
+      (stageFilter === "ALL" || job.stage === stageFilter) &&
+      (modeFilter === "ALL" || job.mode === modeFilter) &&
+      (providerFilter === "ALL" || job.provider === providerFilter) &&
+      (cacheFilter === "ALL" || job.cache === cacheFilter);
+  });
+  const table = document.getElementById("monitorJobs");
+  const empty = document.getElementById("monitorEmpty");
+  table.replaceChildren();
+  empty.hidden = filtered.length > 0;
+  const pageByKey = new Map((pageImages || []).map((item) => [imageRowKey(item), item]));
+  filtered.forEach((job) => {
+    const row = document.createElement("tr");
+    row.dataset.key = monitorJobKey(job);
+    row.dataset.selected = String(selectedMonitorKey === monitorJobKey(job));
+    row.addEventListener("click", () => {
+      selectedMonitorKey = monitorJobKey(job);
+      renderMonitor(monitorSnapshot, pageImages, stats);
+    });
+    const pageImage = pageByKey.get(`${job.tabId}:${job.imageId}:${job.operationId}`) || pageByKey.get(`${job.tabId}:${job.imageId}:operation`);
+    const cells = [
+      `${job.imageId || "unknown"}${job.segmentIndex === null || job.segmentIndex === undefined ? "" : ` [${job.segmentIndex + 1}/${job.segmentCount || "?"}]`}`,
+      job.stage || "UNKNOWN",
+      job.status || "UNKNOWN",
+      formatMonitorElapsed(job),
+      formatMonitorInput(job),
+      job.cache || "UNKNOWN",
+      job.error?.errorCode || "",
+    ];
+    cells.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index === 1) cell.className = "monitor-stage";
+      if (index === 2) {
+        cell.className = `monitor-status ${job.stage === "FAILED" ? "monitor-status-failed" : job.stage === "TIMED_OUT" ? "monitor-status-timeout" : job.stage === "CANCELLED" ? "monitor-status-cancelled" : job.status === "TERMINAL" ? "monitor-status-terminal" : ""}`;
+      }
+      row.appendChild(cell);
+    });
+    const actions = document.createElement("td");
+    const terminal = job.status === "TERMINAL";
+    if (!terminal) actions.appendChild(createMonitorAction("cancel", "Cancel", job));
+    if (terminal && job.error?.retryable) actions.appendChild(createMonitorAction("retry", "Retry", job));
+    if (pageImage?.enhancedImageUrl && isStablePreviewUrl(pageImage.enhancedImageUrl)) actions.appendChild(createMonitorAction("show", "Show enhanced", job, pageImage.enhancedImageUrl));
+    row.appendChild(actions);
+    table.appendChild(row);
+  });
+  const selected = jobs.find((job) => monitorJobKey(job) === selectedMonitorKey) || filtered[0];
+  if (selected) {
+    selectedMonitorKey = monitorJobKey(selected);
+    renderMonitorDetail(selected);
+  }
+}
+
+function updateMonitorOptions(id, values) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  const current = select.value;
+  select.replaceChildren(new Option("All", "ALL"));
+  values.forEach((value) => select.appendChild(new Option(value, value)));
+  select.value = values.includes(current) ? current : "ALL";
+}
+
+function formatMonitorElapsed(job) {
+  const start = Date.parse(job.createdAt || "");
+  const end = Date.parse(job.updatedAt || "") || Date.now();
+  if (!Number.isFinite(start)) return "Unavailable";
+  return `${Math.max(0, Math.round(end - start))} ms`;
+}
+
+function formatMonitorInput(job) {
+  const width = job.input?.width;
+  const height = job.input?.height;
+  return Number.isFinite(width) && Number.isFinite(height) ? `${width}x${height}` : "Unavailable";
+}
+
+function createMonitorAction(action, text, job, href = null) {
+  const button = document.createElement(href ? "a" : "button");
+  button.type = "button";
+  button.dataset.action = action;
+  button.textContent = text;
+  if (href) {
+    button.href = href;
+    button.target = "_blank";
+    button.rel = "noopener";
+  } else {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (action === "cancel") await chrome.runtime.sendMessage({ type: "CANCEL_IMAGE", tabId: job.tabId, imageId: job.imageId, operationId: job.operationId });
+      if (action === "retry") await chrome.runtime.sendMessage({ type: "RETRY_IMAGE", tabId: job.tabId, imageId: job.imageId, operationId: job.operationId });
+      await refresh();
+    });
+  }
+  return button;
+}
+
+function renderMonitorDetail(job) {
+  const target = document.getElementById("monitorDetail");
+  if (!target) return;
+  target.replaceChildren();
+  const heading = document.createElement("h3");
+  heading.textContent = `${job.imageId || "Image"} - ${job.stage}`;
+  target.appendChild(heading);
+  const dl = document.createElement("dl");
+  [["Operation", job.operationId], ["Job", job.jobId], ["Trace", job.traceId], ["Source", formatMonitorSource(job.source)], ["Fingerprint", job.sourceFingerprint], ["Mode", job.mode], ["Model", job.model], ["Provider", job.provider], ["Input", formatMonitorInput(job)], ["Cache", job.cache], ["Render commit", job.renderCommit?.confirmed ? "Confirmed" : "Not confirmed"]].forEach(([label, value]) => {
+    const wrapper = document.createElement("div");
+    const term = document.createElement("dt");
+    const detail = document.createElement("dd");
+    term.textContent = label;
+    detail.textContent = value || "Unavailable";
+    wrapper.append(term, detail);
+    dl.appendChild(wrapper);
+  });
+  target.appendChild(dl);
+  if (job.traceId) {
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "Copy trace ID";
+    copy.addEventListener("click", () => navigator.clipboard?.writeText(job.traceId));
+    target.appendChild(copy);
+  }
+  if (job.error) {
+    const error = document.createElement("div");
+    error.className = "monitor-error";
+    error.textContent = `${job.error.errorCode}: ${job.error.message}${job.error.field ? ` (${job.error.field})` : ""}`;
+    target.appendChild(error);
+  }
+  const timeline = document.createElement("ol");
+  timeline.className = "monitor-timeline";
+  (job.timeline || []).forEach((event) => {
+    const item = document.createElement("li");
+    const stage = document.createElement("strong");
+    const time = document.createElement("small");
+    stage.textContent = `${event.stage} - ${event.status}`;
+    time.textContent = `${event.timestamp}${event.durationMs === null ? "" : ` (${event.durationMs} ms)`}`;
+    item.append(stage, time);
+    timeline.appendChild(item);
+  });
+  target.appendChild(timeline);
+}
+
+function formatMonitorSource(source) {
+  if (!source) return "Unavailable";
+  return `${source.scheme}://${source.hostname}${source.path || "/"}${source.queryKeys?.length ? ` ?${source.queryKeys.join(", ")}` : ""}`;
 }
 
 function renderBlacklist(rules) {
@@ -348,6 +550,24 @@ document.getElementById("timeout").addEventListener("change", () => chrome.runti
 }));
 imageSettingIds.forEach((id) => {
   document.getElementById(id).addEventListener("change", saveImageSettings);
+});
+[
+  "monitorStatusFilter", "monitorStageFilter", "monitorModeFilter", "monitorProviderFilter", "monitorCacheFilter",
+].forEach((id) => document.getElementById(id).addEventListener("change", () => renderMonitor(monitorSnapshot || { jobs: [] })));
+document.getElementById("refreshMonitor").addEventListener("click", refresh);
+document.getElementById("clearMonitorHistory").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "CLEAR_PROCESSING_HISTORY" });
+  selectedMonitorKey = null;
+  await refresh();
+});
+document.getElementById("exportMonitor").addEventListener("click", () => {
+  const payload = JSON.stringify(monitorSnapshot || { jobs: [] }, null, 2);
+  const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "processing-monitor-diagnostic.json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 });
 refresh();
 setInterval(refresh, 2000);

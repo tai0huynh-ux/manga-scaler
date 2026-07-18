@@ -15,6 +15,7 @@ function deferred() {
 function loadQueueScheduler(options = {}) {
   const root = path.resolve(__dirname, "..", "..");
   const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const monitorSource = fs.readFileSync(path.join(root, "extension", "src", "processing-monitor.js"), "utf8");
   const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
   const prefix = background.slice(0, background.indexOf("const statisticsTracker ="));
   const pageImageRegistry = { update() {} };
@@ -42,6 +43,7 @@ function loadQueueScheduler(options = {}) {
     __AI_MANGA_UPSCALER_DEBUG__: options.debug === true,
   });
   vm.runInContext(configSource, context);
+  vm.runInContext(monitorSource, context);
   vm.runInContext(`${prefix}\nconst pageImageRegistry = globalThis.__pageImageRegistry; globalThis.__QueueScheduler = QueueScheduler;`, context);
   return context.__QueueScheduler;
 }
@@ -49,6 +51,7 @@ function loadQueueScheduler(options = {}) {
 function loadBackgroundHelpers() {
   const root = path.resolve(__dirname, "..", "..");
   const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const monitorSource = fs.readFileSync(path.join(root, "extension", "src", "processing-monitor.js"), "utf8");
   const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
   const prefix = background.slice(0, background.indexOf("chrome.runtime.onInstalled"));
   const context = vm.createContext({
@@ -84,6 +87,7 @@ function loadBackgroundHelpers() {
     },
   });
   vm.runInContext(configSource, context);
+  vm.runInContext(monitorSource, context);
   vm.runInContext(`${prefix}\nglobalThis.__resolveOutputLimits = resolveOutputLimits;`, context);
   return context.__resolveOutputLimits;
 }
@@ -91,6 +95,7 @@ function loadBackgroundHelpers() {
 function loadBackgroundClasses(options = {}) {
   const root = path.resolve(__dirname, "..", "..");
   const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const monitorSource = fs.readFileSync(path.join(root, "extension", "src", "processing-monitor.js"), "utf8");
   const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
   const prefix = background.slice(0, background.indexOf("const statisticsTracker ="));
   const context = vm.createContext({
@@ -122,6 +127,7 @@ function loadBackgroundClasses(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
+  vm.runInContext(monitorSource, context);
   vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider;`, context);
   return {
     QueueScheduler: context.__QueueScheduler,
@@ -133,6 +139,7 @@ function loadBackgroundClasses(options = {}) {
 function loadBackgroundMessageHarness(options = {}) {
   const root = path.resolve(__dirname, "..", "..");
   const configSource = fs.readFileSync(path.join(root, "extension", "src", "config.js"), "utf8");
+  const monitorSource = fs.readFileSync(path.join(root, "extension", "src", "processing-monitor.js"), "utf8");
   const background = fs.readFileSync(path.join(root, "extension", "src", "background.js"), "utf8");
   const prefix = background.slice(0, background.indexOf("chrome.runtime.onInstalled"));
   const messageHandlers = background.slice(
@@ -142,6 +149,8 @@ function loadBackgroundMessageHarness(options = {}) {
   let messageListener = null;
   const storageGet = options.storageGet || (async (defaults) => defaults);
   const storageSet = options.storageSet || (async () => undefined);
+  const monitorStorageGet = async (defaults) => defaults;
+  const monitorStorageSet = async () => undefined;
   const context = vm.createContext({
     AbortController,
     URL,
@@ -164,7 +173,15 @@ function loadBackgroundMessageHarness(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
     chrome: {
       storage: {
-        local: { get: storageGet, set: storageSet },
+        local: {
+          get: (defaults) => Object.prototype.hasOwnProperty.call(defaults || {}, "processingMonitorSessionV1") || Object.prototype.hasOwnProperty.call(defaults || {}, "processingMonitorHistoryV1")
+            ? monitorStorageGet(defaults)
+            : storageGet(defaults),
+          set: (value) => Object.prototype.hasOwnProperty.call(value || {}, "processingMonitorSessionV1") || Object.prototype.hasOwnProperty.call(value || {}, "processingMonitorHistoryV1")
+            ? monitorStorageSet(value)
+            : storageSet(value),
+        },
+        session: { get: monitorStorageGet, set: monitorStorageSet },
         onChanged: { addListener() {} },
       },
       tabs: {
@@ -181,14 +198,16 @@ function loadBackgroundMessageHarness(options = {}) {
     },
   });
   vm.runInContext(configSource, context);
+  vm.runInContext(monitorSource, context);
   vm.runInContext(
-    `${prefix}\n${messageHandlers}\nglobalThis.__scheduler = scheduler; globalThis.__pageImageRegistry = pageImageRegistry;`,
+    `${prefix}\n${messageHandlers}\nglobalThis.__scheduler = scheduler; globalThis.__pageImageRegistry = pageImageRegistry; globalThis.__processingMonitor = processingMonitor;`,
     context,
   );
   return {
     dispatch: (message, sender, sendResponse) => messageListener(message, sender, sendResponse),
     scheduler: context.__scheduler,
     pageImageRegistry: context.__pageImageRegistry,
+    processingMonitor: context.__processingMonitor,
   };
 }
 
@@ -853,7 +872,34 @@ test("background retry keeps trace id and increments attempt", async () => {
   assert.equal(calls, 2);
 });
 
-test("background cache hit emits completion terminal event", async () => {
+test("backend 422 is terminal and is not retried", async () => {
+  const fakeTimers = makeFakeTimers();
+  const QueueScheduler = loadQueueScheduler({ timers: fakeTimers.api });
+  let calls = 0;
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: async () => {
+        calls += 1;
+        const error = new Error("Output width is below backend minimum");
+        error.status = 422;
+        error.code = "REQUEST_VALIDATION_FAILED";
+        error.detail = { errorCode: error.code, message: error.message, status: 422, field: "maxOutputWidth" };
+        throw error;
+      },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+  scheduler.enqueue(makeJob("validation-error"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(scheduler.retryTimers.size, 0);
+});
+
+test("background cache hit emits result-received before DOM commit", async () => {
   const traceEvents = [];
   const QueueScheduler = loadQueueScheduler({ traceEvents });
   const scheduler = new QueueScheduler({
@@ -871,7 +917,7 @@ test("background cache hit emits completion terminal event", async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(traceEvents.some((event) => event.event === "background.cache.hit" && event.traceId === "trace-trace-cache"), true);
-  assert.equal(traceEvents.some((event) => event.event === "background.job.completed" && event.status === "completed"), true);
+  assert.equal(traceEvents.some((event) => event.event === "background.job.result_received" && event.status === "received"), true);
 });
 
 test("trace helper does not throw when console debug fails", () => {
@@ -1761,9 +1807,8 @@ test("delayed retry from an old operation cannot resurrect after replacement", a
   replacementRun.resolve({});
 });
 
-test("cancel during cache-hit statistics cannot send stale completion", async () => {
-  const statistics = deferred();
-  const statisticsStarted = deferred();
+test("cancel during cache lookup cannot send stale completion", async () => {
+  const cacheLookup = deferred();
   const sent = [];
   const QueueScheduler = loadQueueScheduler({
     tabsSendMessage: async (_tabId, message) => { sent.push(message); },
@@ -1771,24 +1816,21 @@ test("cancel during cache-hit statistics cannot send stale completion", async ()
   const scheduler = new QueueScheduler({
     maxConcurrentRequests: 1,
     cacheProvider: {
-      get: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }),
+      get: async () => cacheLookup.promise,
       set: async () => undefined,
     },
     upscaleProvider: { cancel() {} },
     statisticsTracker: {
-      recordSuccess: async () => {
-        statisticsStarted.resolve();
-        await statistics.promise;
-      },
+      recordSuccess: async () => undefined,
       recordError: async () => undefined,
     },
   });
   const job = makeJob("cache-race");
   scheduler.enqueue(job);
-  await statisticsStarted.promise;
+  await new Promise((resolve) => setImmediate(resolve));
 
   scheduler.cancel(job.tabId, job.imageId, job.operationId);
-  statistics.resolve();
+  cacheLookup.resolve({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" });
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -3936,6 +3978,58 @@ test("GET_PAGE_IMAGES returns only the requested content tab", async () => {
 
   assert.equal(responses.at(-1).tabId, 7);
   assert.deepEqual(responses.at(-1).images.map((entry) => entry.imageId), ["tab-7-image"]);
+});
+
+test("DOM render commit is the only background completion authority", async () => {
+  const responses = [];
+  const { dispatch, pageImageRegistry, processingMonitor } = loadBackgroundMessageHarness();
+  await pageImageRegistry.seen(7, {
+    imageId: "commit-image",
+    operationId: "commit-op",
+    sourceRevision: "commit-rev",
+    imageUrl: "https://example.com/commit.png",
+    pageOrder: 1,
+  });
+  pageImageRegistry.update(7, "commit-image", { operationId: "commit-op", status: "rendering" });
+  ["DETECTED", "READING_SOURCE", "VALIDATING_SOURCE", "QUEUED", "SENDING_TO_BACKEND", "RECEIVING_RESULT"].forEach((stage, index) => {
+    processingMonitor.ingest({
+      schemaVersion: 1,
+      eventId: `commit-${stage}`,
+      tabId: 7,
+      imageId: "commit-image",
+      operationId: "commit-op",
+      traceId: "commit-trace",
+      sourceFingerprint: null,
+      parentJobId: null,
+      segmentIndex: null,
+      segmentCount: null,
+      stage,
+      status: "ACTIVE",
+      progress: null,
+      timestamp: new Date(Date.now() + index).toISOString(),
+      durationMs: null,
+      queuePosition: null,
+      retryCount: 0,
+      cache: "MISS",
+      mode: "auto",
+      model: null,
+      provider: null,
+      source: null,
+      input: null,
+      output: null,
+      renderCommit: null,
+      metadata: {},
+      error: null,
+    });
+  });
+  dispatch({ type: "RENDER_STARTED", imageId: "commit-image", operationId: "commit-op", traceId: "commit-trace", cacheHit: false }, { tab: { id: 7 } }, () => {});
+  dispatch({ type: "RENDER_COMMITTED", imageId: "commit-image", operationId: "commit-op", traceId: "commit-trace", cacheHit: false }, { tab: { id: 7 } }, (response) => responses.push(response));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(responses.at(-1)?.accepted, true);
+  assert.equal(pageImageRegistry.list(7)[0].status, "fixed");
+  assert.equal(processingMonitor.get(7, "commit-image", "commit-op").stage, "COMPLETED");
 });
 
 test("canceling a tab rejects jobs from an older generation", () => {

@@ -110,3 +110,11 @@ Manga and Manhua live-reader gates are green on current public `truyenqqko.com` 
 - `COMPLETED` now has a contract-level renderer-commit guard. Runtime still uses the legacy registry and must be wired in the next checkpoint before this invariant is production-enforced.
 - Verification: 139 extension tests, 47 backend tests, JavaScript syntax checks, Ruff, and 71% backend coverage passed. Full-equivalent backend gates used the existing project virtualenv because the isolated worktree has no `.venv`.
 - Next exact action: add the bounded monitor store and operation-aware lifecycle ingestion, then make content-side render confirmation the only completion event.
+
+## Processing Monitor lifecycle checkpoint
+
+- Added `ProcessingMonitorStore` persistence through `chrome.storage.session` plus sanitized local history, deterministic prune, worker-restart interruption recovery, segment aggregation, and dashboard snapshot APIs.
+- Background queue/cache/backend paths now report queue, backend send, result receipt, retry/deferred, timeout/failure, and cancellation events. Content reports render preparation/rendering and DOM commit/failure. Processed statistics increment only after a confirmed commit.
+- Dashboard monitor uses the existing Dashboard page and exposes summary cards, filters, keyed rows, timeline/detail diagnostics, trace copy, sanitized export, cancel, retry, and terminal-history clearing.
+- Verification: 151 extension tests, 47 backend tests, JavaScript checks, Ruff, 71% coverage, and deterministic Edge lifecycle E2E passed. No main-checkout files were changed.
+- Next exact action: add dashboard-specific Edge assertions for persistence/cancel/retry/export and a 100-500 synthetic-job load gate before final acceptance.

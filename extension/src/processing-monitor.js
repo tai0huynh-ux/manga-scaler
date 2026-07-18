@@ -74,6 +74,9 @@ var AI_PROCESSING_MONITOR = (() => {
     if (!STAGES.includes(fromStage) || !STAGES.includes(toStage)) return false;
     if (fromStage === toStage) return !isTerminal(fromStage);
     if (isTerminal(fromStage)) return false;
+    if (toStage === "DEFERRED") {
+      return !["PREPARING_RENDER", "RENDERING"].includes(fromStage);
+    }
     if (["CANCELLED", "FAILED", "TIMED_OUT", "REMOVED"].includes(toStage)) return true;
     if (toStage === "SKIPPED") {
       return ["DETECTED", "WAITING_FOR_VIEWPORT", "READING_SOURCE", "VALIDATING_SOURCE"].includes(fromStage);
@@ -220,6 +223,324 @@ var AI_PROCESSING_MONITOR = (() => {
     return event;
   }
 
+  class ProcessingMonitorStore {
+    constructor(options = {}) {
+      this.maxActiveHistory = Number(options.maxActiveHistory) || 500;
+      this.maxCompletedHistory = Number(options.maxCompletedHistory) || 200;
+      this.maxErrorHistory = Number(options.maxErrorHistory) || 200;
+      this.retentionHours = Number(options.retentionHours) || 24;
+      this.records = new Map();
+      this.currentOperations = new Map();
+      this.eventIds = new Set();
+    }
+
+    logicalKey(tabId, imageId) {
+      return `${tabId}:${imageId}`;
+    }
+
+    key(tabId, imageId, operationId) {
+      return `${tabId}:${imageId}:${operationId}`;
+    }
+
+    currentOperation(tabId, imageId) {
+      return this.currentOperations.get(this.logicalKey(tabId, imageId)) || null;
+    }
+
+    get(tabId, imageId, operationId) {
+      return this.clone(this.records.get(this.key(tabId, imageId, operationId)) || null);
+    }
+
+    ingest(event) {
+      if (!event || event.schemaVersion !== SCHEMA_VERSION || !STAGES.includes(event.stage)) {
+        return { accepted: false, reason: "invalid_event" };
+      }
+      if (!Number.isInteger(event.tabId) || !event.imageId || !event.operationId) {
+        return { accepted: false, reason: "missing_identity" };
+      }
+      if (this.eventIds.has(event.eventId)) {
+        return { accepted: false, reason: "duplicate_event" };
+      }
+
+      const logicalKey = this.logicalKey(event.tabId, event.imageId);
+      const currentOperation = this.currentOperations.get(logicalKey);
+      if (currentOperation && currentOperation !== event.operationId) {
+        if (event.stage !== "DETECTED") {
+          return { accepted: false, reason: "stale_operation" };
+        }
+        const previous = this.records.get(this.key(event.tabId, event.imageId, currentOperation));
+        if (previous && !isTerminal(previous.stage)) {
+          const superseded = createEvent({
+            tabId: previous.tabId,
+            imageId: previous.imageId,
+            operationId: previous.operationId,
+            traceId: previous.traceId,
+            sourceFingerprint: previous.sourceFingerprint,
+            sourceUrl: previous.source ? this.sourceToUrl(previous.source) : null,
+            stage: "CANCELLED",
+            timestamp: event.timestamp,
+            retryCount: previous.retryCount,
+            metadata: { ...previous.metadata, reason: "superseded", previewValid: false },
+            error: {
+              errorCode: "OPERATION_SUPERSEDED",
+              category: "CANCELLATION",
+              message: "A newer image operation replaced this attempt.",
+              retryable: false,
+            },
+          });
+          this.append(previous, superseded);
+        }
+      }
+
+      const recordKey = this.key(event.tabId, event.imageId, event.operationId);
+      const existing = this.records.get(recordKey);
+      if (existing && !canTransition(existing.stage, event.stage)) {
+        return { accepted: false, reason: "invalid_transition", record: this.clone(existing) };
+      }
+      if (!existing && event.stage !== "DETECTED") {
+        return { accepted: false, reason: "missing_detected_event" };
+      }
+
+      const record = existing || {
+        key: recordKey,
+        tabId: event.tabId,
+        imageId: event.imageId,
+        operationId: event.operationId,
+        createdAt: event.timestamp,
+        timeline: [],
+      };
+      this.append(record, event);
+      this.records.set(recordKey, record);
+      this.currentOperations.set(logicalKey, event.operationId);
+      this.eventIds.add(event.eventId);
+      return { accepted: true, record: this.clone(record) };
+    }
+
+    append(record, event) {
+      record.timeline.push(event);
+      record.stage = event.stage;
+      record.status = event.status;
+      record.updatedAt = event.timestamp;
+      record.updatedAtMs = Date.parse(event.timestamp) || Date.now();
+      record.jobId = event.jobId || record.jobId || null;
+      record.parentJobId = event.parentJobId || record.parentJobId || null;
+      record.traceId = event.traceId || record.traceId || null;
+      record.sourceFingerprint = event.sourceFingerprint || record.sourceFingerprint || null;
+      record.source = event.source || record.source || null;
+      record.segmentIndex = event.segmentIndex ?? record.segmentIndex ?? null;
+      record.segmentCount = event.segmentCount ?? record.segmentCount ?? null;
+      record.progress = event.progress;
+      record.queuePosition = event.queuePosition;
+      record.retryCount = event.retryCount;
+      record.cache = event.cache;
+      record.mode = event.mode;
+      record.model = event.model || record.model || null;
+      record.provider = event.provider || record.provider || null;
+      record.input = event.input || record.input || null;
+      record.output = event.output || record.output || null;
+      record.renderCommit = event.renderCommit || record.renderCommit || null;
+      record.metadata = { ...(record.metadata || {}), ...(event.metadata || {}) };
+      record.error = event.error || null;
+      return record;
+    }
+
+    createRetry(tabId, imageId, operationId, newOperationId, eventId = null) {
+      if (!newOperationId || newOperationId === operationId) {
+        throw new Error("Retry requires a new operation identity.");
+      }
+      const original = this.records.get(this.key(tabId, imageId, operationId));
+      if (!original || !isTerminal(original.stage)) {
+        return { accepted: false, reason: "retry_source_not_terminal" };
+      }
+      if (original.error?.retryable === false) {
+        return { accepted: false, reason: "not_retryable" };
+      }
+      return this.ingest(createEvent({
+        eventId: eventId || undefined,
+        tabId,
+        imageId,
+        operationId: newOperationId,
+        parentJobId: original.key,
+        traceId: original.traceId,
+        sourceFingerprint: original.sourceFingerprint,
+        sourceUrl: original.source ? this.sourceToUrl(original.source) : null,
+        stage: "DETECTED",
+        retryCount: Number(original.retryCount || 0) + 1,
+        mode: original.mode,
+        input: original.input,
+        metadata: { retryOf: original.key, previewValid: false },
+      }));
+    }
+
+    recoverInterrupted(reason = "worker_restart", timestamp = new Date().toISOString()) {
+      const recovered = [];
+      for (const record of this.records.values()) {
+        if (isTerminal(record.stage)) continue;
+        const event = createEvent({
+          tabId: record.tabId,
+          imageId: record.imageId,
+          operationId: record.operationId,
+          traceId: record.traceId,
+          sourceFingerprint: record.sourceFingerprint,
+          sourceUrl: record.source ? this.sourceToUrl(record.source) : null,
+          stage: "CANCELLED",
+          timestamp,
+          retryCount: record.retryCount,
+          metadata: { ...record.metadata, reason, previewValid: false },
+          error: {
+            errorCode: "WORKER_INTERRUPTED",
+            category: "CANCELLATION",
+            message: "Processing was interrupted by an extension worker restart.",
+            retryable: true,
+          },
+        });
+        this.append(record, event);
+        this.eventIds.add(event.eventId);
+        recovered.push(record.key);
+      }
+      return recovered;
+    }
+
+    restore(snapshot) {
+      if (!snapshot || snapshot.schemaVersion !== SCHEMA_VERSION || !Array.isArray(snapshot.jobs)) {
+        return { restored: 0, rejected: 0 };
+      }
+      this.records.clear();
+      this.currentOperations.clear();
+      this.eventIds.clear();
+      const events = snapshot.jobs
+        .flatMap((job) => Array.isArray(job.timeline) ? job.timeline : [])
+        .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+      let restored = 0;
+      let rejected = 0;
+      for (const event of events) {
+        const result = this.ingest(event);
+        if (result.accepted) restored += 1;
+        else rejected += 1;
+      }
+      this.prune();
+      return { restored: this.records.size, events: restored, rejected };
+    }
+
+    summary() {
+      const summary = {
+        active: 0,
+        queued: 0,
+        deferred: 0,
+        completed: 0,
+        failed: 0,
+        timedOut: 0,
+        cancelled: 0,
+        skipped: 0,
+        cacheHits: 0,
+        averageDurationMs: null,
+      };
+      const durations = [];
+      for (const record of this.records.values()) {
+        if (!isTerminal(record.stage)) summary.active += 1;
+        if (record.stage === "QUEUED") summary.queued += 1;
+        if (record.stage === "DEFERRED") summary.deferred += 1;
+        if (record.stage === "COMPLETED") summary.completed += 1;
+        if (record.stage === "FAILED") summary.failed += 1;
+        if (record.stage === "TIMED_OUT") summary.timedOut += 1;
+        if (record.stage === "CANCELLED") summary.cancelled += 1;
+        if (record.stage === "SKIPPED") summary.skipped += 1;
+        if (record.cache === "HIT") summary.cacheHits += 1;
+        if (isTerminal(record.stage)) {
+          const duration = record.updatedAtMs - (Date.parse(record.createdAt) || record.updatedAtMs);
+          if (Number.isFinite(duration) && duration >= 0) durations.push(duration);
+        }
+      }
+      if (durations.length) {
+        summary.averageDurationMs = Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length);
+      }
+      return summary;
+    }
+
+    clearTerminal(stage = null) {
+      let removed = 0;
+      for (const record of [...this.records.values()]) {
+        if (!isTerminal(record.stage) || (stage && record.stage !== stage)) continue;
+        this.deleteRecord(record);
+        removed += 1;
+      }
+      return removed;
+    }
+
+    segmentSummary(parentJobId) {
+      const segments = [...this.records.values()].filter((record) => record.parentJobId === parentJobId);
+      return {
+        segmentCount: segments.length ? Math.max(...segments.map((record) => Number(record.segmentCount) || 0), segments.length) : 0,
+        completed: segments.filter((record) => record.stage === "COMPLETED").length,
+        failed: segments.filter((record) => record.stage === "FAILED" || record.stage === "TIMED_OUT").length,
+        cancelled: segments.filter((record) => record.stage === "CANCELLED" || record.stage === "REMOVED").length,
+        active: segments.filter((record) => !isTerminal(record.stage)).length,
+        progress: segments.length && segments.every((record) => Number.isFinite(record.progress))
+          ? segments.reduce((sum, record) => sum + record.progress, 0) / segments.length
+          : null,
+      };
+    }
+
+    prune(nowMs = Date.now()) {
+      const cutoff = nowMs - (this.retentionHours * 60 * 60 * 1000);
+      const completed = [];
+      const errors = [];
+      for (const record of this.records.values()) {
+        if (!isTerminal(record.stage)) continue;
+        if (record.updatedAtMs < cutoff) {
+          this.deleteRecord(record);
+          continue;
+        }
+        if (["COMPLETED", "SKIPPED"].includes(record.stage)) completed.push(record);
+        else errors.push(record);
+      }
+      this.pruneCategory(completed, this.maxCompletedHistory);
+      this.pruneCategory(errors, this.maxErrorHistory);
+      return this.records.size;
+    }
+
+    pruneCategory(records, limit) {
+      records.sort((left, right) => left.updatedAtMs - right.updatedAtMs || left.key.localeCompare(right.key));
+      while (records.length > limit) this.deleteRecord(records.shift());
+    }
+
+    deleteRecord(record) {
+      if (!record) return;
+      this.records.delete(record.key);
+      const logicalKey = this.logicalKey(record.tabId, record.imageId);
+      if (this.currentOperations.get(logicalKey) === record.operationId) {
+        this.currentOperations.delete(logicalKey);
+      }
+      for (const event of record.timeline) this.eventIds.delete(event.eventId);
+    }
+
+    snapshot() {
+      const jobs = [...this.records.values()]
+        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.key.localeCompare(right.key))
+        .map((record) => this.clone(record));
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        generatedAt: new Date().toISOString(),
+        limits: {
+          maxActiveHistory: this.maxActiveHistory,
+          maxCompletedHistory: this.maxCompletedHistory,
+          maxErrorHistory: this.maxErrorHistory,
+          retentionHours: this.retentionHours,
+        },
+        summary: this.summary(),
+        jobs,
+      };
+    }
+
+    sourceToUrl(source) {
+      if (!source?.scheme || !source?.hostname) return null;
+      return `${source.scheme}://${source.hostname}${source.path || "/"}`;
+    }
+
+    clone(value) {
+      return value === null ? null : JSON.parse(JSON.stringify(value));
+    }
+  }
+
   return Object.freeze({
     SCHEMA_VERSION,
     STAGES,
@@ -229,6 +550,7 @@ var AI_PROCESSING_MONITOR = (() => {
     createEvent,
     isTerminal,
     normalizeError,
+    ProcessingMonitorStore,
     sanitizeUrl,
     sanitizeValue,
   });

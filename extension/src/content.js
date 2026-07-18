@@ -1256,6 +1256,7 @@ class ViewportImageProvider {
           sourceRevision: segmentKey,
           sourceFingerprint: record.sourceFingerprint,
           parentSourceFingerprint: group.parentSourceFingerprint,
+          parentJobId: operationId,
           image: rawImage,
           metadata: segmentMetadata,
           state: "waiting",
@@ -1520,6 +1521,7 @@ class ViewportImageProvider {
       operationId: operation.operationId,
       traceId: operation.traceId,
       sourceRevision: operation.sourceRevision,
+      imageUrl: operation.metadata?.imageUrl || "",
       pageOrder: operation.pageOrder,
       viewportDistance: this.viewportDistance(operation.image),
       status: state,
@@ -2201,6 +2203,16 @@ class ViewportImageProvider {
     }
 
     entry.state = "processing";
+    this.sendMonitorMessage({
+      type: "RENDER_STARTED",
+      imageId: entry.imageId,
+      operationId: entry.operationId,
+      sourceRevision: entry.sourceRevision,
+      sourceFingerprint: entry.sourceFingerprint || null,
+      traceId: entry.traceId || message.traceId,
+      imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
+      cacheHit: Boolean(message.cacheHit),
+    });
     const isCurrent = () => {
       const currentEntry = trackedImages.get(message.imageId);
       return this.isCurrentMessage(currentEntry, message) && (!currentEntry?.isSegment || this.isCurrentSegmentEntry(currentEntry));
@@ -2212,11 +2224,31 @@ class ViewportImageProvider {
     }
     if (outcome === "stale") {
       entry.state = "waiting";
+      this.sendMonitorMessage({
+        type: "RENDER_FAILED",
+        imageId: entry.imageId,
+        operationId: entry.operationId,
+        sourceRevision: entry.sourceRevision,
+        sourceFingerprint: entry.sourceFingerprint || null,
+        traceId: entry.traceId || message.traceId,
+        imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
+        outcome,
+      });
       return "stale";
     }
     if (outcome === "load-error") {
       if (entry.sliceGroup) this.rollbackSliceGroup(entry.sliceGroup, "segment-load-error");
       else this.removeTrackedEntry(entry);
+      this.sendMonitorMessage({
+        type: "RENDER_FAILED",
+        imageId: entry.imageId,
+        operationId: entry.operationId,
+        sourceRevision: entry.sourceRevision,
+        sourceFingerprint: entry.sourceFingerprint || null,
+        traceId: entry.traceId || message.traceId,
+        imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
+        outcome,
+      });
       return "load-error";
     }
     this.removeTrackedEntry(entry);
@@ -2230,7 +2262,25 @@ class ViewportImageProvider {
       status: "completed",
       metadata: { cache_hit: Boolean(message.cacheHit) },
     });
+    this.sendMonitorMessage({
+      type: "RENDER_COMMITTED",
+      imageId: entry.imageId,
+      operationId: entry.operationId,
+      sourceRevision: entry.sourceRevision,
+      sourceFingerprint: entry.sourceFingerprint || null,
+      traceId: entry.traceId || message.traceId,
+      imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
+      cacheHit: Boolean(message.cacheHit),
+    });
     return "rendered";
+  }
+
+  sendMonitorMessage(message) {
+    try {
+      Promise.resolve(chrome.runtime.sendMessage(message)).catch(() => null);
+    } catch {
+      // Monitoring must never block or invalidate the page render transaction.
+    }
   }
 
   isCurrentMessage(entry, message) {
@@ -2293,6 +2343,25 @@ class ViewportImageProvider {
     });
     this.cancelPreprocessingSignal(entry.preprocessingSignal, "cancelled");
     this.removeTrackedEntry(entry);
+  }
+
+  retryImage(imageId, operationId) {
+    let entry = trackedImages.get(imageId);
+    if (entry && operationId && entry.operationId !== operationId) return false;
+    let image = entry?.image || null;
+    if (!image) {
+      image = [...document.querySelectorAll("img")].find((candidate) => candidate.dataset?.aiEnhancerImageId === imageId) || null;
+    }
+    if (!image) return false;
+    if (entry) this.cancel(entry);
+    const key = image.dataset.aiEnhancerKey;
+    if (key) {
+      trackedImageKeys.delete(key);
+      completedImageKeys.delete(key);
+    }
+    delete image.dataset.aiEnhancerOperationId;
+    delete image.dataset.aiEnhancerTraceId;
+    return Boolean(this.schedule(image, true, { allowPrefetch: true }));
   }
 
   cleanupRemovedNode(node) {
@@ -2455,6 +2524,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "UPSCALE_FAILED") {
     viewportProvider.fail(message.imageId, Boolean(message.permanent), message.operationId, message.sourceRevision);
+  }
+
+  if (message.type === "RETRY_IMAGE") {
+    const retried = viewportProvider.retryImage(message.imageId, message.operationId);
+    sendResponse({ retried });
+    return false;
+  }
+
+  if (message.type === "CANCEL_IMAGE") {
+    const entry = trackedImages.get(message.imageId);
+    if (!entry || entry.operationId !== message.operationId) {
+      sendResponse({ canceled: false, stale: true });
+      return false;
+    }
+    viewportProvider.cancel(entry);
+    sendResponse({ canceled: true });
+    return false;
   }
 
   if (message.type === "SET_PREVIEW_ORIGINAL") {

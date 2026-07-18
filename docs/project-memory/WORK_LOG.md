@@ -112,3 +112,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: The new tests first failed because the contract module did not exist. The completed checkpoint passed 139 extension tests, 47 backend tests, JavaScript syntax checks, Ruff, and 71% backend coverage. The repository verification script could not locate a worktree-local `.venv`; the same full commands were run with the existing project virtualenv against this isolated worktree.
 - Git: Pending automatic isolated-branch sync for `feat(monitor): define processing event contract`.
 - Remaining: Wire lifecycle events and persisted bounded history, then move terminal completion authority to the confirmed renderer commit.
+
+## 2026-07-19 - Processing Monitor lifecycle and Dashboard
+
+- Request: Continue the isolated Processing Monitor mission through runtime wiring and Dashboard expansion without changing the main checkout.
+- Changes: Added bounded sanitized monitor session/local persistence with worker-restart recovery, operation-aware lifecycle ingestion, segment parent linkage/aggregation, structured backend errors with 422 retry blocking, content render-start/commit/failure messages, post-DOM statistics, Dashboard summary/table/timeline/filter/actions/export, and content cancel/retry handling.
+- Invariant/decision: Backend receipt is `RECEIVING_RESULT`; only a current content renderer `RENDER_COMMITTED` event may change a registry row to `fixed/cache` and increment processed statistics. Monitor event ingestion is serialized so render preparation cannot race commit.
+- Verification: Full extension suite passed 151 tests; backend 47 tests; JavaScript checks; Ruff; 71% coverage; deterministic Edge fixture/lifecycle E2E passed with zero browser exceptions, zero failed/cancelled jobs, and settled queues. The existing worktree-equivalent Python runtime was used because `.venv` is absent in this isolated checkout.
+- Git: Pending automatic isolated-branch sync for `feat(monitor): expose image job lifecycle`.
+- Remaining: Add monitor-specific browser dashboard/recovery/load assertions and complete the final acceptance matrix; representative heavy Manhwa remains a known external throughput limitation.

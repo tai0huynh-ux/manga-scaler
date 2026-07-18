@@ -1,4 +1,4 @@
-importScripts("./config.js");
+importScripts("./config.js", "./processing-monitor.js");
 
 const DEFAULT_STATE = Object.freeze({
   enabled: true,
@@ -39,6 +39,8 @@ const DEFAULT_STATE = Object.freeze({
   lastQuality: null,
   lastDetectedMode: null,
   lastComparison: null,
+  lastModel: null,
+  lastProvider: null,
   blacklistRules: [],
 });
 
@@ -124,7 +126,7 @@ class StatisticsTracker {
     await this.storageArea.set({ ...DEFAULT_STATE, ...current });
   }
 
-  async recordSuccess({ tabId, latencyMs, cacheHit, quality = null, detectedMode = null, comparison = null }) {
+  async recordSuccess({ tabId, latencyMs, cacheHit, quality = null, detectedMode = null, comparison = null, model = null, provider = null }) {
     const tab = this.tab(tabId);
     tab.fixed += 1;
     tab.cache += cacheHit ? 1 : 0;
@@ -137,6 +139,8 @@ class StatisticsTracker {
       lastQuality: quality || current.lastQuality || null,
       lastDetectedMode: detectedMode || current.lastDetectedMode || null,
       lastComparison: comparison || current.lastComparison || null,
+      lastModel: model || current.lastModel || null,
+      lastProvider: provider || current.lastProvider || null,
     });
   }
 
@@ -204,6 +208,8 @@ class StatisticsTracker {
       lastQuality: current.lastQuality || null,
       lastDetectedMode: current.lastDetectedMode || null,
       lastComparison: current.lastComparison || null,
+      lastModel: current.lastModel || null,
+      lastProvider: current.lastProvider || null,
       blacklistRules: current.blacklistRules || [],
       scopes: {
         currentPage: { ...currentTab, processing: queueSnapshot.byTab[activeTabId] ?? 0 },
@@ -571,7 +577,19 @@ class BackendUpscaleProvider {
             duration_ms: Math.max(0, performance.now() - requestStarted),
           },
         });
-        throw new Error(`Backend returned ${response.status}`);
+        const detail = errorPayload?.detail && typeof errorPayload.detail === "object"
+          ? errorPayload.detail
+          : {
+              errorCode: "BACKEND_REQUEST_FAILED",
+              message: `Backend returned ${response.status}`,
+              status: response.status,
+              traceId: options.traceId || null,
+            };
+        const backendError = new Error(detail.message || `Backend returned ${response.status}`);
+        backendError.status = response.status;
+        backendError.code = detail.errorCode || "BACKEND_REQUEST_FAILED";
+        backendError.detail = detail;
+        throw backendError;
       }
 
       const metadata = await response.json();
@@ -630,6 +648,12 @@ class BackendUpscaleProvider {
         originalImageUrl: metadata.originalImageUrl,
         enhancedImageUrl: metadata.imageUrl,
         traceId: metadata.traceId || options.traceId,
+        model: metadata.model || null,
+        provider: metadata.provider || null,
+        outputWidth: metadata.outputWidth || null,
+        outputHeight: metadata.outputHeight || null,
+        timings: metadata.timings || null,
+        queue: metadata.queue || null,
       };
     } catch (error) {
       if (timedOut) {
@@ -882,11 +906,12 @@ class BackendUpscaleProvider {
  * Schedules image jobs by viewport distance while enforcing concurrency limits.
  */
 class QueueScheduler {
-  constructor({ maxConcurrentRequests, cacheProvider, upscaleProvider, statisticsTracker }) {
+  constructor({ maxConcurrentRequests, cacheProvider, upscaleProvider, statisticsTracker, monitorJobEvent = null }) {
     this.maxConcurrentRequests = maxConcurrentRequests;
     this.cacheProvider = cacheProvider;
     this.upscaleProvider = upscaleProvider;
     this.statisticsTracker = statisticsTracker;
+    this.monitorJobEvent = typeof monitorJobEvent === "function" ? monitorJobEvent : () => Promise.resolve({ accepted: false });
     this.pending = new Map();
     this.active = new Map();
     this.retryTimers = new Map();
@@ -921,6 +946,10 @@ class QueueScheduler {
     });
     if (!job.deferred) this.preemptDeferredActiveJobs();
     pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", pageOrder: job.pageOrder });
+    this.monitorJobEvent(job, "QUEUED", {
+      queuePosition: this.pending.size,
+      cache: "UNKNOWN",
+    });
     emitTrace({
       event: "background.job.enqueued",
       traceId: job.traceId,
@@ -1039,6 +1068,15 @@ class QueueScheduler {
       attempt: job.attempt,
       metadata: { reason, queue_key_prefix: safeTracePrefix(queueKey) },
     });
+    this.monitorJobEvent(job, "CANCELLED", {
+      metadata: { reason, previewValid: false },
+      error: {
+        errorCode: "JOB_CANCELLED",
+        category: "CANCELLATION",
+        message: "The image operation was cancelled.",
+        retryable: reason === "explicit",
+      },
+    });
     return true;
   }
 
@@ -1096,6 +1134,9 @@ class QueueScheduler {
           metadata: { reason: "preempted", queue_key_prefix: safeTracePrefix(job.queueKey) },
         });
         pageImageRegistry.update(job.tabId, job.imageId, { operationId: job.operationId, status: "waiting", deferred: true });
+        this.monitorJobEvent(job, "DEFERRED", {
+          metadata: { reason: "foreground_job" },
+        });
       });
   }
 
@@ -1174,6 +1215,15 @@ class QueueScheduler {
         return;
       }
       if (cached) {
+        this.monitorJobEvent(job, "RECEIVING_RESULT", {
+          cache: "HIT",
+          model: cached.model || null,
+          provider: cached.provider || null,
+          output: {
+            byteLength: Number(cached.buffer?.byteLength) || null,
+            mime: cached.contentType || null,
+          },
+        });
         emitTrace({
           event: "background.cache.hit",
           traceId: job.traceId,
@@ -1185,36 +1235,30 @@ class QueueScheduler {
             variant: cacheVariant,
           },
         });
-        await this.statisticsTracker.recordSuccess({
-          tabId: job.tabId,
-          latencyMs: performance.now() - startedAt,
-          cacheHit: true,
-          quality: cached.quality,
-          detectedMode: cached.detectedMode,
-          comparison: {
-            originalImageUrl: cached.originalImageUrl,
-            enhancedImageUrl: cached.enhancedImageUrl,
-            imageUrl: job.imageUrl,
-            quality: cached.quality,
-            detectedMode: cached.detectedMode,
-          },
-        });
         if (!this.isCurrentJob(job)) return;
         this.sendComplete(job, cached, true);
         emitTrace({
-          event: "background.job.completed",
+          event: "background.job.result_received",
           traceId: job.traceId,
-          status: "completed",
+          status: "received",
           attempt: job.attempt,
           metadata: { cache_hit: true, duration_ms: Math.max(0, performance.now() - startedAt) },
         });
         pageImageRegistry.update(job.tabId, job.imageId, {
           operationId: job.operationId,
-          status: "cache",
+          status: "rendering",
           cacheHit: true,
           originalImageUrl: cached.originalImageUrl || job.imageUrl,
           enhancedImageUrl: cached.enhancedImageUrl,
           quality: cached.quality,
+          completionStats: {
+            latencyMs: performance.now() - startedAt,
+            cacheHit: true,
+            quality: cached.quality,
+            detectedMode: cached.detectedMode,
+            model: cached.model || null,
+            provider: cached.provider || null,
+          },
         });
         return;
       }
@@ -1229,6 +1273,8 @@ class QueueScheduler {
           variant: cacheVariant,
         },
       });
+
+      this.monitorJobEvent(job, "SENDING_TO_BACKEND", { cache: "MISS" });
 
       const result = await this.upscaleProvider.upscale(
         job.imageUrl,
@@ -1255,38 +1301,48 @@ class QueueScheduler {
       if (!this.isCurrentJob(job)) {
         return;
       }
-      await this.cacheProvider.set(cacheIdentity, result);
-      if (!this.isCurrentJob(job)) return;
-      await this.statisticsTracker.recordSuccess({
-        tabId: job.tabId,
-        latencyMs: performance.now() - startedAt,
-        cacheHit: false,
-        quality: result.quality,
-        detectedMode: result.detectedMode,
-        comparison: {
-          originalImageUrl: result.originalImageUrl,
-          enhancedImageUrl: result.enhancedImageUrl,
-          imageUrl: job.imageUrl,
-          quality: result.quality,
-          detectedMode: result.detectedMode,
+      this.monitorJobEvent(job, "RECEIVING_RESULT", {
+        cache: result.cacheHit ? "HIT" : "MISS",
+        model: result.model || null,
+        provider: result.provider || null,
+        output: {
+          width: result.outputWidth || null,
+          height: result.outputHeight || null,
+          byteLength: Number(result.buffer?.byteLength) || null,
+          mime: result.contentType || null,
+        },
+        metadata: {
+          timings: result.timings || null,
+          backendQueue: result.queue || null,
+          cacheKeyPrefix: safeTracePrefix(result.cacheKey),
         },
       });
+      await this.cacheProvider.set(cacheIdentity, result);
+      if (!this.isCurrentJob(job)) return;
       if (!this.isCurrentJob(job)) return;
       this.sendComplete(job, result, false);
       emitTrace({
-        event: "background.job.completed",
+        event: "background.job.result_received",
         traceId: job.traceId || result.traceId,
-        status: "completed",
+        status: "received",
         attempt: job.attempt,
         metadata: { cache_hit: false, duration_ms: Math.max(0, performance.now() - startedAt) },
       });
       pageImageRegistry.update(job.tabId, job.imageId, {
         operationId: job.operationId,
-        status: "fixed",
+        status: "rendering",
         cacheHit: false,
         originalImageUrl: result.originalImageUrl || job.imageUrl,
         enhancedImageUrl: result.enhancedImageUrl,
         quality: result.quality,
+        completionStats: {
+          latencyMs: performance.now() - startedAt,
+          cacheHit: false,
+          quality: result.quality,
+          detectedMode: result.detectedMode,
+          model: result.model || null,
+          provider: result.provider || null,
+        },
       });
     } catch (error) {
       if (!this.isCurrentJob(job)) {
@@ -1297,7 +1353,8 @@ class QueueScheduler {
         await this.failJob(job, error, "timeout");
         return;
       }
-      if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
+      const normalizedError = AI_PROCESSING_MONITOR.normalizeError(error, "SENDING_TO_BACKEND");
+      if (normalizedError.retryable && job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
         emitTrace({
           event: "background.job.retrying",
@@ -1305,6 +1362,11 @@ class QueueScheduler {
           status: "retrying",
           attempt: job.attempt + 1,
           metadata: { retry_reason: error?.message || "unknown", delay_ms: delay },
+        });
+        this.monitorJobEvent(job, "DEFERRED", {
+          retryCount: job.attempt,
+          metadata: { reason: "retryable_error", delayMs: delay },
+          error: AI_PROCESSING_MONITOR.normalizeError(error, "SENDING_TO_BACKEND"),
         });
         this.scheduleRetry(job, delay);
         return;
@@ -1323,6 +1385,11 @@ class QueueScheduler {
       status,
       error: message,
       failedAt: performance.now(),
+      errorModel: AI_PROCESSING_MONITOR.normalizeError(error, status === "timeout" ? "TIMED_OUT" : "FAILED"),
+    });
+    this.monitorJobEvent(job, status === "timeout" ? "TIMED_OUT" : "FAILED", {
+      error,
+      metadata: { previewValid: false },
     });
     emitTrace({
       event: "background.job.failed",
@@ -1409,6 +1476,102 @@ class QueueScheduler {
 
 const statisticsTracker = new StatisticsTracker(chrome.storage.local);
 const pageImageRegistry = new PageImageRegistry();
+const processingMonitor = new AI_PROCESSING_MONITOR.ProcessingMonitorStore();
+const PROCESSING_MONITOR_SESSION_KEY = "processingMonitorSessionV1";
+const PROCESSING_MONITOR_HISTORY_KEY = "processingMonitorHistoryV1";
+let processingMonitorWrite = Promise.resolve();
+let processingMonitorEventQueue = Promise.resolve();
+
+async function restoreProcessingMonitor() {
+  const sessionArea = chrome.storage.session || chrome.storage.local;
+  const [sessionState, localState] = await Promise.all([
+    sessionArea.get({ [PROCESSING_MONITOR_SESSION_KEY]: null }),
+    chrome.storage.local.get({ [PROCESSING_MONITOR_HISTORY_KEY]: null }),
+  ]);
+  const snapshot = sessionState[PROCESSING_MONITOR_SESSION_KEY] || localState[PROCESSING_MONITOR_HISTORY_KEY];
+  if (snapshot) processingMonitor.restore(snapshot);
+  const recovered = processingMonitor.recoverInterrupted("worker_restart");
+  processingMonitor.prune();
+  if (snapshot || recovered.length) await persistProcessingMonitor();
+}
+
+function persistProcessingMonitor() {
+  const snapshot = processingMonitor.snapshot();
+  const sessionArea = chrome.storage.session || chrome.storage.local;
+  processingMonitorWrite = processingMonitorWrite.catch(() => {}).then(() => Promise.all([
+    sessionArea.set({ [PROCESSING_MONITOR_SESSION_KEY]: snapshot }),
+    chrome.storage.local.set({ [PROCESSING_MONITOR_HISTORY_KEY]: snapshot }),
+  ]));
+  return processingMonitorWrite;
+}
+
+function applyProcessingEvent(input) {
+    let event;
+    try {
+      event = AI_PROCESSING_MONITOR.createEvent(input);
+    } catch (error) {
+      return { accepted: false, reason: error?.message || "invalid_event" };
+    }
+    let result = processingMonitor.ingest(event);
+    if (!result.accepted && result.reason === "missing_detected_event" && event.stage !== "DETECTED") {
+      const detected = AI_PROCESSING_MONITOR.createEvent({
+        tabId: event.tabId,
+        imageId: event.imageId,
+        operationId: event.operationId,
+        traceId: event.traceId,
+        sourceFingerprint: event.sourceFingerprint,
+        sourceUrl: input.sourceUrl,
+        stage: "DETECTED",
+        timestamp: event.timestamp,
+        input: event.input,
+        metadata: { recoveredFromStage: event.stage },
+      });
+      processingMonitor.ingest(detected);
+      result = processingMonitor.ingest(event);
+    }
+    if (result.accepted) {
+      processingMonitor.prune();
+      persistProcessingMonitor();
+    }
+    return result;
+}
+
+function recordProcessingEvents(inputs) {
+  const task = processingMonitorEventQueue.then(() => processingMonitorReady).then(() => inputs.map((input) => applyProcessingEvent(input)));
+  processingMonitorEventQueue = task.catch(() => {});
+  return task;
+}
+
+function recordProcessingEvent(input) {
+  return recordProcessingEvents([input]).then(([result]) => result);
+}
+
+function monitorJobEvent(job, stage, extra = {}) {
+  if (!job) return Promise.resolve({ accepted: false, reason: "missing_job" });
+  return recordProcessingEvent({
+    tabId: job.tabId,
+    imageId: job.imageId,
+    operationId: job.operationId,
+    jobId: job.queueKey || null,
+    traceId: job.traceId,
+    sourceFingerprint: job.sourceFingerprint,
+    parentJobId: job.parentJobId || null,
+    sourceUrl: job.imageUrl,
+    stage,
+    retryCount: Math.max(0, Number(job.attempt || 1) - 1),
+    mode: job.mode,
+    input: {
+      width: Number(job.displayMetrics?.sourceWidth) || null,
+      height: Number(job.displayMetrics?.sourceHeight) || null,
+      sourceKind: job.imageData ? "browser-bytes" : "remote-fetch",
+    },
+    ...extra,
+  });
+}
+
+const processingMonitorReady = restoreProcessingMonitor().catch((error) => {
+  console.warn("[AI Enhancer][monitor] restore failed", error?.message || error);
+});
 let lastContentTabId = null;
 const cacheProvider = new CompositeCacheProvider(
   new MemoryCacheProvider(AI_MANGA_UPSCALER_CONFIG.cache.memoryMaxEntries),
@@ -1427,6 +1590,7 @@ const scheduler = new QueueScheduler({
   cacheProvider,
   upscaleProvider,
   statisticsTracker,
+  monitorJobEvent,
 });
 
 async function backendHealthy() {
@@ -1616,8 +1780,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       viewportDistance: Number(message.viewportDistance),
       preprocessingStartedAt: performance.now(),
     });
-    sendResponse({ recorded: true });
-    return false;
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: message.imageUrl,
+      stage: "READING_SOURCE",
+    }).then((result) => sendResponse(result));
+    return true;
   }
 
   if (message.type === "PREPROCESSING_DEFERRED") {
@@ -1632,6 +1803,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       reason: message.reason || "cancelled-outside-prefetch",
       pageOrder: Number(message.pageOrder),
       viewportDistance: Number(message.viewportDistance),
+    });
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: message.imageUrl,
+      stage: "WAITING_FOR_VIEWPORT",
+      metadata: { reason: message.reason || "outside_prefetch" },
     });
     sendResponse({ recorded: true });
     return false;
@@ -1651,6 +1831,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       status,
       error: message.reason || "Preprocessing failed.",
       failedAt: performance.now(),
+    });
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: message.imageUrl,
+      stage: status === "timeout" ? "TIMED_OUT" : (status === "cancelled" ? "CANCELLED" : "FAILED"),
+      error: {
+        errorCode: status === "timeout" ? "PREPROCESSING_TIMEOUT" : "PREPROCESSING_FAILED",
+        category: status === "timeout" ? "TIMEOUT" : (status === "cancelled" ? "CANCELLATION" : "ACQUISITION"),
+        message: message.reason || "Preprocessing failed.",
+        retryable: status !== "cancelled",
+      },
+      metadata: { previewValid: false },
     });
     sendResponse({ recorded: true });
     return false;
@@ -1733,6 +1928,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           traceId: message.traceId,
           pageOrder: Number(message.pageOrder),
         }),
+        recordProcessingEvent({
+          tabId,
+          imageId: message.imageId,
+          operationId: message.operationId,
+          traceId: message.traceId,
+          sourceUrl: message.imageUrl,
+          stage: "DETECTED",
+          input: {
+            width: Number(message.width) || null,
+            height: Number(message.height) || null,
+            sourceKind: "dom-image",
+          },
+          metadata: {
+            pageOrder: Number(message.pageOrder),
+            page: AI_PROCESSING_MONITOR.sanitizeUrl(sender.tab.url || ""),
+          },
+        }),
       ]).then(() => sendResponse({ recorded: true }));
     });
     return true;
@@ -1758,6 +1970,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       lastContentTabId = tabId;
+      recordProcessingEvent({
+        tabId,
+        imageId: message.imageId,
+        operationId: message.operationId,
+        traceId: message.traceId,
+        sourceFingerprint: message.sourceFingerprint || null,
+        parentJobId: message.parentJobId ? `${tabId}:${message.parentJobId}` : null,
+        sourceUrl: message.imageUrl,
+        stage: "VALIDATING_SOURCE",
+        input: {
+          width: Number(message.displayMetrics?.sourceWidth) || null,
+          height: Number(message.displayMetrics?.sourceHeight) || null,
+          byteLength: typeof message.imageData === "string" ? Math.max(0, Math.floor(message.imageData.length * 0.75)) : null,
+          sourceKind: message.imageData ? "browser-bytes" : "remote-fetch",
+        },
+      });
       const outputLimits = resolveOutputLimits(settings, {
         ...(message.displayMetrics || {}),
         cacheVariant: message.cacheVariant || "full",
@@ -1771,6 +1999,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         traceId: message.traceId,
         sourceFingerprint: message.sourceFingerprint || null,
         parentSourceFingerprint: message.parentSourceFingerprint || null,
+        parentJobId: message.parentJobId ? `${tabId}:${message.parentJobId}` : null,
         imageUrl: message.imageUrl,
         pageUrl: sender.tab.url,
         imageData: message.imageData || null,
@@ -1795,6 +2024,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           Number(message.displayMetrics?.sourceWidth) || 0,
           Number(message.displayMetrics?.sourceHeight) || 0,
         ) >= 384 ? 512 : 256,
+        displayMetrics: message.displayMetrics || null,
       });
       if (!accepted) {
         emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "scheduler_rejected" } });
@@ -1820,12 +2050,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CANCEL_IMAGE") {
-    if (!hasMessageOperationIdentity(message, sender)) {
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
+    if (!Number.isInteger(tabId) || typeof message.imageId !== "string" || !message.imageId || typeof message.operationId !== "string" || !message.operationId) {
       sendResponse({ canceled: false, reason: "Missing operation identity." });
       return false;
     }
-    const canceled = scheduler.cancel(sender.tab.id, message.imageId, message.operationId);
-    pageImageRegistry.removeImage(sender.tab.id, message.imageId, message.operationId);
+    const canceled = scheduler.cancel(tabId, message.imageId, message.operationId);
+    pageImageRegistry.removeImage(tabId, message.imageId, message.operationId);
+    if (!sender.tab?.id) {
+      chrome.tabs.sendMessage(tabId, { type: "CANCEL_IMAGE", imageId: message.imageId, operationId: message.operationId }).catch(() => {});
+    }
     sendResponse({ canceled });
     return false;
   }
@@ -1854,6 +2088,160 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = Number.isInteger(message.tabId) ? message.tabId : lastContentTabId;
     sendResponse({ tabId, images: Number.isInteger(tabId) ? pageImageRegistry.list(tabId) : [] });
     return false;
+  }
+
+  if (message.type === "RETRY_IMAGE") {
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
+    if (!Number.isInteger(tabId) || typeof message.imageId !== "string" || !message.imageId || typeof message.operationId !== "string" || !message.operationId) {
+      sendResponse({ retried: false, reason: "Missing operation identity." });
+      return false;
+    }
+    processingMonitorReady.then(() => {
+      const record = processingMonitor.get(tabId, message.imageId, message.operationId);
+      if (!record?.error?.retryable) {
+        sendResponse({ retried: false, reason: "Operation is not retryable." });
+        return;
+      }
+      chrome.tabs.sendMessage(tabId, {
+        type: "RETRY_IMAGE",
+        imageId: message.imageId,
+        operationId: message.operationId,
+      }).then((response) => sendResponse({ retried: Boolean(response?.retried) })).catch(() => sendResponse({ retried: false, reason: "Content tab unavailable." }));
+    });
+    return true;
+  }
+
+  if (message.type === "RENDER_STARTED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const current = pageImageRegistry.page(sender.tab.id).get(message.imageId);
+    if (!current || current.operationId !== message.operationId) {
+      sendResponse({ recorded: false, stale: true });
+      return false;
+    }
+    const renderInputs = ["PREPARING_RENDER", "RENDERING"].map((stage) => ({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      jobId: `${sender.tab.id}:${message.imageId}:${message.operationId}`,
+      traceId: message.traceId,
+      sourceFingerprint: message.sourceFingerprint,
+      sourceUrl: current.imageUrl,
+      stage,
+      cache: message.cacheHit ? "HIT" : "MISS",
+    }));
+    recordProcessingEvents(renderInputs).then((results) => sendResponse(results.at(-1)));
+    return true;
+  }
+
+  if (message.type === "RENDER_COMMITTED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const current = pageImageRegistry.page(sender.tab.id).get(message.imageId);
+    if (!current || current.operationId !== message.operationId) {
+      sendResponse({ recorded: false, stale: true });
+      return false;
+    }
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      jobId: `${sender.tab.id}:${message.imageId}:${message.operationId}`,
+      traceId: message.traceId,
+      sourceFingerprint: message.sourceFingerprint,
+      sourceUrl: current.imageUrl,
+      stage: "COMPLETED",
+      cache: message.cacheHit ? "HIT" : "MISS",
+      renderCommit: { confirmed: true, outcome: "rendered" },
+      metadata: { cleanupStatus: "settled" },
+    }).then(async (result) => {
+      if (result.accepted) {
+        const completionStats = current.completionStats || {};
+        pageImageRegistry.update(sender.tab.id, message.imageId, {
+          operationId: message.operationId,
+          status: message.cacheHit ? "cache" : "fixed",
+          renderCommit: true,
+          renderedAt: performance.now(),
+          completionStats: undefined,
+        });
+        if (!current.statisticsRecorded) {
+          await statisticsTracker.recordSuccess({
+            tabId: sender.tab.id,
+            latencyMs: Number(completionStats.latencyMs) || 0,
+            cacheHit: Boolean(completionStats.cacheHit ?? message.cacheHit),
+            quality: completionStats.quality || current.quality || null,
+            detectedMode: completionStats.detectedMode || null,
+            model: completionStats.model || null,
+            provider: completionStats.provider || null,
+            comparison: {
+              originalImageUrl: current.originalImageUrl || current.imageUrl,
+              enhancedImageUrl: current.enhancedImageUrl || null,
+              imageUrl: current.imageUrl,
+              quality: completionStats.quality || current.quality || null,
+              detectedMode: completionStats.detectedMode || null,
+            },
+          });
+          pageImageRegistry.update(sender.tab.id, message.imageId, {
+            operationId: message.operationId,
+            statisticsRecorded: true,
+          });
+        }
+      }
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.type === "RENDER_FAILED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      status: message.outcome === "stale" ? "cancelled" : "error",
+      error: message.outcome === "stale" ? "Render superseded." : "DOM render failed.",
+    });
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceFingerprint: message.sourceFingerprint,
+      sourceUrl: message.imageUrl,
+      stage: message.outcome === "stale" ? "CANCELLED" : "FAILED",
+      error: {
+        errorCode: message.outcome === "stale" ? "RENDER_SUPERSEDED" : "DOM_RENDER_FAILED",
+        category: message.outcome === "stale" ? "CANCELLATION" : "RENDERING",
+        message: message.outcome === "stale" ? "A newer operation superseded this render." : "The enhanced image could not be committed to the DOM.",
+        retryable: message.outcome !== "stale",
+      },
+      metadata: { previewValid: false },
+    }).then((result) => sendResponse(result));
+    return true;
+  }
+
+  if (message.type === "GET_PROCESSING_MONITOR") {
+    processingMonitorReady.then(() => {
+      const snapshot = processingMonitor.snapshot();
+      if (Number.isInteger(message.tabId)) {
+        snapshot.jobs = snapshot.jobs.filter((job) => job.tabId === message.tabId);
+      }
+      sendResponse(snapshot);
+    });
+    return true;
+  }
+
+  if (message.type === "CLEAR_PROCESSING_HISTORY") {
+    processingMonitorReady.then(() => {
+      const removed = processingMonitor.clearTerminal(message.stage || null);
+      persistProcessingMonitor().then(() => sendResponse({ removed }));
+    });
+    return true;
   }
 
   if (message.type === "SET_ENABLED") {
