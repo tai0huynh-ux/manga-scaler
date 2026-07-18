@@ -123,13 +123,14 @@ function loadBackgroundClasses(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider; globalThis.__normalizeUpscaleRequest = typeof normalizeUpscaleRequest === "function" ? normalizeUpscaleRequest : null; globalThis.__sanitizeUpscaleRequestMetadata = typeof sanitizeUpscaleRequestMetadata === "function" ? sanitizeUpscaleRequestMetadata : null;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider; globalThis.__normalizeUpscaleRequest = typeof normalizeUpscaleRequest === "function" ? normalizeUpscaleRequest : null; globalThis.__sanitizeUpscaleRequestMetadata = typeof sanitizeUpscaleRequestMetadata === "function" ? sanitizeUpscaleRequestMetadata : null; globalThis.__migratePersistedSettings = typeof migratePersistedSettings === "function" ? migratePersistedSettings : null;`, context);
   return {
     QueueScheduler: context.__QueueScheduler,
     PageImageRegistry: context.__PageImageRegistry,
     BackendUpscaleProvider: context.__BackendUpscaleProvider,
     normalizeUpscaleRequest: context.__normalizeUpscaleRequest,
     sanitizeUpscaleRequestMetadata: context.__sanitizeUpscaleRequestMetadata,
+    migratePersistedSettings: context.__migratePersistedSettings,
   };
 }
 
@@ -1059,6 +1060,88 @@ test("request metadata sanitizer records shape without URL tokens or image bytes
   assert.equal(metadata.image_url_has_fragment, true);
   assert.equal(metadata.image_data_present, true);
   assert.doesNotMatch(serialized, /token=private|secret-image-payload|iVBOR/);
+});
+
+test("provider dispatches the normalized request contract", async () => {
+  const requests = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    fetch: async (url, init) => {
+      if (String(url).endsWith("/upscale")) {
+        requests.push(JSON.parse(init.body));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            imageUrl: "http://127.0.0.1:8765/cache/images/result.webp",
+            cacheKey: "cache-key",
+            cacheHit: false,
+            contentType: "image/webp",
+            traceId: "trace-normalized",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "image/webp" },
+        arrayBuffer: async () => pngBytes.buffer,
+      };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.upscale("https://example.com/source.png", {
+    imageData: "iVBORw0KGgo=",
+    mode: "artwork",
+    enhanceLevel: 4,
+    maxOutputWidth: 128,
+    maxOutputHeight: 99999,
+    outputQuality: 12,
+    tileSize: 256,
+    jobId: "job-normalized",
+    operationId: "operation-normalized",
+    traceId: "trace-request",
+    maxProcessingSeconds: 60,
+    textProcessing: null,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].schemaVersion, 1);
+  assert.equal(requests[0].enhanceLevel, 1);
+  assert.equal(requests[0].maxOutputWidth, 256);
+  assert.equal(requests[0].maxOutputHeight, 16383);
+  assert.equal(requests[0].outputQuality, 50);
+  assert.equal(Object.values(requests[0]).some((value) => value === undefined), false);
+});
+
+test("persisted settings migration is bounded, rejects legacy modes, and is idempotent", () => {
+  const { migratePersistedSettings } = loadBackgroundClasses();
+  const raw = {
+    storageSchemaVersion: 0,
+    mode: "anime",
+    enhanceLevel: 9,
+    maxOutputWidth: 128,
+    maxOutputHeight: Number.POSITIVE_INFINITY,
+    outputQuality: 101,
+    maxInputWidth: 10,
+    minInputWidth: 300,
+    textCleanupEnabled: "yes",
+    textTargetLanguage: "vietnamese-language-code-too-long",
+    unknownSecret: "should-be-dropped",
+  };
+  const migrated = migratePersistedSettings(raw);
+  assert.equal(migrated.storageSchemaVersion, 1);
+  assert.equal(migrated.mode, "auto");
+  assert.equal(migrated.enhanceLevel, 1);
+  assert.equal(migrated.maxOutputWidth, 256);
+  assert.equal(migrated.maxOutputHeight, 8192);
+  assert.equal(migrated.outputQuality, 100);
+  assert.equal(migrated.maxInputWidth, 300);
+  assert.equal(migrated.textCleanupEnabled, false);
+  assert.equal(migrated.textTargetLanguage, "vi");
+  assert.equal(Object.prototype.hasOwnProperty.call(migrated, "unknownSecret"), false);
+  assert.deepEqual(migratePersistedSettings(migrated), migrated);
 });
 
 test("background retry keeps trace id and increments attempt", async () => {

@@ -160,7 +160,7 @@ async def upscale(
             source_fingerprint=payload.source_fingerprint,
         )
         response = await service.upscale(
-            image_url=str(payload.image_url),
+            image_url=str(payload.image_url or "browser-owned://supplied-image"),
             model_name=payload.model,
             tile_size=payload.tile_size,
             enhance_level=payload.enhance_level,

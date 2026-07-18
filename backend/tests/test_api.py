@@ -133,6 +133,44 @@ def test_upscale_success_returns_trace_id_from_request() -> None:
     assert fake.seen_attempt == 1
 
 
+def test_upscale_forwards_browser_owned_bytes_without_downloader_url() -> None:
+    class FakeUpscaler:
+        seen = None
+
+        async def upscale(self, **kwargs):
+            self.seen = kwargs
+            return UpscaleResponse(
+                imageUrl="http://127.0.0.1:8765/cache/images/out.webp",
+                cacheKey="cache-key",
+                cacheHit=False,
+                contentType="image/webp",
+                bytesWritten=3,
+                traceId=kwargs["trace_id"],
+            )
+
+    import base64
+
+    with TestClient(app) as client:
+        original = client.app.state.upscaler_service
+        fake = FakeUpscaler()
+        try:
+            client.app.state.upscaler_service = fake
+            response = client.post(
+                "/upscale",
+                json={
+                    "imageData": base64.b64encode(b"browser-owned-bytes").decode(),
+                    "schemaVersion": 1,
+                    "traceId": "trace-browser-owned",
+                },
+            )
+        finally:
+            client.app.state.upscaler_service = original
+
+    assert response.status_code == 200
+    assert fake.seen["image_url"] == "browser-owned://supplied-image"
+    assert fake.seen["image_bytes"] == b"browser-owned-bytes"
+
+
 def test_upscale_unexpected_error_returns_safe_trace_detail() -> None:
     class FailingUpscaler:
         async def upscale(self, **_kwargs):

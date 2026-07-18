@@ -42,6 +42,81 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
+const STORAGE_SCHEMA_VERSION = 1;
+const STORAGE_BOOLEAN_KEYS = new Set([
+  "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
+  "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
+  "imageSlicingEnabled", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
+]);
+const STORAGE_NUMERIC_BOUNDS = {
+  enhanceLevel: [0, 1],
+  maxProcessingSeconds: [5, 300],
+  minInputWidth: [1, 16383],
+  minInputHeight: [1, 16383],
+  maxInputWidth: [1, 32768],
+  maxInputHeight: [1, 32768],
+  maxOutputWidth: [256, 16383],
+  maxOutputHeight: [256, 16383],
+  imageSliceMaxHeight: [512, 8192],
+  outputQuality: [50, 100],
+  preprocessingConcurrency: [1, 12],
+  upscaleConcurrency: [1, 2],
+};
+const STORAGE_STRING_LIMITS = {
+  textSourceLanguage: 16,
+  textTargetLanguage: 16,
+};
+
+function migratePersistedSettings(rawState = {}) {
+  const source = rawState && typeof rawState === "object" && !Array.isArray(rawState) ? rawState : {};
+  const migrated = { ...DEFAULT_STATE, storageSchemaVersion: STORAGE_SCHEMA_VERSION };
+  for (const key of Object.keys(DEFAULT_STATE)) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    if (STORAGE_BOOLEAN_KEYS.has(key)) {
+      if (typeof value === "boolean") migrated[key] = value;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(STORAGE_NUMERIC_BOUNDS, key)) {
+      const [minimum, maximum] = STORAGE_NUMERIC_BOUNDS[key];
+      const number = Number(value);
+      if (Number.isFinite(number)) migrated[key] = Math.min(Math.max(number, minimum), maximum);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(STORAGE_STRING_LIMITS, key)) {
+      if (typeof value === "string" && value.length <= STORAGE_STRING_LIMITS[key]) migrated[key] = value;
+      continue;
+    }
+    if (key === "mode") {
+      if (AI_MANGA_UPSCALER_CONFIG.enhancement.modes.includes(value)) migrated[key] = value;
+      continue;
+    }
+    if (key === "sizingMode" && ["pixel", "auto", "screen"].includes(value)) migrated[key] = value;
+    else if (key === "resolutionPreset" && ["hd", "fhd", "2k", "4k"].includes(value)) migrated[key] = value;
+    else if (key === "screenOrientation" && ["auto", "landscape", "portrait"].includes(value)) migrated[key] = value;
+    else if (key === "blacklistRules" && Array.isArray(value)) migrated[key] = value.filter((item) => typeof item === "string").slice(0, 100);
+    else if (key === "lastQuality" || key === "lastDetectedMode" || key === "lastComparison") {
+      if (value === null || typeof value === "string" || typeof value === "object") migrated[key] = value;
+    } else if (typeof value === typeof DEFAULT_STATE[key]) {
+      migrated[key] = value;
+    }
+  }
+  migrated.maxInputWidth = Math.max(migrated.maxInputWidth, migrated.minInputWidth);
+  migrated.maxInputHeight = Math.max(migrated.maxInputHeight, migrated.minInputHeight);
+  return migrated;
+}
+
+async function loadMigratedSettings(storage = chrome.storage.local) {
+  const raw = await storage.get(null);
+  const migrated = migratePersistedSettings(raw);
+  const comparable = { ...migrated };
+  const current = raw && typeof raw === "object" ? raw : {};
+  const changed = current.storageSchemaVersion !== STORAGE_SCHEMA_VERSION
+    || JSON.stringify(Object.fromEntries(Object.keys(comparable).map((key) => [key, current[key]]))) !== JSON.stringify(comparable);
+  if (changed) await storage.set(migrated);
+  return migrated;
+}
+
 function newTraceId() {
   try {
     if (crypto?.randomUUID) return crypto.randomUUID();
@@ -687,6 +762,11 @@ class BackendUpscaleProvider {
 
     try {
       const imageData = options.imageData || (await this.readBrowserImage(imageUrl, options.pageUrl, signal));
+      const normalizedRequest = normalizeUpscaleRequest({
+        ...options,
+        imageUrl,
+        imageData,
+      }, {});
       const requestStarted = performance.now();
       emitTrace({
         event: "background.backend.request.started",
@@ -696,28 +776,13 @@ class BackendUpscaleProvider {
         metadata: {
           queue_key_prefix: safeTracePrefix(options.jobId),
           source_fingerprint_prefix: safeTracePrefix(options.sourceFingerprint),
+          request_metadata: sanitizeUpscaleRequestMetadata(normalizedRequest),
         },
       });
       const response = await fetch(`${this.baseUrl}/upscale`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          mode: options.mode,
-          enhanceLevel: options.enhanceLevel,
-          imageData,
-          jobId: options.jobId,
-          maxOutputWidth: options.maxOutputWidth,
-          maxOutputHeight: options.maxOutputHeight,
-          outputQuality: options.outputQuality,
-          tileSize: options.tileSize,
-          textProcessing: options.textProcessing,
-          traceId: options.traceId,
-          operationId: options.operationId,
-          queueKey: options.queueKey || options.jobId,
-          attempt: options.attempt,
-          sourceFingerprint: options.sourceFingerprint,
-        }),
+        body: JSON.stringify(normalizedRequest),
         signal,
       });
       if (!response.ok) {
@@ -1784,13 +1849,13 @@ function resolveOutputLimits(settings, metrics = {}) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await chrome.storage.local.get({ enabled: true });
+  const settings = await loadMigratedSettings();
   if (settings.enabled) await maintainRuntime();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await chrome.storage.local.get({ enabled: true });
+  const settings = await loadMigratedSettings();
   if (settings.enabled) await maintainRuntime();
 });
 
@@ -2179,7 +2244,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 statisticsTracker.ensureDefaults();
-chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+loadMigratedSettings().then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
   scheduler.setPaused(!settings.enabled);
   if (settings.enabled) maintainRuntime({ ensureContent: false });
