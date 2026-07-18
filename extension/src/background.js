@@ -1774,8 +1774,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SET_IMAGE_LIMITS") {
     const clamp = (value, minimum, maximum, fallback) => Math.min(Math.max(Number(value) || fallback, minimum), maximum);
     const limits = {
-      minInputWidth: clamp(message.minInputWidth, 1, 16383, 128),
-      minInputHeight: clamp(message.minInputHeight, 1, 16383, 128),
+      minInputWidth: clamp(message.minInputWidth, 1, 16383, AI_MANGA_UPSCALER_CONFIG.images.minWidthPx),
+      minInputHeight: clamp(message.minInputHeight, 1, 16383, AI_MANGA_UPSCALER_CONFIG.images.minHeightPx),
       maxInputWidth: clamp(message.maxInputWidth, 1, 32768, 8000),
       maxInputHeight: clamp(message.maxInputHeight, 1, 32768, 12000),
       maxOutputWidth: clamp(message.maxOutputWidth, 256, 16383, 2048),

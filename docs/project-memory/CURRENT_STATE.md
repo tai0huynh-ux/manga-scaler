@@ -36,10 +36,13 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Conservative text cleanup, optional Tesseract OCR, online translation, rendering, and local translation memory.
 - Trace Core correlation with durable backend JSONL events and transient extension events.
 - Native Messaging backend startup for Chrome and Edge.
+- Dependency-free deterministic reader fixture covering standard, responsive, lazy, dynamic, protected, cross-origin, and explicitly unsupported source categories.
+- Extension minimum input dimensions aligned to the documented/shared 300 px contract with boundary regressions.
+- Extreme-tall slicing row coverage and safe extreme-wide rejection regressions.
 
 ## Known limitations
 
-- Browser-level representative-site validation is still manual.
+- Automated unpacked-extension browser E2E and representative-site validation are still missing.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -51,7 +54,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Build the deterministic offline reader fixture and boundary/extreme-aspect tests.
+1. Add an automated Chromium/Edge unpacked-extension E2E gate against the deterministic reader fixture.
 2. Run real Chrome/Edge validation on representative manga and webtoon hosts.
 3. Record anti-hotlink/browser-read failures with structured logs and network evidence.
 4. Add site-specific handling only for repeatable, evidenced incompatibilities.

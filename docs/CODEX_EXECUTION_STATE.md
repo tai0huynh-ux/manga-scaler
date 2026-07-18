@@ -27,15 +27,16 @@
 - Representative manga/webtoon live-site acceptance remains manual and unproven for the current baseline.
 - Production ONNX quality, DirectML/CUDA execution, OCR quality, text removal/reinsertion, soak, packaging, clean install, upgrade, and uninstall are not release-proven.
 
-## Current checkpoint
+## Completed checkpoint
 
-- Phase: test-system foundation.
-- First incomplete safe checkpoint: deterministic local reader fixture plus minimum-dimension boundary and extreme-aspect tests.
-- Required boundary cases: `299x299`, `300x300`, `301x301`, `300x100`, and `100x300`.
-- Required aspect cases: extremely tall and extremely wide images.
-- Invariant: unsupported or ineligible geometry must be handled deterministically without duplicate work, stale replacement, queue leakage, or incorrect vertical slicing.
+- Phase: deterministic test-system foundation.
+- Added a loopback-only synthetic reader fixture with no copyrighted assets or external dependencies.
+- Added and passed boundary cases `299x299`, `300x300`, `301x301`, `300x100`, and `100x300`.
+- Reproduced and fixed the runtime/shared minimum-dimension drift (`128` versus the documented `300`).
+- Added extreme-tall source-row coverage and safe extreme-wide rejection tests.
+- Browser smoke proved the fixture loads dynamic, responsive, Blob/Data URL, cross-origin, protected, Shadow DOM, iframe, CSS, canvas, and `512x16384` geometry cases. This smoke did not load the unpacked extension.
+- Unsupported discovery is explicit: Shadow DOM, iframe, CSS background, and canvas.
 
 ## Next exact action
 
-Inspect `extension/src/content.js`, its VM harness in `extension/tests/queue_scheduler.test.cjs`, and direct background message boundaries. Add a deterministic offline reader fixture and failing tests before modifying production behavior.
-
+Create an automated Chromium/Edge gate that loads the unpacked extension, starts the real backend or a separately justified inference fixture, opens the deterministic reader, and asserts discovered/requested/replaced counts plus queue settlement.

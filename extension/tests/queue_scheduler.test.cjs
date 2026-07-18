@@ -138,6 +138,7 @@ function loadBackgroundMessageHarness(options = {}) {
   );
   let messageListener = null;
   const storageGet = options.storageGet || (async (defaults) => defaults);
+  const storageSet = options.storageSet || (async () => undefined);
   const context = vm.createContext({
     AbortController,
     URL,
@@ -160,7 +161,7 @@ function loadBackgroundMessageHarness(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
     chrome: {
       storage: {
-        local: { get: storageGet, set: async () => undefined },
+        local: { get: storageGet, set: storageSet },
         onChanged: { addListener() {} },
       },
       tabs: {
@@ -346,6 +347,7 @@ function loadContentClasses(options = {}) {
     ViewportImageProvider: context.__ViewportImageProvider,
     Renderer: context.__Renderer,
     HTMLImageElement: context.__HTMLImageElement,
+    config: context.AI_MANGA_UPSCALER_CONFIG,
     sentMessages,
     trackedImages: context.__trackedImages,
     trackedImageKeys: context.__trackedImageKeys,
@@ -1819,6 +1821,110 @@ test("tall images can enter slicing even when max input height is enabled", () =
 
   assert.equal(viewportProvider.shouldSliceImage(tallImage), true);
   assert.equal(viewportProvider.canProcessCandidate(tallImage), true);
+});
+
+test("minimum image boundary follows the documented 300px contract", () => {
+  const { ImageProvider, config } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: true,
+    minInputHeightEnabled: true,
+    maxInputWidthEnabled: true,
+    maxInputHeightEnabled: true,
+    minInputWidth: config.images.minWidthPx,
+    minInputHeight: config.images.minHeightPx,
+    maxInputWidth: config.images.maxWidthPx,
+    maxInputHeight: config.images.maxHeightPx,
+  });
+  const image = (width, height) => ({ naturalWidth: width, naturalHeight: height, closest: () => null });
+
+  assert.equal(config.images.minWidthPx, 300);
+  assert.equal(config.images.minHeightPx, 300);
+  assert.equal(imageProvider.canProcess(image(299, 299)), false);
+  assert.equal(imageProvider.canProcess(image(300, 300)), true);
+  assert.equal(imageProvider.canProcess(image(301, 301)), true);
+  assert.equal(imageProvider.canProcess(image(300, 100)), false);
+  assert.equal(imageProvider.canProcess(image(100, 300)), false);
+});
+
+test("image-limit message fallback reuses the configured 300px minimum", async () => {
+  const stored = [];
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    storageSet: async (value) => stored.push(value),
+  });
+
+  assert.equal(dispatch({ type: "SET_IMAGE_LIMITS" }, {}, (response) => responses.push(response)), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].minInputWidth, 300);
+  assert.equal(stored[0].minInputHeight, 300);
+  assert.equal(responses[0].minInputWidth, 300);
+  assert.equal(responses[0].minInputHeight, 300);
+});
+
+test("extremely tall slicing covers every source row exactly once", async () => {
+  const drawCalls = [];
+  const { ViewportImageProvider } = loadContentClasses({
+    createElement: (tagName) => {
+      assert.equal(tagName, "canvas");
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          drawImage: (...args) => drawCalls.push(args),
+        }),
+      };
+    },
+  });
+  const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  provider.imageSliceMaxHeight = 2200;
+  provider.decodeBase64Image = async () => ({ width: 512, height: 16384 });
+  provider.canvasToSegmentPayload = async (canvas) => ({ objectUrl: `blob:${canvas.height}`, imageData: String(canvas.height) });
+  const image = makeTallImage("extreme-tall");
+  image.naturalWidth = 512;
+  image.naturalHeight = 16384;
+  image.clientWidth = 512;
+  image.clientHeight = 16384;
+  image.getBoundingClientRect = () => ({ width: 512, height: 16384, top: 0, bottom: 16384, left: 0, right: 512 });
+
+  const segments = await provider.cropImageSegments("synthetic-source", image);
+
+  assert.ok(segments.length > 1);
+  assert.equal(segments[0].sourceY, 0);
+  assert.equal(segments.at(-1).sourceY + segments.at(-1).sourceHeight, 16384);
+  assert.equal(segments.reduce((total, segment) => total + segment.sourceHeight, 0), 16384);
+  for (let index = 1; index < segments.length; index += 1) {
+    assert.equal(segments[index].index, index);
+    assert.equal(segments[index].sourceY, segments[index - 1].sourceY + segments[index - 1].sourceHeight);
+  }
+  assert.equal(drawCalls.length, segments.length);
+});
+
+test("extremely wide images never enter vertical slicing and are rejected safely", () => {
+  const { ImageProvider, ViewportImageProvider, config } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: true,
+    minInputHeightEnabled: true,
+    maxInputWidthEnabled: true,
+    maxInputHeightEnabled: true,
+    minInputWidth: 300,
+    minInputHeight: 300,
+    maxInputWidth: config.images.maxWidthPx,
+    maxInputHeight: config.images.maxHeightPx,
+  });
+  const provider = new ViewportImageProvider({ imageProvider, renderer: {} });
+  provider.imageSlicingEnabled = true;
+  provider.imageSliceMaxHeight = 2200;
+  const image = makeTallImage("extreme-wide");
+  image.naturalWidth = 16384;
+  image.naturalHeight = 512;
+  image.clientWidth = 16384;
+  image.clientHeight = 512;
+  image.getBoundingClientRect = () => ({ width: 16384, height: 512, top: 0, bottom: 512, left: 0, right: 16384 });
+
+  assert.equal(provider.shouldSliceImage(image), false);
+  assert.equal(provider.canProcessCandidate(image), false);
 });
 
 test("candidate evaluator rejects hidden and transparent images", () => {

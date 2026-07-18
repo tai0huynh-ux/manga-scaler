@@ -59,7 +59,16 @@ Compare these files whenever changing shared defaults:
 - `backend/config.json`: active backend defaults and model registry.
 - `shared/config/defaults.json`: cross-component reference defaults.
 
-Known intentional divergence: extension input minimums are currently 128 px while `shared/config/defaults.json` still records `minimumImageDimensionPx: 300`. Treat shared defaults as a reference that may need synchronization, not as runtime-loaded browser configuration.
+The extension runtime and `shared/config/defaults.json` use a 300 px minimum for both input dimensions. Boundary behavior is: `299x299` rejected, `300x300` accepted, `301x301` accepted, and an image with either dimension below 300 rejected while both minimum toggles are enabled.
+
+## Discovery support boundary
+
+- The current scanner supports light-DOM `<img>` elements, including responsive `<picture>` sources after they resolve to the owned image element.
+- Dynamically inserted and source-changing light-DOM images are observed.
+- Open Shadow DOM images are not traversed.
+- Same-origin iframe images are not scanned because the manifest does not inject the content script into all frames.
+- CSS background images, canvas output, and WebGL sources are not discovered.
+- The deterministic fixture under `extension/tests/fixtures/reader/` must keep supported and unsupported cases explicit.
 
 ## Provider and model contract
 

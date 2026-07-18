@@ -32,3 +32,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: `git fsck --full` and fetch passed; `HEAD` matched `origin/main` with zero divergence; the full gate passed both before and after the documentation change with 47 backend tests, 98 extension tests, Ruff, JavaScript syntax checks, and 71% backend coverage.
 - Git: Introduced by the automatic sync commit for "Recovery contract and mandatory state documents"; use `git log -- docs/project-memory/WORK_LOG.md` to recover its exact hash.
 - Remaining: Build the deterministic reader fixture and geometry boundary coverage.
+
+## 2026-07-18 - Deterministic reader and geometry boundaries
+
+- Request: Create the first offline reader fixture, add 300 px boundary and extreme-aspect tests, and fix only reproduced production bugs.
+- Changes: Added a dependency-free two-origin synthetic reader server and contract tests; covered responsive, lazy, dynamic, protected, false-positive, same-URL byte-change, long-image, Blob/Data URL, Shadow DOM, iframe, CSS, and canvas cases; aligned extension minimum dimensions and background fallbacks to 300 px.
+- Invariant/decision: Both input dimensions must meet the enabled 300 px minimum. Extreme-tall slicing covers every source row exactly once; extreme-wide images never enter vertical slicing and are rejected safely when over the width limit. Unsupported discovery sources remain explicit.
+- Verification: The new boundary test first failed with `128 !== 300`, proving configuration drift. Targeted tests passed 101/101; the full gate passed 47 backend tests and 104 extension tests with Ruff, JavaScript syntax checks, and 71% backend coverage. In-app browser smoke loaded 22 light-DOM images plus the Shadow DOM and iframe fixtures with the expected synthetic dimensions.
+- Git: Introduced by the automatic sync commit for "Deterministic reader and geometry boundaries"; use `git log -- extension/tests/reader_fixture.test.cjs` to recover its exact hash.
+- Remaining: Automated unpacked-extension browser E2E is not yet implemented.
