@@ -41,3 +41,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: The new boundary test first failed with `128 !== 300`, proving configuration drift. Targeted tests passed 101/101; the full gate passed 47 backend tests and 104 extension tests with Ruff, JavaScript syntax checks, and 71% backend coverage. In-app browser smoke loaded 22 light-DOM images plus the Shadow DOM and iframe fixtures with the expected synthetic dimensions.
 - Git: Introduced by the automatic sync commit for "Deterministic reader and geometry boundaries"; use `git log -- extension/tests/reader_fixture.test.cjs` to recover its exact hash.
 - Remaining: Automated unpacked-extension browser E2E is not yet implemented.
+
+## 2026-07-18 - Real Edge fixture E2E
+
+- Request: Continue automatically to the next safe checkpoint and prove the unpacked extension against the deterministic reader through a real backend/model.
+- Changes: Added a dependency-free CDP Edge/Chrome E2E harness, a focused synthetic PNG route, isolated temporary browser profiles, extension service-worker proof, threshold/false-positive assertions, Blob-render assertions, and backend queue settlement checks.
+- Invariant/decision: Browser E2E must prove discovery, dispatch, backend completion, exact DOM replacement, rejection behavior, and settled queues. SVG remains useful for browser discovery fixtures but real inference fixtures use Pillow-compatible PNG.
+- Verification: The first E2E attempt reproduced deterministic SVG rejection before the backend. After switching the inference route to generated PNG, `test:e2e:edge-fixture` passed with two accepted/completed jobs, zero failed/cancelled jobs, two `768x768` Blob outputs, and queue size/waiting/processing all zero. The full gate passed 47 backend tests and 105 extension tests with Ruff, JavaScript syntax checks, and 71% backend coverage.
+- Git: Introduced by the automatic sync commit for "Real Edge fixture E2E"; use `git log -- extension/tests/e2e/edge_fixture_e2e.cjs` to recover its exact hash.
+- Remaining: Representative live-site and expanded navigation/restart/long-image browser acceptance remain unproven.

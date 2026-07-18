@@ -15,7 +15,7 @@
 | Dashboard reconciliation | `extension/src/dashboard.js` | background registry contract | `dashboard_rendering.test.cjs` |
 | Shared settings | all three config files | popup, dashboard, content, background, backend | config/API tests plus extension suite |
 | Native startup | `native-host/*`, background launch functions | backend health/start flow | manual Chrome/Edge verification |
-| Reader fixture contract | `extension/tests/fixtures/reader/server.cjs` | content discovery and browser E2E | `reader_fixture.test.cjs` plus browser smoke |
+| Reader fixture contract | `extension/tests/fixtures/reader/server.cjs` | content discovery and browser E2E | `reader_fixture.test.cjs` plus `test:e2e:edge-fixture` |
 
 ## Verification commands
 
@@ -29,6 +29,12 @@ Before completion:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+```
+
+When browser/backend behavior is in scope and the real backend/model are available:
+
+```powershell
+npm.cmd run test:e2e:edge-fixture
 ```
 
 Full verification runs:
@@ -53,6 +59,7 @@ Full verification runs:
 - Long-image transaction commit, rollback, sibling cancellation, and segment ordering.
 - Minimum-dimension boundaries, extreme-tall row coverage, and safe extreme-wide rejection.
 - Dependency-free local reader endpoints for responsive, lazy, dynamic, protected, cross-origin, and unsupported source categories.
+- Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, Blob rendering, false-positive rejection, and queue settlement.
 - Background operation isolation, retry invalidation, cache identity, tab generation.
 - Dashboard stable keyed rows and safe preview policy.
 
@@ -60,7 +67,7 @@ Full verification runs:
 
 Automated tests do not prove:
 
-- Real Chrome/Edge MV3 service-worker lifetime behavior.
+- Long-running Chrome/Edge MV3 service-worker suspension/restart behavior.
 - Native Messaging registration and hidden backend startup on a fresh machine.
 - DirectML/CUDA execution with production ONNX files.
 - Protected-image reads across representative manga/CDN hosts.

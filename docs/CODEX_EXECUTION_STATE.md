@@ -39,4 +39,15 @@
 
 ## Next exact action
 
-Create an automated Chromium/Edge gate that loads the unpacked extension, starts the real backend or a separately justified inference fixture, opens the deterministic reader, and asserts discovered/requested/replaced counts plus queue settlement.
+Verify the active TruyenQQ domain and run sanitized representative-site Chrome/Edge acceptance. Record eligible/detected/requested/replaced counts, false positives, lazy-load behavior, ordering, anti-hotlink evidence, and external blockers without committing cookies, profiles, screenshots, or downloaded site content.
+
+## Unpacked-extension E2E checkpoint
+
+- Browser: Microsoft Edge 150, isolated temporary profile, repository extension loaded unpacked.
+- Backend: real loopback FastAPI service with `DmlExecutionProvider` and `anime_x4` model.
+- Fixture: synthetic PNG-only focused E2E page plus the broader deterministic reader server.
+- Result: two eligible images accepted and completed, including one dynamically inserted image.
+- Rendering: both source URLs replaced by ready Blob outputs at `768x768`.
+- Rejection: `299x299`, `300x100`, and a 300 px logo were not scheduled.
+- Settlement: backend queue size/waiting/processing returned to zero; failed and cancelled stayed zero.
+- Boundary: this proves the focused local flow, not live-site Manga/Manhwa/Manhua acceptance or long-running service-worker restart behavior.

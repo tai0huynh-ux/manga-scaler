@@ -178,6 +178,15 @@ The backend also defines provider protocols in `backend/app/services/providers.p
 
 Run backend tests with `cd backend; ..\.venv\Scripts\python.exe -m pytest -q`.
 
+Run the deterministic reader and real unpacked-extension Edge gate with:
+
+```powershell
+npm.cmd run fixture:reader
+npm.cmd run test:e2e:edge-fixture
+```
+
+The E2E command requires the backend to be online at `127.0.0.1:8765` with a compatible model. It launches an isolated temporary Edge/Chrome profile, loads the unpacked extension, upscales synthetic PNG images through the real backend, and verifies replacement plus queue settlement. It does not use copyrighted fixtures or live websites.
+
 ## Automatic backend startup
 
 Chrome and Edge require a one-time Native Messaging registration before an extension may start a local process. After loading the unpacked extension, copy its ID from `chrome://extensions` or `edge://extensions`, then run:

@@ -10,6 +10,14 @@ npm.cmd run fixture:reader
 
 The command prints the random loopback URL. The automated HTTP contract is covered by `extension/tests/reader_fixture.test.cjs`.
 
+With the backend running on `127.0.0.1:8765` and a compatible model installed, run the real Edge/Chrome unpacked-extension gate:
+
+```powershell
+npm.cmd run test:e2e:edge-fixture
+```
+
+The E2E gate uses an isolated temporary browser profile, loads the repository extension, exercises static and dynamically inserted PNG images through the real backend/model, verifies Blob replacement and false-positive rejection, and requires the backend queue to settle at zero.
+
 ## Fixture matrix
 
 | Category | Fixture | Current extension support |
@@ -33,4 +41,3 @@ The command prints the random loopback URL. The automated HTTP contract is cover
 | Same-origin iframe | `#same-origin-frame` | Not supported because the content script does not run in all frames |
 | CSS background image | `#css-background` | Not supported |
 | Canvas-rendered image | `#canvas-rendered` | Not supported |
-

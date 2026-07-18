@@ -1,4 +1,50 @@
 const http = require("node:http");
+const zlib = require("node:zlib");
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
+  return crc >>> 0;
+});
+
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const payload = Buffer.concat([typeBytes, data]);
+  let crc = 0xffffffff;
+  for (const byte of payload) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(data.length);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+  return Buffer.concat([header, payload, checksum]);
+}
+
+function syntheticPng(width = 300, height = 300, version = 1) {
+  const rowLength = width * 3 + 1;
+  const raw = Buffer.alloc(rowLength * height);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * rowLength;
+    raw[row] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const offset = row + 1 + x * 3;
+      const stripe = ((x + y) >> 4) % 2;
+      raw[offset] = version % 2 ? 238 - stripe * 30 : 190 + stripe * 25;
+      raw[offset + 1] = version % 2 ? 226 - stripe * 20 : 224 - stripe * 15;
+      raw[offset + 2] = version % 2 ? 205 - stripe * 10 : 232 - stripe * 20;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw, { level: 6 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 function syntheticSvg(label, width = 720, height = 1280, version = 1) {
   const safeLabel = String(label).replace(/[^a-z0-9._-]/gi, "-");
@@ -55,6 +101,42 @@ function readerHtml(assetOrigin) {
   </main>
   <footer><img id="footer-badge" alt="footer badge" src="/image/footer.svg?w=64&h=64" width="64" height="64"></footer>
   <script src="/fixture.js"></script>
+</body>
+</html>`;
+}
+
+function e2eReaderHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Manga Upscaler E2E Fixture</title>
+  <style>
+    body { margin: 0; background: #ece6da; font-family: Georgia, serif; }
+    header { height: 80px; }
+    main { display: grid; grid-template-columns: repeat(2, 320px); gap: 16px; padding: 16px; }
+    img { display: block; object-fit: contain; background: #fff; }
+  </style>
+</head>
+<body data-fixture="extension-e2e-v1">
+  <header><img id="fixture-logo" alt="site logo" src="/png/e2e-logo.png?w=300&h=300" width="300" height="300"></header>
+  <main id="e2e-reader">
+    <img id="eligible-static" src="/png/e2e-static.png?w=300&h=300" width="300" height="300">
+    <img id="below-threshold" src="/png/e2e-below.png?w=299&h=299" width="299" height="299">
+    <img id="one-dimension-small" src="/png/e2e-short.png?w=300&h=100" width="300" height="100">
+    <section id="dynamic-root"></section>
+  </main>
+  <script>
+    setTimeout(() => {
+      const image = new Image();
+      image.id = "eligible-dynamic";
+      image.width = 301;
+      image.height = 301;
+      image.src = "/png/e2e-dynamic.png?w=301&h=301";
+      document.querySelector("#dynamic-root").append(image);
+    }, 100);
+  </script>
 </body>
 </html>`;
 }
@@ -128,6 +210,11 @@ async function startReaderFixture() {
       response.end(readerHtml(assetOrigin));
       return;
     }
+    if (url.pathname === "/e2e") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(e2eReaderHtml());
+      return;
+    }
     if (url.pathname === "/fixture.js") {
       response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
       response.end(fixtureScript);
@@ -169,6 +256,13 @@ async function startReaderFixture() {
       response.end(syntheticSvg("referrer-sensitive"));
       return;
     }
+    if (url.pathname.startsWith("/png/")) {
+      const width = Number(url.searchParams.get("w")) || 300;
+      const height = Number(url.searchParams.get("h")) || 300;
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.end(syntheticPng(width, height));
+      return;
+    }
     if (url.pathname.startsWith("/image/")) {
       const width = Number(url.searchParams.get("w")) || 720;
       const height = Number(url.searchParams.get("h")) || 1280;
@@ -192,7 +286,7 @@ async function startReaderFixture() {
   };
 }
 
-module.exports = { startReaderFixture, syntheticSvg };
+module.exports = { startReaderFixture, syntheticPng, syntheticSvg };
 
 if (require.main === module) {
   startReaderFixture().then((fixture) => {
