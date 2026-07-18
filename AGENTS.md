@@ -1,5 +1,14 @@
 # AI Manga Upscaler engineering guide
 
+## Durable project memory
+
+- Start every new task at `docs/project-memory/README.md`.
+- Read `CURRENT_STATE.md`, then only the task-specific memory node before opening implementation files.
+- Do not rescan the whole repository unless the task crosses an undocumented boundary or current evidence contradicts the memory.
+- After every completed change, update the affected memory nodes and append a verification-backed entry to `docs/project-memory/WORK_LOG.md`.
+- Keep `CURRENT_STATE.md` synchronized with the actual verified baseline, limitations, and next work.
+- Project memory never replaces focused source inspection: open the changed file, direct consumers, and focused tests before editing.
+
 ## Scope routing
 
 - Backend API contracts: `backend/app/models/schemas.py`, `backend/app/api/routes.py`, and API tests.
