@@ -10,6 +10,8 @@
 - **Current-page Dashboard mixed tabs:** already resolved before this change; regression coverage confirms `PageImageRegistry.list(tabId)` is used.
 - **Live reader chrome was processed as chapter content:** resolved for readers that expose `reading-detail box_doc` with explicit `.page-chapter` containers; direct chrome outside those containers is rejected.
 - **A non-cooperative CDN response body could retain preprocessing forever:** resolved by racing both browser fetch and body reads against abort.
+- **Worker startup cleanup could delete unrelated Referer rules or reuse active IDs:** resolved with exact ownership signatures, active-ID reservation, and an idempotent initialization barrier.
+- **Unpacked-extension reload could leave stale/duplicate content contexts:** resolved with reinjectable block scope, a newest-instance DOM lease, stale-marker cleanup, and verified automatic rediscovery.
 
 ## Remaining limitations
 
@@ -22,5 +24,5 @@
 - Hentaivnx live chapter replacement remains unproven. Its sampled CDN requires Referer, and the final worker diagnostic was not stable enough to claim a completed replacement after the timeout fix.
 - A current public TruyenQQ reader URL is still unverified.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
-- Chrome can suspend the MV3 service worker; tab generation checks prevent stale resurrection, but runtime inspection should account for worker restarts.
+- Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - Browser-level extension behavior still requires manual verification on representative manga sites.

@@ -7,8 +7,8 @@
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
 - Starting recovered HEAD: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- Current committed HEAD before the active worker-recovery checkpoint: `86ef39f57ad08f7ad451bc76a21b608309658fca`.
-- `origin/main`: matched `86ef39f57ad08f7ad451bc76a21b608309658fca` after a successful fetch.
+- Starting HEAD for the protected-read lifecycle checkpoint: `83c0c2ebc67ff8c7daa3414628fd599b3205a758`.
+- `origin/main`: matched `83c0c2ebc67ff8c7daa3414628fd599b3205a758` with zero divergence before implementation.
 - Divergence: `0` local-only / `0` remote-only commits.
 - Working tree at recovery: clean; no staged, unstaged, or untracked source/test files.
 - Git integrity: `git fsck --full` passed after exactly 250 injected `desktop.ini` files were moved out of `.git` into a recoverable external backup. One unreachable blob remained and Git classified it as dangling, not corruption.
@@ -40,7 +40,19 @@
 
 ## Next exact action
 
-Extend deterministic Edge acceptance to real worker termination/reload and navigation while a protected browser read is active. Prove startup cleanup removes the interrupted rule, cancellation settles, and no unhandled rejection occurs.
+Run representative live-reader acceptance on current public TruyenQQ Manga/Manhwa/Manhua chapters, then hentaivnx when no external challenge blocks automation. Require stable DOM Blob replacement, zero false-positive chrome, zero duplicate/stale work, settled queues, and no temporary Referer rules.
+
+## Protected-read lifecycle acceptance checkpoint
+
+- Startup cleanup now recognizes the smallest current exact-rule signature instead of deleting any Referer rule in a broad numeric range; unrelated and non-Referer session rules remain untouched.
+- Every protected read awaits one idempotent initialization barrier, skips all active rule IDs, and cannot race delayed cleanup. Cleanup inspection/update rejection settles instead of permanently blocking reads.
+- HTTP(S) matching preserves query order and percent encoding, strips fragments that cannot reach the network request, skips DNR for Blob/Data URLs, and installs exact follow-up rules for observed redirect targets including HTTP-to-HTTPS.
+- Same-URL reads remain serialized across page Referers. Cancellation, timeout, invalid bytes, disconnect, redirect, and success release locks and remove every installed temporary rule.
+- Real Edge CDP stops the actual unpacked MV3 service-worker version during a stalled protected read. The replacement worker removes the orphan rule, preserves an unrelated rule, does not render/retry the old image, and processes a new image.
+- Same-tab Chapter A to Chapter B navigation aborts and removes Chapter A work/rules; Chapter B renders once and no Chapter A registry entry remains.
+- `chrome.runtime.reload()` now recovers without page reload. Content script block scoping permits safe reinjection, and a DOM-backed instance lease prevents old/new content contexts from racing or duplicating replacements.
+- Edge lifecycle result: zero browser exceptions, zero duplicate replacements, zero residual Referer rules, and queue/active/retry/read-lock state settled to zero.
+- Verification: 47 backend tests, 126 extension tests, JavaScript syntax checks, Ruff, 71% backend coverage, and real Edge fixture/lifecycle E2E passed.
 
 ## Worker-restart Referer cleanup checkpoint
 
@@ -49,7 +61,7 @@ Extend deterministic Edge acceptance to real worker termination/reload and navig
 - The regression first failed with rule IDs `1000` and `100000` left active, then passed after the fix while unrelated rules were preserved.
 - Full verification passed 47 backend tests and 114 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage.
 - Real Edge fixture E2E remained green with two completed `768x768` Blob replacements and queue size/waiting/processing all zero.
-- Browser-level worker termination/reload during an active protected read remains unproven.
+- Deterministic browser-level worker termination/reload during an active protected read is proven; representative live-site lifecycle acceptance remains pending.
 
 ## Exact-URL Referer isolation checkpoint
 

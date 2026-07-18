@@ -86,3 +86,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: The regression first failed with both interrupted rule IDs still present. Five focused DNR tests passed after the fix; the full gate passed 47 backend tests and 114 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; real Edge fixture E2E remained green with two `768x768` Blob replacements and settled queues.
 - Git: Introduced by the automatic sync commit for worker-restart Referer cleanup; use `git log -- extension/src/background.js` to recover its exact hash.
 - Remaining: Real browser worker termination/reload during an active protected read is still unproven.
+
+## 2026-07-18 - Protected-read lifecycle acceptance
+
+- Request: Prove protected image reads across actual MV3 worker termination/reactivation, same-tab navigation, and unpacked-extension reload before resuming live-site acceptance.
+- Changes: Narrowed startup cleanup to the exact owned-rule signature; reserved active DNR IDs; normalized network URLs without reordering query parameters; added exact redirect-target rules; skipped Blob/Data DNR; made content reinjection parse-safe; and added a newest-instance DOM lease with stale marker/work invalidation.
+- Invariant/decision: No startup cleanup may remove an unrelated rule, no protected read may install before initialization settles, no old content context may commit after reload, and every terminal path must settle rules, locks, retries, registry, and queues.
+- Verification: Focused tests first reproduced broad cleanup, fragment/blob/data handling, ID reuse, delayed-cleanup races, and reload duplicate-context failures. The final gate passed 47 backend tests and 126 extension tests with JavaScript checks, Ruff, and 71% backend coverage. Real Edge stopped the actual service-worker version during a stalled read, restarted through a real content event, preserved an unrelated rule, rejected the old image, rendered a new image, invalidated Chapter A on navigation, automatically recovered after `chrome.runtime.reload()`, produced zero duplicate replacements and browser exceptions, and settled all temporary rules/queues/locks.
+- Git: Pending the automatic sync commit for this checkpoint.
+- Remaining: Run representative TruyenQQ Manga/Manhwa/Manhua and hentaivnx DOM-replacement acceptance; SPA/history navigation remains outside the current deterministic fixture.

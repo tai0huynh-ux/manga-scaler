@@ -45,6 +45,19 @@ test("deterministic reader fixture exposes a focused unpacked-extension E2E page
   assert.equal(bytes.readUInt32BE(20), 301);
 });
 
+test("deterministic reader fixture exposes worker, navigation, and reload lifecycle pages", async (context) => {
+  const fixture = await startReaderFixture();
+  context.after(() => fixture.close());
+
+  for (const lifecycleCase of ["worker", "navigation-a", "navigation-b", "reload"]) {
+    const response = await fetch(`${fixture.origin}/lifecycle/${lifecycleCase}`);
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, new RegExp(`data-lifecycle-case="${lifecycleCase}"`));
+    assert.match(html, /id="lifecycle-primary"/);
+  }
+});
+
 test("deterministic reader fixture models protected reads and same-url byte changes", async (context) => {
   const fixture = await startReaderFixture();
   context.after(() => fixture.close());

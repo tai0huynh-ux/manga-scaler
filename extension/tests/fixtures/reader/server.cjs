@@ -141,6 +141,41 @@ function e2eReaderHtml() {
 </html>`;
 }
 
+function lifecycleReaderHtml(lifecycleCase, imagePath, { recoveryButton = false } = {}) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Manga Upscaler Lifecycle ${lifecycleCase}</title>
+  <style>
+    body { margin: 0; background: #eee8dc; font-family: Georgia, serif; }
+    main { width: 340px; padding: 20px; }
+    img { display: block; width: 300px; height: 301px; object-fit: contain; background: #fff; }
+  </style>
+</head>
+<body data-fixture="extension-lifecycle-v1" data-lifecycle-case="${lifecycleCase}">
+  <main id="lifecycle-reader">
+    <img id="lifecycle-primary" src="${imagePath}" width="300" height="301">
+    <section id="lifecycle-recovery-root"></section>
+  </main>
+  <script>
+    globalThis.addLifecycleRecoveryImage = () => {
+      if (document.querySelector('#lifecycle-recovery')) return false;
+      const image = new Image();
+      image.id = 'lifecycle-recovery';
+      image.width = 301;
+      image.height = 301;
+      image.src = '/png/lifecycle-recovery-${lifecycleCase}.png?w=301&h=301&nonce=' + Date.now();
+      document.querySelector('#lifecycle-recovery-root').append(image);
+      return true;
+    };
+    ${recoveryButton ? "document.body.dataset.recoveryAvailable = 'true';" : ""}
+  </script>
+</body>
+</html>`;
+}
+
 const fixtureScript = `(() => {
   const dataSource = document.querySelector('#data-src-image');
   dataSource.src = dataSource.dataset.src;
@@ -193,6 +228,8 @@ function listen(server) {
 
 async function startReaderFixture() {
   let mutableVersion = 1;
+  const lifecycleRequests = new Map();
+  const stalledResponses = new Map();
   const assetServer = http.createServer((request, response) => {
     const url = new URL(request.url, "http://fixture.invalid");
     const width = Number(url.searchParams.get("w")) || 720;
@@ -213,6 +250,26 @@ async function startReaderFixture() {
     if (url.pathname === "/e2e") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       response.end(e2eReaderHtml());
+      return;
+    }
+    if (url.pathname === "/lifecycle/worker") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(lifecycleReaderHtml("worker", "/protected/lifecycle.png?case=worker", { recoveryButton: true }));
+      return;
+    }
+    if (url.pathname === "/lifecycle/navigation-a") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(lifecycleReaderHtml("navigation-a", "/protected/lifecycle.png?case=navigation-a"));
+      return;
+    }
+    if (url.pathname === "/lifecycle/navigation-b") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(lifecycleReaderHtml("navigation-b", "/png/lifecycle-navigation-b.png?w=300&h=301"));
+      return;
+    }
+    if (url.pathname === "/lifecycle/reload") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(lifecycleReaderHtml("reload", "/protected/lifecycle.png?case=reload"));
       return;
     }
     if (url.pathname === "/fixture.js") {
@@ -269,6 +326,31 @@ async function startReaderFixture() {
       }
       response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
       response.end(syntheticPng(300, 301, version));
+      return;
+    }
+    if (url.pathname === "/protected/lifecycle.png") {
+      const lifecycleCase = url.searchParams.get("case") || "unknown";
+      const requestCount = (lifecycleRequests.get(lifecycleCase) || 0) + 1;
+      lifecycleRequests.set(lifecycleCase, requestCount);
+      const referer = String(request.headers.referer || "");
+      const expectedReferer = `http://${request.headers.host}/lifecycle/${lifecycleCase}`;
+      if (referer !== expectedReferer) {
+        response.writeHead(403, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        response.end("exact lifecycle referer required");
+        return;
+      }
+      const png = syntheticPng(300, 301, 10 + requestCount);
+      if (requestCount !== 2) {
+        response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+        response.end(png);
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.write(png.subarray(0, 8));
+      stalledResponses.set(lifecycleCase, { response, png });
+      response.once("close", () => {
+        if (stalledResponses.get(lifecycleCase)?.response === response) stalledResponses.delete(lifecycleCase);
+      });
       return;
     }
     if (url.pathname === "/protected/slow-body.png") {
@@ -338,6 +420,15 @@ async function startReaderFixture() {
   return {
     origin,
     assetOrigin,
+    lifecycleRequestCount: (lifecycleCase) => lifecycleRequests.get(lifecycleCase) || 0,
+    hasStalledLifecycleRead: (lifecycleCase) => stalledResponses.has(lifecycleCase),
+    releaseStalledLifecycleRead(lifecycleCase) {
+      const stalled = stalledResponses.get(lifecycleCase);
+      if (!stalled) return false;
+      stalledResponses.delete(lifecycleCase);
+      stalled.response.end(stalled.png.subarray(8));
+      return true;
+    },
     close: async () => Promise.all([
       new Promise((resolve) => mainServer.close(resolve)),
       new Promise((resolve) => assetServer.close(resolve)),

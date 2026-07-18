@@ -106,8 +106,8 @@ function loadBackgroundClasses(options = {}) {
     Error,
     performance,
     crypto: webcrypto,
-    setTimeout,
-    clearTimeout,
+    setTimeout: options.timers?.setTimeout || setTimeout,
+    clearTimeout: options.timers?.clearTimeout || clearTimeout,
     console,
     importScripts() {},
     chrome: {
@@ -325,8 +325,9 @@ function loadContentClasses(options = {}) {
           },
         };
       },
-      documentElement: { appendChild() {}, contains: () => true },
+      documentElement: { dataset: {}, appendChild() {}, contains: () => true },
       elementsFromPoint: options.elementsFromPoint,
+      querySelectorAll: () => options.documentImages || [],
     },
     getComputedStyle: (element) => element.style || {},
     chrome: { storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }, runtime: { sendMessage: (message) => { sentMessages.push(message); return typeof options.sendMessage === "function" ? options.sendMessage(message) : { catch() {} }; }, onMessage: { addListener() {} } } },
@@ -344,7 +345,7 @@ function loadContentClasses(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys; globalThis.__contentInstanceId = contentInstanceId;\n}`, context);
   return {
     ImageProvider: context.__ImageProvider,
     ViewportImageProvider: context.__ViewportImageProvider,
@@ -355,6 +356,8 @@ function loadContentClasses(options = {}) {
     trackedImages: context.__trackedImages,
     trackedImageKeys: context.__trackedImageKeys,
     completedImageKeys: context.__completedImageKeys,
+    contentInstanceId: context.__contentInstanceId,
+    documentElement: context.document.documentElement,
   };
 }
 
@@ -742,6 +745,52 @@ test("content operation creates and propagates trace id", async () => {
   assert.equal(sentMessages.find((message) => message.type === "PREPROCESSING_STARTED").traceId, enqueue.traceId);
   assert.equal(traceEvents.some((event) => event.event === "content.operation.created" && event.traceId === enqueue.traceId), true);
   assert.equal(traceEvents.some((event) => JSON.stringify(event).includes("imageData")), false);
+});
+
+test("visible-image reprocessing cancels stale content work before rediscovery", () => {
+  const image = { dataset: {} };
+  const order = [];
+  const {
+    ViewportImageProvider,
+    trackedImages,
+    trackedImageKeys,
+    completedImageKeys,
+  } = loadContentClasses({ documentImages: [image] });
+  const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  const entry = { imageId: "stale-image", operationId: "stale-operation", image };
+  trackedImages.set(entry.imageId, entry);
+  trackedImageKeys.set("stale-key", entry);
+  completedImageKeys.add("completed-key");
+  provider.cancel = (candidate) => order.push(`cancel:${candidate.operationId}`);
+  provider.schedule = (candidate) => order.push(candidate === image ? "schedule:current" : "schedule:unknown");
+
+  provider.reprocessVisibleImages();
+
+  assert.deepEqual(order, ["cancel:stale-operation", "schedule:current"]);
+  assert.equal(trackedImages.size, 0);
+  assert.equal(trackedImageKeys.size, 0);
+  assert.equal(completedImageKeys.size, 0);
+});
+
+test("a newer content-script instance invalidates stale reload work", () => {
+  const {
+    ViewportImageProvider,
+    trackedImages,
+    trackedImageKeys,
+    contentInstanceId,
+    documentElement,
+  } = loadContentClasses();
+  const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  const entry = { imageId: "image-old", baseKey: "key-old" };
+  trackedImages.set(entry.imageId, entry);
+  trackedImageKeys.set(entry.baseKey, entry);
+
+  assert.equal(documentElement.dataset.aiMangaUpscalerInstance, contentInstanceId);
+  assert.equal(provider.isCurrentImageEntry(entry), true);
+  documentElement.dataset.aiMangaUpscalerInstance = "newer-content-instance";
+
+  assert.equal(provider.isCurrentImageEntry(entry), false);
+  assert.equal(provider.isCurrentKeyOperation(entry.baseKey, entry), false);
 });
 
 test("background request carries trace metadata without image data in trace payload", async () => {
@@ -3380,6 +3429,159 @@ test("same image URL reads serialize temporary Referer rules", async () => {
   ]);
 });
 
+test("browser-read URL matching preserves network semantics and strips fragments", async () => {
+  const ruleUpdates = [];
+  const fetchedUrls = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async (url) => {
+      fetchedUrls.push(url);
+      return { ok: true, arrayBuffer: async () => pngBytes.buffer };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const urls = [
+    "https://cdn.example.test/image%20one+(v2).png?token=a%2Bb&part=1#reader-position",
+    "https://cdn.example.test/page.png?b=2&a=1",
+    "https://cdn.example.test/page.png?a=1&b=2",
+  ];
+
+  for (const url of urls) {
+    await provider.readBrowserImage(url, "https://reader.example.test/chapter/a");
+  }
+
+  const addedRules = ruleUpdates.flatMap((update) => update.addRules || []);
+  assert.equal(addedRules.length, 3);
+  assert.equal(fetchedUrls[0], urls[0].split("#", 1)[0]);
+  assert.equal(addedRules[0].condition.regexFilter, "^https://cdn\\.example\\.test/image%20one\\+\\(v2\\)\\.png\\?token=a%2Bb&part=1$");
+  assert.notEqual(addedRules[1].condition.regexFilter, addedRules[2].condition.regexFilter, "query order was changed");
+});
+
+test("blob and data browser reads do not install HTTP Referer rules", async () => {
+  const ruleUpdates = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => ({ ok: true, arrayBuffer: async () => pngBytes.buffer }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.readBrowserImage("blob:https://reader.example.test/11111111-1111-1111-1111-111111111111", "https://reader.example.test/chapter/a");
+  await provider.readBrowserImage("data:image/png;base64,iVBORw0KGgo=", "https://reader.example.test/chapter/a");
+
+  assert.equal(ruleUpdates.length, 0);
+});
+
+test("redirected protected reads install exact rules for HTTP and HTTPS targets", async () => {
+  const scenarios = [
+    ["https://cdn.example.test/start.png", "https://assets.example.test/final.png"],
+    ["http://cdn.example.test/start.png", "https://cdn.example.test/final.png"],
+  ];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+
+  for (const [initialUrl, finalUrl] of scenarios) {
+    const ruleUpdates = [];
+    let fetchCount = 0;
+    const { BackendUpscaleProvider } = loadBackgroundClasses({
+      updateSessionRules: async (update) => ruleUpdates.push(update),
+      fetch: async () => {
+        fetchCount += 1;
+        return {
+          ok: fetchCount > 1,
+          status: fetchCount > 1 ? 200 : 403,
+          url: finalUrl,
+          arrayBuffer: async () => pngBytes.buffer,
+        };
+      },
+    });
+    const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+    await provider.readBrowserImage(initialUrl, "https://reader.example.test/chapter/a");
+
+    const addedRules = ruleUpdates.flatMap((update) => update.addRules || []);
+    assert.equal(fetchCount, 2);
+    assert.deepEqual(addedRules.map((rule) => rule.condition.regexFilter), [
+      `^${provider.escapeRegex(initialUrl)}$`,
+      `^${provider.escapeRegex(finalUrl)}$`,
+    ]);
+    assert.deepEqual([...ruleUpdates.at(-1).removeRuleIds], addedRules.map((rule) => rule.id));
+  }
+});
+
+test("a cancelled serialized read releases the next tab immediately", async () => {
+  const firstBody = deferred();
+  const secondStarted = deferred();
+  const ruleUpdates = [];
+  let fetchCount = 0;
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => {
+      fetchCount += 1;
+      if (fetchCount === 2) secondStarted.resolve();
+      return { ok: true, arrayBuffer: async () => fetchCount === 1 ? firstBody.promise : pngBytes.buffer };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const controller = new AbortController();
+  const imageUrl = "https://cdn.example.test/shared.png";
+  const first = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/a", controller.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/b");
+
+  controller.abort();
+  await assert.rejects(first, { name: "AbortError" });
+  await secondStarted.promise;
+  await second;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(provider.imageReadLocks.size, 0);
+  assert.deepEqual(ruleUpdates.map((update) => update.addRules?.[0]?.action.requestHeaders[0].value || "removed"), [
+    "https://reader.example.test/chapter/a",
+    "removed",
+    "https://reader.example.test/chapter/b",
+    "removed",
+  ]);
+});
+
+test("a timed-out serialized read releases the next tab and all rules", async () => {
+  const secondStarted = deferred();
+  const ruleUpdates = [];
+  let fetchCount = 0;
+  let timerCount = 0;
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    timers: {
+      setTimeout(callback) {
+        timerCount += 1;
+        if (timerCount === 1) setImmediate(callback);
+        return timerCount;
+      },
+      clearTimeout() {},
+    },
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => {
+      fetchCount += 1;
+      if (fetchCount === 2) secondStarted.resolve();
+      return { ok: true, arrayBuffer: async () => fetchCount === 1 ? new Promise(() => {}) : pngBytes.buffer };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const imageUrl = "https://cdn.example.test/shared-timeout.png";
+  const first = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/a");
+  const second = provider.readBrowserImage(imageUrl, "https://reader.example.test/chapter/b");
+
+  await assert.rejects(first, { name: "AbortError" });
+  await secondStarted.promise;
+  await second;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(provider.imageReadLocks.size, 0);
+  assert.equal(ruleUpdates.filter((update) => update.addRules?.length).length, 2);
+  assert.equal(ruleUpdates.filter((update) => update.removeRuleIds?.length && !update.addRules).length, 2);
+});
+
 test("temporary Referer rules are removed on every browser-read terminal path", async () => {
   const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
   const cases = [
@@ -3438,18 +3640,23 @@ test("temporary Referer rules are removed on every browser-read terminal path", 
   assert.ok(ruleUpdates.some((update) => update.removeRuleIds?.includes(addedRuleId) && !update.addRules));
 });
 
-test("service worker initialization removes interrupted Referer session rules", async () => {
+test("service worker initialization removes only orphan owned Referer session rules", async () => {
   const ruleUpdates = [];
-  const refererAction = {
+  const ownedAction = {
     type: "modifyHeaders",
     requestHeaders: [{ header: "Referer", operation: "set", value: "https://reader.example.test/chapter/a" }],
   };
+  const ownedCondition = {
+    regexFilter: "^https://cdn\\.example\\.test/page\\.png$",
+    resourceTypes: ["xmlhttprequest", "other"],
+  };
   const { BackendUpscaleProvider } = loadBackgroundClasses({
     getSessionRules: async () => [
-      { id: 1000, action: refererAction },
-      { id: 100000, action: refererAction },
-      { id: 999, action: refererAction },
-      { id: 1001, action: { type: "block" } },
+      { id: 1000, priority: 1, action: ownedAction, condition: ownedCondition },
+      { id: 1001, priority: 1, action: ownedAction, condition: { urlFilter: "||example.test", resourceTypes: ["main_frame"] } },
+      { id: 1002, priority: 1, action: { ...ownedAction, requestHeaders: [{ header: "Origin", operation: "set", value: "x" }] }, condition: ownedCondition },
+      { id: 999, priority: 1, action: ownedAction, condition: ownedCondition },
+      { id: 1003, action: { type: "block" } },
     ],
     updateSessionRules: async (update) => ruleUpdates.push(update),
   });
@@ -3458,7 +3665,104 @@ test("service worker initialization removes interrupted Referer session rules", 
   await provider.headerRuleCleanup;
 
   assert.equal(ruleUpdates.length, 1);
-  assert.deepEqual([...ruleUpdates[0].removeRuleIds], [1000, 100000]);
+  assert.deepEqual([...ruleUpdates[0].removeRuleIds], [1000]);
+});
+
+test("service worker initialization is idempotent and preserves new protected-read rules", async () => {
+  const activeRules = [];
+  const ruleUpdates = [];
+  const body = deferred();
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    getSessionRules: async () => [...activeRules],
+    updateSessionRules: async (update) => {
+      ruleUpdates.push(update);
+      for (const id of update.removeRuleIds || []) {
+        const index = activeRules.findIndex((rule) => rule.id === id);
+        if (index >= 0) activeRules.splice(index, 1);
+      }
+      activeRules.push(...(update.addRules || []));
+    },
+    fetch: async () => ({ ok: true, arrayBuffer: async () => body.promise }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.headerRuleCleanup;
+  await provider.cleanupStaleHeaderRules();
+  const read = provider.readBrowserImage("https://cdn.example.test/new.png", "https://reader.example.test/chapter/a");
+  await new Promise((resolve) => setImmediate(resolve));
+  const activeRuleId = activeRules[0]?.id;
+  await provider.cleanupStaleHeaderRules();
+
+  assert.ok(Number.isInteger(activeRuleId));
+  assert.ok(activeRules.some((rule) => rule.id === activeRuleId), "repeated initialization removed a new active read rule");
+  body.resolve(pngBytes.buffer);
+  await read;
+  assert.equal(ruleUpdates.filter((update) => update.addRules?.length).length, 1);
+});
+
+test("service worker initialization rejection settles and does not block reads", async () => {
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  for (const failure of ["get", "update"]) {
+    const ruleUpdates = [];
+    const { BackendUpscaleProvider } = loadBackgroundClasses({
+      getSessionRules: async () => {
+        if (failure === "get") throw new Error("get rejected");
+        return [{
+          id: 1000,
+          priority: 1,
+          action: { type: "modifyHeaders", requestHeaders: [{ header: "Referer", operation: "set", value: "https://reader.example.test/chapter/a" }] },
+          condition: { regexFilter: "^https://cdn\\.example\\.test/orphan\\.png$", resourceTypes: ["xmlhttprequest", "other"] },
+        }];
+      },
+      updateSessionRules: async (update) => {
+        ruleUpdates.push(update);
+        if (failure === "update" && !update.addRules) throw new Error("update rejected");
+      },
+      fetch: async () => ({ ok: true, arrayBuffer: async () => pngBytes.buffer }),
+    });
+    const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+    await provider.headerRuleCleanup;
+    await provider.readBrowserImage(`https://cdn.example.test/${failure}.png`, "https://reader.example.test/chapter/a");
+
+    assert.ok(ruleUpdates.some((update) => update.addRules?.length), `${failure} rejection left initialization unresolved`);
+  }
+});
+
+test("protected-read rule allocation skips every active session-rule ID", async () => {
+  const ruleUpdates = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    getSessionRules: async () => [{ id: 1000, action: { type: "block" } }, { id: 1001, action: { type: "allow" } }],
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => ({ ok: true, arrayBuffer: async () => pngBytes.buffer }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.readBrowserImage("https://cdn.example.test/collision.png", "https://reader.example.test/chapter/a");
+
+  assert.equal(ruleUpdates.find((update) => update.addRules)?.addRules[0].id, 1002);
+});
+
+test("a protected read waits for delayed startup cleanup before creating its rule", async () => {
+  const cleanupRules = deferred();
+  const ruleUpdates = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    getSessionRules: async () => cleanupRules.promise,
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+    fetch: async () => ({ ok: true, arrayBuffer: async () => pngBytes.buffer }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  const read = provider.readBrowserImage("https://cdn.example.test/concurrent.png", "https://reader.example.test/chapter/a");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ruleUpdates.length, 0);
+  cleanupRules.resolve([]);
+  await read;
+
+  assert.equal(ruleUpdates.filter((update) => update.addRules?.length).length, 1);
 });
 
 test("page image registry stale remove does not delete current operation", async () => {

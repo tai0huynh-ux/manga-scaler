@@ -1,6 +1,18 @@
+{
 const trackedImages = new Map();
 const trackedImageKeys = new Map();
 const completedImageKeys = new Set();
+const contentInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+function isActiveContentInstance() {
+  return document.documentElement?.dataset?.aiMangaUpscalerInstance === contentInstanceId;
+}
+
+document.documentElement.dataset.aiMangaUpscalerInstance = contentInstanceId;
+document.querySelectorAll("img[data-ai-manga-upscaler-observed]").forEach((image) => {
+  delete image.dataset.aiMangaUpscalerObserved;
+  delete image.dataset.aiEnhancerSeen;
+});
 
 function newTraceId() {
   try {
@@ -670,6 +682,7 @@ class ViewportImageProvider {
       imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
       preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
     });
+    if (!isActiveContentInstance()) return;
     this.enabled = stored.enabled;
     this.blacklist = new Set(stored.blacklistRules || []);
     this.imageProvider.updateLimits(stored);
@@ -699,6 +712,7 @@ class ViewportImageProvider {
 
   reprocessVisibleImages() {
     [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "reprocess"));
+    [...trackedImages.values()].forEach((entry) => this.cancel(entry));
     trackedImageKeys.clear();
     trackedImages.clear();
     completedImageKeys.clear();
@@ -710,7 +724,7 @@ class ViewportImageProvider {
   }
 
   handleMutations(mutations) {
-    if (!this.enabled) {
+    if (!this.enabled || !isActiveContentInstance()) {
       return;
     }
 
@@ -736,6 +750,7 @@ class ViewportImageProvider {
   }
 
   observeImage(image) {
+    if (!isActiveContentInstance()) return;
     if (image.dataset.aiEnhancerRawSlice === "true" || image.dataset.aiEnhancerSliced === "true") {
       return;
     }
@@ -745,6 +760,7 @@ class ViewportImageProvider {
 
     image.dataset.aiMangaUpscalerObserved = "true";
     const reportSeen = (event = null) => {
+      if (!isActiveContentInstance()) return;
       if (image.dataset.aiMangaOriginalSrc) {
         if (this.renderer?.isOwnedSource?.(image)) return;
         this.renderer?.releaseImageOwnership?.(image);
@@ -1302,11 +1318,12 @@ class ViewportImageProvider {
   }
 
   isCurrentKeyOperation(baseKey, operation) {
-    return operation && trackedImageKeys.get(baseKey) === operation;
+    return isActiveContentInstance() && operation && trackedImageKeys.get(baseKey) === operation;
   }
 
   isCurrentImageEntry(entry) {
     return Boolean(
+      isActiveContentInstance() &&
       entry &&
       trackedImages.get(entry.imageId) === entry &&
       trackedImageKeys.get(entry.baseKey) === entry
@@ -2428,6 +2445,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!isActiveContentInstance()) return false;
   if (message.type === "AI_ENHANCER_PING") {
     sendResponse({ ok: true });
     return false;
@@ -2452,3 +2470,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 viewportProvider.start();
+}

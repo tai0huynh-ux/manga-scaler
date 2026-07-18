@@ -42,6 +42,7 @@ The E2E gate uses an isolated temporary browser profile, loads the repository ex
 | Mid-body disconnect | `/protected/disconnect-body.png` | Deterministic truncated transport failure |
 | Invalid image response | `/protected/html-as-image`, `/protected/fake-image.png` | HTTP 200 HTML and false image MIME/magic-byte coverage |
 | Large streaming response | `/protected/large-body.png` | Bounded chunk generation with client-abort cleanup |
+| MV3 lifecycle reads | `/lifecycle/worker`, `/lifecycle/navigation-a`, `/lifecycle/reload` | First image load completes, the exact second protected browser read stalls, and later reads recover deterministically |
 | Open Shadow DOM | `#shadow-host` | Not supported by the current light-DOM scanner |
 | Same-origin iframe | `#same-origin-frame` | Not supported because the content script does not run in all frames |
 | CSS background image | `#css-background` | Not supported |

@@ -64,13 +64,15 @@ Full verification runs:
 - Background operation isolation, retry invalidation, cache identity, tab generation.
 - Exact-URL Referer rule serialization, terminal cleanup, and discovery-time rule rejection.
 - Background-provider initialization cleanup for interrupted temporary and legacy Referer session rules.
+- Rule-ownership preservation, ID collision avoidance, delayed-startup races, URL normalization, redirect matching, cancellation, and timeout lock release.
+- Real Edge MV3 worker stop/reactivation, full navigation invalidation, and unpacked-extension reload with automatic content recovery.
 - Dashboard stable keyed rows and safe preview policy.
 
 ## Manual gaps
 
 Automated tests do not prove:
 
-- Long-running Chrome/Edge MV3 service-worker suspension/restart behavior.
+- Long-running natural Chrome/Edge suspension timing and soak behavior beyond deterministic CDP stop/reactivation.
 - Native Messaging registration and hidden backend startup on a fresh machine.
 - DirectML/CUDA execution with production ONNX files.
 - Protected-image reads across representative manga/CDN hosts.

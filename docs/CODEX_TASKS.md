@@ -17,6 +17,9 @@
 - [x] Reproduce and reject hentaivnx reader chrome outside explicit page containers (`DISCOVERY-002`).
 - [x] Bound browser image response-body reads even when abort is ignored (`DISCOVERY-003`).
 - [x] Re-run the real Edge deterministic fixture after the live-site fixes.
+- [x] Prove exact Referer rule ownership, startup barrier settlement, active-ID collision avoidance, URL normalization, redirect handling, cancellation, and timeout cleanup.
+- [x] Stop and reactivate the actual Edge MV3 worker during a stalled protected read while preserving unrelated rules.
+- [x] Prove full same-tab navigation cleanup and automatic unpacked-extension reload recovery without duplicate replacements.
 
 ## Manual follow-up
 

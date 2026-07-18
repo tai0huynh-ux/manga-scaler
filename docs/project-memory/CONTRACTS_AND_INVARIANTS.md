@@ -13,6 +13,8 @@
 8. Parent cleanup after slicing must not remove, reorder, or resurrect committed segment jobs.
 9. Segment completion must target the exact raw node and slice ownership token recorded at registration.
 10. DirectML device loss may retry once on a fallback provider; unrelated failures must propagate.
+11. Protected browser reads must await one startup cleanup barrier; cleanup may remove only exact-URL Referer rules matching the subsystem signature and must preserve every unrelated active rule ID.
+12. Only the newest content-script instance for a document may discover, mutate, or render images after extension reload; older instances must become stale before async work can commit.
 
 ## Browser/backend JSON contract
 

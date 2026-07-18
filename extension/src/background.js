@@ -503,6 +503,9 @@ class BackendUpscaleProvider {
     this.requestTimeoutMs = requestTimeoutMs;
     this.nextHeaderRuleId = 1000;
     this.imageReadLocks = new Map();
+    this.reservedHeaderRuleIds = new Set();
+    this.activeHeaderRuleIds = new Set();
+    this.headerRuleInitialization = null;
     this.headerRuleCleanup = this.cleanupStaleHeaderRules();
   }
 
@@ -652,59 +655,55 @@ class BackendUpscaleProvider {
   }
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
-    const previousRead = this.imageReadLocks.get(imageUrl) || Promise.resolve();
+    const normalizedImageUrl = this.normalizeBrowserReadUrl(imageUrl);
+    const previousRead = this.imageReadLocks.get(normalizedImageUrl) || Promise.resolve();
     let releaseRead;
     const currentRead = new Promise((resolve) => { releaseRead = resolve; });
     const readTail = previousRead.catch(() => {}).then(() => currentRead);
-    this.imageReadLocks.set(imageUrl, readTail);
+    this.imageReadLocks.set(normalizedImageUrl, readTail);
 
     try {
       const waitForPrevious = previousRead.catch(() => {});
       if (signal) await Promise.race([waitForPrevious, this.rejectOnAbort(signal)]);
       else await waitForPrevious;
-      return await this.readBrowserImageWithRule(imageUrl, pageUrl, signal);
+      return await this.readBrowserImageWithRule(normalizedImageUrl, pageUrl, signal);
     } finally {
       releaseRead();
       readTail.finally(() => {
-        if (this.imageReadLocks.get(imageUrl) === readTail) this.imageReadLocks.delete(imageUrl);
+        if (this.imageReadLocks.get(normalizedImageUrl) === readTail) this.imageReadLocks.delete(normalizedImageUrl);
       });
     }
   }
 
   async readBrowserImageWithRule(imageUrl, pageUrl, signal) {
     await this.headerRuleCleanup;
-    const ruleId = this.nextHeaderRuleId++;
+    const normalizedPageUrl = this.normalizeBrowserReadUrl(pageUrl);
+    const shouldInstallRule = normalizedPageUrl && this.isHttpUrl(imageUrl);
+    const installedRuleIds = [];
+    const matchedRuleUrls = new Set();
     const readController = new AbortController();
     const timeout = setTimeout(() => readController.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
     const readSignal = this.combineSignals(signal, readController.signal);
     const abortRead = this.rejectOnAbort(readSignal);
     try {
-      if (pageUrl) {
-        await chrome.declarativeNetRequest.updateSessionRules({
-          removeRuleIds: [ruleId],
-          addRules: [{
-            id: ruleId,
-            priority: 1,
-            action: {
-              type: "modifyHeaders",
-              requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }],
-            },
-            condition: {
-              regexFilter: `^${this.escapeRegex(imageUrl)}$`,
-              resourceTypes: ["xmlhttprequest", "other"],
-            },
-          }],
-        });
+      if (shouldInstallRule) {
+        await this.installHeaderRule(imageUrl, normalizedPageUrl, installedRuleIds, matchedRuleUrls);
       }
-      const response = await Promise.race([
-        fetch(imageUrl, {
-          method: "GET",
-          cache: "force-cache",
-          credentials: "include",
-          signal: readSignal,
-        }),
-        abortRead,
-      ]);
+      let response;
+      for (let redirectAttempt = 0; redirectAttempt < 5; redirectAttempt += 1) {
+        response = await Promise.race([
+          fetch(imageUrl, {
+            method: "GET",
+            cache: "force-cache",
+            credentials: "include",
+            signal: readSignal,
+          }),
+          abortRead,
+        ]);
+        const responseUrl = this.normalizeBrowserReadUrl(response.url || imageUrl);
+        if (!shouldInstallRule || !this.isHttpUrl(responseUrl) || matchedRuleUrls.has(responseUrl)) break;
+        await this.installHeaderRule(responseUrl, normalizedPageUrl, installedRuleIds, matchedRuleUrls);
+      }
       if (!response.ok) {
         throw new Error(`Browser could not read displayed image (${response.status})`);
       }
@@ -715,26 +714,108 @@ class BackendUpscaleProvider {
       return this.arrayBufferToBase64(buffer);
     } finally {
       clearTimeout(timeout);
-      if (pageUrl) {
-        await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }).catch(() => {});
+      if (installedRuleIds.length) {
+        await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: installedRuleIds }).catch(() => {});
+        for (const ruleId of installedRuleIds) this.activeHeaderRuleIds.delete(ruleId);
       }
     }
   }
 
-  async cleanupStaleHeaderRules() {
+  async installHeaderRule(imageUrl, pageUrl, installedRuleIds, matchedRuleUrls) {
+    const ruleId = this.allocateHeaderRuleId();
+    try {
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{
+          id: ruleId,
+          priority: 1,
+          action: {
+            type: "modifyHeaders",
+            requestHeaders: [{ header: "Referer", operation: "set", value: pageUrl }],
+          },
+          condition: {
+            regexFilter: `^${this.escapeRegex(imageUrl)}$`,
+            resourceTypes: ["xmlhttprequest", "other"],
+          },
+        }],
+      });
+      installedRuleIds.push(ruleId);
+      matchedRuleUrls.add(imageUrl);
+    } catch (error) {
+      this.activeHeaderRuleIds.delete(ruleId);
+      throw error;
+    }
+  }
+
+  cleanupStaleHeaderRules() {
+    if (this.headerRuleInitialization) return this.headerRuleInitialization;
+    this.headerRuleInitialization = this.initializeHeaderRules();
+    return this.headerRuleInitialization;
+  }
+
+  async initializeHeaderRules() {
     try {
       const rules = await chrome.declarativeNetRequest.getSessionRules();
+      this.reservedHeaderRuleIds = new Set(
+        rules.filter((rule) => Number.isInteger(rule.id)).map((rule) => rule.id),
+      );
       const removeRuleIds = rules
-        .filter((rule) => (
-          Number.isInteger(rule.id) && rule.id >= 1000 && rule.id < 200000 &&
-          rule.action?.requestHeaders?.some((header) => String(header.header).toLowerCase() === "referer")
-        ))
+        .filter((rule) => this.isOwnedHeaderRule(rule))
         .map((rule) => rule.id);
       if (removeRuleIds.length) {
         await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds });
+        for (const ruleId of removeRuleIds) this.reservedHeaderRuleIds.delete(ruleId);
       }
     } catch {
       // A read still performs its own exact-rule cleanup when session-rule inspection is unavailable.
+    }
+  }
+
+  isOwnedHeaderRule(rule) {
+    const requestHeaders = rule.action?.requestHeaders;
+    const resourceTypes = rule.condition?.resourceTypes;
+    return (
+      Number.isInteger(rule.id) && rule.id >= 1000 && rule.id < 200000 &&
+      rule.priority === 1 && rule.action?.type === "modifyHeaders" &&
+      Array.isArray(requestHeaders) && requestHeaders.length === 1 &&
+      String(requestHeaders[0]?.header).toLowerCase() === "referer" &&
+      requestHeaders[0]?.operation === "set" && typeof requestHeaders[0]?.value === "string" &&
+      typeof rule.condition?.regexFilter === "string" && rule.condition.regexFilter.startsWith("^") &&
+      rule.condition.regexFilter.endsWith("$") && !rule.condition?.urlFilter &&
+      Array.isArray(resourceTypes) && resourceTypes.length === 2 &&
+      resourceTypes.includes("xmlhttprequest") && resourceTypes.includes("other")
+    );
+  }
+
+  allocateHeaderRuleId() {
+    for (let attempts = 0; attempts < 199000; attempts += 1) {
+      if (this.nextHeaderRuleId >= 200000) this.nextHeaderRuleId = 1000;
+      if (!this.reservedHeaderRuleIds.has(this.nextHeaderRuleId) && !this.activeHeaderRuleIds.has(this.nextHeaderRuleId)) {
+        const ruleId = this.nextHeaderRuleId++;
+        this.activeHeaderRuleIds.add(ruleId);
+        return ruleId;
+      }
+      this.nextHeaderRuleId += 1;
+    }
+    throw new Error("No temporary Referer rule ID is available");
+  }
+
+  normalizeBrowserReadUrl(value) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return value;
+      const fragmentIndex = value.indexOf("#");
+      return fragmentIndex >= 0 ? value.slice(0, fragmentIndex) : value;
+    } catch {
+      return value;
+    }
+  }
+
+  isHttpUrl(value) {
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === "http:" || protocol === "https:";
+    } catch {
+      return false;
     }
   }
 
@@ -1397,11 +1478,14 @@ async function ensureContentScripts() {
   const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
   await Promise.allSettled(tabs.map(async (tab) => {
     if (!tab.id) return;
-    try {
-      const response = await chrome.tabs.sendMessage(tab.id, { type: "AI_ENHANCER_PING" });
-      if (response?.ok) return;
-    } catch {
-      // The tab predates the current extension service worker or has no content script.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, { type: "AI_ENHANCER_PING" });
+        if (response?.ok) return;
+      } catch {
+        // Worker reactivation can briefly close the message channel while the content script remains valid.
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100));
     }
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -1419,11 +1503,11 @@ async function ensureContentScripts() {
   }));
 }
 
-async function maintainRuntime() {
+async function maintainRuntime({ ensureContent = true } = {}) {
   const settings = await chrome.storage.local.get({ enabled: true });
   if (!settings.enabled) return;
   await ensureBackendStarted();
-  await ensureContentScripts();
+  if (ensureContent) await ensureContentScripts();
 }
 
 async function notifyContentEnabled(enabled) {
@@ -1876,5 +1960,5 @@ statisticsTracker.ensureDefaults();
 chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
   scheduler.setPaused(!settings.enabled);
-  if (settings.enabled) maintainRuntime();
+  if (settings.enabled) maintainRuntime({ ensureContent: false });
 });

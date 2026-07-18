@@ -4,8 +4,8 @@
 
 - Verified date: 2026-07-18, Asia/Bangkok.
 - Branch: `main`.
-- Current committed baseline before the active worker-recovery checkpoint: `86ef39f`.
-- Upstream before the active worker-recovery checkpoint: `origin/main` matched `86ef39f` with zero divergence.
+- Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
+- Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
 - Runtime stack: Python 3.12, FastAPI, ONNX Runtime DirectML, Pillow/NumPy, Chrome/Edge MV3.
 
@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result on the baseline:
 
 - Backend: 47 tests passed.
-- Extension: 114 tests passed in the full gate for the active worker-recovery checkpoint.
+- Extension: 126 tests passed in the protected-read lifecycle gate.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
@@ -45,6 +45,11 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - The deterministic reader fixture models exact per-chapter Referer requirements, different bytes at one protected URL, slow and hanging bodies, mid-body disconnects, HTTP 200 non-image payloads, invalid image magic bytes, and abortable large streaming responses.
 - Discovery no longer installs broad persistent Referer rules. Browser reads use exact-URL temporary rules, serialize only reads for the same image URL, remove rules on success/failure/abort, and release their per-URL lock after settlement.
 - A newly initialized background provider removes interrupted temporary and legacy Referer session rules in the extension-owned ID range before installing a new read rule.
+- Startup cleanup uses the exact temporary-rule signature, preserves unrelated rules, reserves active rule IDs, and is an idempotent barrier for every protected read.
+- Browser-read URL matching preserves query order/encoding, strips network-invisible fragments, skips Blob/Data DNR rules, and follows observed HTTP/HTTPS redirect targets with exact rules only.
+- Real Edge acceptance stops and reactivates the actual MV3 worker during a stalled protected read, proves orphan cleanup and unrelated-rule preservation, and settles queue/registry/lock state.
+- Full same-tab navigation invalidates Chapter A while Chapter B discovers and renders normally with no stale registry entry or residual rule.
+- Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
 
 ## Known limitations
 
@@ -62,9 +67,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Continue Phase A1 with real Edge navigation and extension-reload acceptance while an exact-URL read rule is active; startup cleanup is unit-proven but worker termination/restart still needs browser evidence.
-2. Obtain one current public TruyenQQ reader/chapter URL without a session token.
-3. Re-run sanitized Edge acceptance on `www.hentaivnx.live` and the verified TruyenQQ reader with worker-restart-safe evidence capture.
+1. Obtain current public TruyenQQ Manga, Manhwa, and Manhua reader/chapter URLs without session tokens.
+2. Run sanitized Edge DOM-replacement acceptance on those readers and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.
+3. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
 4. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
 5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 
