@@ -55,7 +55,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 - Representative live-site validation is still manual.
 - `www.hentaivnx.live` reader HTML and Edge discovery were verified, but chapter replacement remains unproven: its CDN returns a redirect without Referer and a JPEG with Referer, while the final worker diagnostic did not yield a stable completion record.
-- A current public TruyenQQ reader/chapter URL is not verified; guessed or SEO-shell domains are not acceptance evidence.
+- Current public TruyenQQ URLs are verified for One Piece 1188 (Manga), Hive 293 (Manhwa), and Người Trên Vạn Người 320 (Manhua), but live acceptance is not green.
+- Hive 293 reached 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images. Manhua 320 reached 26/26 replacements but earlier runs exposed reader-chrome tracking/avatar false positives.
+- The local backend became unresponsive after repeated live runs; hentaivnx and a clean Manga rerun remain unverified.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -67,8 +69,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Obtain current public TruyenQQ Manga, Manhwa, and Manhua reader/chapter URLs without session tokens.
-2. Run sanitized Edge DOM-replacement acceptance on those readers and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.
+1. Repair the live scheduling path for the nine detected-but-unreplaced Hive images and re-run with a clean isolated backend.
+2. Re-run sanitized Edge DOM-replacement acceptance on TruyenQQ Manga/Manhwa/Manhua and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.
 3. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
 4. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
 5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.

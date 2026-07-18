@@ -9,12 +9,13 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Branch: `main`.
 - Starting baseline for the protected-read lifecycle checkpoint: `83c0c2ebc67ff8c7daa3414628fd599b3205a758`.
 - Protected-read lifecycle checkpoint: real Edge worker termination/reactivation, same-tab navigation, and unpacked-extension reload are green with 47 backend tests, 126 extension tests, JavaScript syntax checks, Ruff, and 71% backend coverage on 2026-07-18.
+- Protected-read lifecycle checkpoint committed and pushed as `f21a208b31b228e4f6043dae211cbb93f3bded12`.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
 - Not yet proven: representative live-site acceptance, production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
 
 ## Active milestone
 
-Continue Phase A1 with live-reader acceptance. The deterministic lifecycle gate now proves owned orphan cleanup, unrelated-rule preservation, actual MV3 worker stop/reactivation, full navigation cancellation, automatic extension-reload recovery, zero duplicate replacements, and settled queues/rules. Live hentaivnx chapter replacement remains unproven, and a verified public TruyenQQ reader URL is still required.
+Continue Phase A1 with live-reader acceptance. Current public TruyenQQ Manga, Manhwa, and Manhua URLs are verified, but live acceptance is not green: Hive rendered 66/75 original images and Manhua rendered 26/26 while exposing reader-chrome false positives. Hentaivnx remains unproven.
 
 ## Required reading
 

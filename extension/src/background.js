@@ -97,6 +97,160 @@ function emitTrace({ event, traceId, component = "background", stage = "backgrou
   }
 }
 
+const UPSCALE_REQUEST_SCHEMA_VERSION = 1;
+const UPSCALE_MODES = new Set(["auto", "manga", "artwork", "photo"]);
+const UPSCALE_TILE_SIZES = new Set([256, 512, 1024]);
+
+class RequestNormalizationError extends Error {
+  constructor(field, message) {
+    super(message);
+    this.name = "RequestNormalizationError";
+    this.errorCode = "REQUEST_NORMALIZATION_FAILED";
+    this.validationFields = [{ field, type: "invalid_value", message }];
+    this.sanitizedMessage = message;
+    this.retryable = false;
+  }
+}
+
+function normalizeFiniteNumber(field, value, { fallback = null, minimum = null, maximum = null, integer = false } = {}) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new RequestNormalizationError(field, `${field} must be a finite number.`);
+  let normalized = integer ? Math.round(number) : number;
+  if (minimum !== null) normalized = Math.max(minimum, normalized);
+  if (maximum !== null) normalized = Math.min(maximum, normalized);
+  return normalized;
+}
+
+function normalizeBoundedString(field, value, maximumLength, { required = false } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw new RequestNormalizationError(field, `${field} is required.`);
+    return null;
+  }
+  if (typeof value !== "string") throw new RequestNormalizationError(field, `${field} must be a string.`);
+  if (value.length > maximumLength) {
+    throw new RequestNormalizationError(field, `${field} must be at most ${maximumLength} characters.`);
+  }
+  return value;
+}
+
+function normalizeTextProcessing(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new RequestNormalizationError("textProcessing", "textProcessing must be an object.");
+  }
+  const booleanField = (name, fallback) => {
+    if (value[name] === undefined) return fallback;
+    if (typeof value[name] !== "boolean") {
+      throw new RequestNormalizationError(`textProcessing.${name}`, `textProcessing.${name} must be a boolean.`);
+    }
+    return value[name];
+  };
+  const languageField = (name, fallback) => {
+    if (value[name] === undefined || value[name] === null || value[name] === "") return fallback;
+    if (typeof value[name] !== "string" || value[name].length > 16) {
+      throw new RequestNormalizationError(`textProcessing.${name}`, `textProcessing.${name} must be a short language code.`);
+    }
+    return value[name];
+  };
+  return {
+    enabled: booleanField("enabled", false),
+    cleanup: booleanField("cleanup", true),
+    translate: booleanField("translate", false),
+    sourceLanguage: languageField("sourceLanguage", "auto"),
+    targetLanguage: languageField("targetLanguage", "vi"),
+    renderText: booleanField("renderText", true),
+  };
+}
+
+function normalizeUpscaleRequest(input = {}, persistedState = {}) {
+  const source = { ...persistedState, ...input };
+  const imageData = source.imageData === undefined || source.imageData === null || source.imageData === ""
+    ? null
+    : normalizeBoundedString("imageData", source.imageData, 64 * 1024 * 1024);
+  const imageUrl = normalizeBoundedString("imageUrl", source.imageUrl, 16384, { required: true });
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(imageUrl);
+  } catch {
+    throw new RequestNormalizationError("imageUrl", "imageUrl must be an absolute URL.");
+  }
+  const browserOwnedProtocols = new Set(["blob:", "data:"]);
+  if (!["http:", "https:"].includes(parsedUrl.protocol) && !(imageData && browserOwnedProtocols.has(parsedUrl.protocol))) {
+    throw new RequestNormalizationError("imageUrl", "imageUrl must use HTTP/HTTPS unless browser-owned imageData is present.");
+  }
+  const mode = source.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode;
+  if (!UPSCALE_MODES.has(mode)) {
+    throw new RequestNormalizationError("mode", `Unsupported enhancement mode: ${String(mode).slice(0, 32)}.`);
+  }
+  const tileSize = normalizeFiniteNumber("tileSize", source.tileSize, { fallback: 256, integer: true });
+  if (!UPSCALE_TILE_SIZES.has(tileSize)) {
+    throw new RequestNormalizationError("tileSize", "tileSize must be one of 256, 512, or 1024.");
+  }
+  const request = {
+    schemaVersion: UPSCALE_REQUEST_SCHEMA_VERSION,
+    imageUrl,
+    mode,
+    enhanceLevel: normalizeFiniteNumber("enhanceLevel", source.enhanceLevel, {
+      fallback: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
+      minimum: 0,
+      maximum: 1,
+    }),
+    imageData,
+    jobId: normalizeBoundedString("jobId", source.jobId, 200),
+    maxOutputWidth: normalizeFiniteNumber("maxOutputWidth", source.maxOutputWidth, {
+      fallback: null, minimum: 256, maximum: 16383, integer: true,
+    }),
+    maxOutputHeight: normalizeFiniteNumber("maxOutputHeight", source.maxOutputHeight, {
+      fallback: null, minimum: 256, maximum: 16383, integer: true,
+    }),
+    outputQuality: normalizeFiniteNumber("outputQuality", source.outputQuality, {
+      fallback: AI_MANGA_UPSCALER_CONFIG.images.outputQuality, minimum: 50, maximum: 100, integer: true,
+    }),
+    tileSize,
+    textProcessing: normalizeTextProcessing(source.textProcessing),
+    traceId: normalizeBoundedString("traceId", source.traceId, 200),
+    operationId: normalizeBoundedString("operationId", source.operationId, 200),
+    queueKey: normalizeBoundedString("queueKey", source.queueKey || source.jobId, 300),
+    attempt: normalizeFiniteNumber("attempt", source.attempt, { fallback: 1, minimum: 1, maximum: 100, integer: true }),
+    sourceFingerprint: normalizeBoundedString("sourceFingerprint", source.sourceFingerprint, 200),
+  };
+  if (source.model !== undefined && source.model !== null) {
+    request.model = normalizeBoundedString("model", source.model, 100);
+  }
+  return request;
+}
+
+function sanitizeUpscaleRequestMetadata(request) {
+  let parsedUrl = null;
+  try { parsedUrl = new URL(request.imageUrl); } catch { parsedUrl = null; }
+  const imageDataLength = typeof request.imageData === "string" ? request.imageData.length : 0;
+  const textProcessing = request.textProcessing && typeof request.textProcessing === "object"
+    ? Object.entries(request.textProcessing).map(([key, value]) => `${key}:${typeof value}`).join(",")
+    : null;
+  return {
+    job_id_length: request.jobId?.length || 0,
+    operation_id_length: request.operationId?.length || 0,
+    image_url_protocol: parsedUrl?.protocol || null,
+    image_url_hostname: parsedUrl?.hostname || null,
+    image_url_length: request.imageUrl?.length || 0,
+    image_url_has_query: Boolean(parsedUrl?.search),
+    image_url_has_fragment: Boolean(parsedUrl?.hash),
+    image_data_present: imageDataLength > 0,
+    image_data_encoded_length: imageDataLength,
+    image_data_decoded_length: imageDataLength ? Math.max(0, Math.floor((imageDataLength * 3) / 4) - ((request.imageData.match(/=*$/)?.[0].length) || 0)) : 0,
+    mode: request.mode,
+    enhance_level: request.enhanceLevel,
+    max_output_width: request.maxOutputWidth,
+    max_output_height: request.maxOutputHeight,
+    output_quality: request.outputQuality,
+    tile_size: request.tileSize,
+    text_processing_types: textProcessing,
+    request_schema_version: request.schemaVersion,
+    extension_version: chrome.runtime?.getManifest?.().version || null,
+  };
+}
+
 /**
  * Tracks durable counters and computes extension performance metrics.
  */
@@ -494,6 +648,19 @@ class CompositeCacheProvider {
   }
 }
 
+class BackendRequestError extends Error {
+  constructor({ status, errorCode, traceId, validationFields, sanitizedMessage, retryable }) {
+    super(sanitizedMessage);
+    this.name = "BackendRequestError";
+    this.status = status;
+    this.errorCode = errorCode;
+    this.traceId = traceId;
+    this.validationFields = validationFields;
+    this.sanitizedMessage = sanitizedMessage;
+    this.retryable = retryable;
+  }
+}
+
 /**
  * Calls the local backend and materializes a blob payload for the renderer.
  */
@@ -554,24 +721,19 @@ class BackendUpscaleProvider {
         signal,
       });
       if (!response.ok) {
-        let errorPayload = null;
-        try {
-          errorPayload = await response.json();
-        } catch {
-          errorPayload = null;
-        }
+        const backendError = await this.readBackendError(response, signal);
         emitTrace({
           event: "background.backend.request.failed",
-          traceId: options.traceId || errorPayload?.detail?.traceId,
+          traceId: backendError.traceId || options.traceId,
           status: "failed",
           attempt: options.attempt,
           metadata: {
             http_status: response.status,
-            error_code: errorPayload?.detail?.errorCode || "BACKEND_REQUEST_FAILED",
+            error_code: backendError.errorCode,
             duration_ms: Math.max(0, performance.now() - requestStarted),
           },
         });
-        throw new Error(`Backend returned ${response.status}`);
+        throw backendError;
       }
 
       const metadata = await response.json();
@@ -652,6 +814,53 @@ class BackendUpscaleProvider {
     } catch {
       // Backend may already be stopped or the job may have completed.
     }
+  }
+
+  async readBackendError(response, signal) {
+    let payload = null;
+    try {
+      const text = await Promise.race([response.text(), this.rejectOnAbort(signal)]);
+      if (text && text.length <= 65536) payload = JSON.parse(text);
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+    const root = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+    const legacyDetail = root.detail && typeof root.detail === "object" && !Array.isArray(root.detail)
+      ? root.detail
+      : {};
+    const rawFields = Array.isArray(root.detail)
+      ? root.detail
+      : (Array.isArray(legacyDetail.detail) ? legacyDetail.detail : []);
+    const validationFields = rawFields.map((field) => ({
+      field: this.sanitizeBackendText(field?.field, "body", 200),
+      type: this.sanitizeBackendText(field?.type, "validation_error", 100),
+      message: this.sanitizeBackendText(field?.message, "Request validation failed", 300),
+    }));
+    const status = Number(response.status) || 0;
+    const errorCode = this.sanitizeBackendText(
+      root.errorCode || legacyDetail.errorCode,
+      status === 422 ? "REQUEST_VALIDATION_FAILED" : "BACKEND_REQUEST_FAILED",
+      100,
+    );
+    const traceId = this.sanitizeBackendText(root.traceId || legacyDetail.traceId, "", 200) || null;
+    const fallbackMessage = status === 422 ? "Request validation failed" : `Backend returned ${status}`;
+    const sanitizedMessage = this.sanitizeBackendText(root.message || legacyDetail.message, fallbackMessage, 300);
+    return new BackendRequestError({
+      status,
+      errorCode,
+      traceId,
+      validationFields,
+      sanitizedMessage,
+      retryable: [502, 503, 504].includes(status),
+    });
+  }
+
+  sanitizeBackendText(value, fallback, maximumLength) {
+    let text = typeof value === "string" && value.trim() ? value : fallback;
+    text = text.replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted-url]");
+    text = text.replace(/(imageData\s*[=:]\s*)[^\s,;]+/gi, "$1[redacted-data]");
+    text = text.replace(/\b[A-Za-z0-9+/]{64,}={0,2}\b/g, "[redacted-data]");
+    return text.replace(/\s+/g, " ").trim().slice(0, maximumLength);
   }
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
@@ -1297,6 +1506,10 @@ class QueueScheduler {
         await this.failJob(job, error, "timeout");
         return;
       }
+      if (error?.retryable === false) {
+        await this.failJob(job, error, "error");
+        return;
+      }
       if (job.attempt < AI_MANGA_UPSCALER_CONFIG.retry.maxAttempts) {
         const delay = AI_MANGA_UPSCALER_CONFIG.retry.baseDelayMs * Math.pow(2, job.attempt - 1);
         emitTrace({
@@ -1315,13 +1528,18 @@ class QueueScheduler {
   }
 
   async failJob(job, error, status = "error") {
-    const message = error instanceof Error ? error.message : "Unknown upscale error";
+    const message = error?.sanitizedMessage || (error instanceof Error ? error.message : "Unknown upscale error");
     await this.statisticsTracker.recordError(job.tabId);
     if (!this.isCurrentJob(job)) return false;
     pageImageRegistry.update(job.tabId, job.imageId, {
       operationId: job.operationId,
       status,
       error: message,
+      errorCode: error?.errorCode || null,
+      errorStatus: Number(error?.status) || null,
+      errorTraceId: error?.traceId || job.traceId,
+      validationFields: Array.isArray(error?.validationFields) ? error.validationFields : [],
+      retryable: error?.retryable !== false,
       failedAt: performance.now(),
     });
     emitTrace({
@@ -1338,8 +1556,12 @@ class QueueScheduler {
       sourceRevision: job.sourceRevision,
       traceId: job.traceId,
       message,
+      errorCode: error?.errorCode || null,
+      errorStatus: Number(error?.status) || null,
+      errorTraceId: error?.traceId || job.traceId,
+      validationFields: Array.isArray(error?.validationFields) ? error.validationFields : [],
       status,
-      permanent: status === "timeout",
+      permanent: status === "timeout" || error?.retryable === false,
     }).catch(() => {});
     return true;
   }

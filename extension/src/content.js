@@ -90,7 +90,7 @@ class ImageProvider {
   }
 
   isInterfaceOrAdvertisement(image) {
-    const reader = image?.parentElement;
+    const reader = image?.closest?.(".reading-detail.box_doc") || image?.parentElement;
     const isReaderChrome = Boolean(
       reader?.classList?.contains?.("reading-detail") &&
       reader?.classList?.contains?.("box_doc") &&
@@ -99,6 +99,8 @@ class ImageProvider {
     );
     // Some reader mirrors place a promotional image beside, rather than inside, page containers.
     if (isReaderChrome) return true;
+    const source = image?.currentSrc || image?.src || "";
+    if (/^data:image\/gif;base64,R0lGODlhAQABA/i.test(source)) return true;
     const attributes = [
       image?.alt,
       image?.title,
@@ -108,7 +110,7 @@ class ImageProvider {
       image?.currentSrc,
       image?.src,
     ].filter((value) => typeof value === "string").join(" ").toLowerCase();
-    const explicitAssetPattern = /(^|[\s_./-])(advert(?:isement|ising)?|ads?|adserver|adservice|doubleclick|googleads|avatar|badge|emoji|icon|logo|sprite)(?=$|[\s_./-])/i;
+    const explicitAssetPattern = /(^|[\s_./-])(advert(?:isement|ising)?|ads?|adserver|adservice|doubleclick|googleads|avatar|badge|emoji|icon|logo|sprite)(?=$|[\s_./-])|noavatar/i;
     if (explicitAssetPattern.test(attributes)) return true;
     if (typeof image?.closest !== "function") return false;
     return Boolean(image.closest([
@@ -259,7 +261,6 @@ class Renderer {
   prepareRawSlices(image, metadata, segments, identity = {}) {
     const wrapper = document.createElement("div");
     wrapper.className = "ai-enhancer-slice-wrapper";
-    wrapper.dataset = wrapper.dataset || {};
     const token = `${identity.operationId || "slice"}-${this.transactionSequence++}`;
     wrapper.dataset.aiEnhancerSliceToken = token;
     wrapper.dataset.aiEnhancerParentOperationId = identity.operationId || "";
@@ -1242,7 +1243,6 @@ class ViewportImageProvider {
     try {
       for (const record of records) {
         const { segment, rawImage, imageId: segmentId, operationId: segmentOperationId, sourceRevision: segmentKey, metadata: segmentMetadata, pageOrder: segmentOrder } = record;
-        rawImage.dataset = rawImage.dataset || {};
         rawImage.dataset.aiEnhancerImageId = segmentId;
         rawImage.dataset.aiEnhancerOperationId = segmentOperationId;
         rawImage.dataset.aiEnhancerKey = segmentKey;

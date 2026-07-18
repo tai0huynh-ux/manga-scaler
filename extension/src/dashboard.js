@@ -162,7 +162,12 @@ function updateImageRow(row, item, index) {
     updateSingleOpenButton(parts.aiActions, item.enhancedImageUrl, "Open AI image");
   } else {
     const [title, defaultDetail] = statusPresentation[status] || ["Waiting", "The image operation has not completed yet."];
-    updateMediaPlaceholder(parts.aiMedia, title, item.error || item.reason || defaultDetail, ["error", "timeout", "cancelled", "removed", "seen"].includes(status));
+    updateMediaPlaceholder(
+      parts.aiMedia,
+      title,
+      formatImageError(item, item.error || item.reason || defaultDetail),
+      ["error", "timeout", "cancelled", "removed", "seen"].includes(status),
+    );
     parts.aiActions.replaceChildren();
   }
 
@@ -177,6 +182,24 @@ function updateImageRow(row, item, index) {
   parts.openOriginal.hidden = !originalUrl;
   parts.block.dataset.source = originalUrl;
   parts.block.disabled = !originalUrl;
+}
+
+function formatImageError(item, fallback) {
+  if (item.errorCode !== "REQUEST_VALIDATION_FAILED") return fallback;
+  const validation = Array.isArray(item.validationFields) ? item.validationFields[0] : null;
+  const field = typeof validation?.field === "string"
+    ? validation.field.replace(/^body\./, "")
+    : null;
+  const reason = typeof validation?.message === "string" ? validation.message : null;
+  const trace = typeof item.errorTraceId === "string" && item.errorTraceId
+    ? item.errorTraceId.slice(0, 12)
+    : null;
+  return [
+    "Request validation failed",
+    field ? `Field: ${field}` : null,
+    reason ? `Reason: ${reason}` : null,
+    trace ? `Trace: ${trace}` : null,
+  ].filter(Boolean).join("\n");
 }
 
 function updateMediaImage(host, source, alt, failureText) {

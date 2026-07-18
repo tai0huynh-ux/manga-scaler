@@ -30,6 +30,47 @@ def test_upscale_rejects_invalid_browser_image_data() -> None:
     assert detail["traceId"]
 
 
+def test_upscale_validation_failure_preserves_sanitized_field_and_trace() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/upscale",
+            json={
+                "imageUrl": "https://example.com/displayed.jpg",
+                "maxOutputWidth": 128,
+                "traceId": "trace-validation-422",
+            },
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["errorCode"] == "REQUEST_VALIDATION_FAILED"
+    assert payload["status"] == 422
+    assert payload["traceId"] == "trace-validation-422"
+    assert payload["detail"] == [{
+        "field": "body.maxOutputWidth",
+        "type": "greater_than_equal",
+        "message": "Input should be greater than or equal to 256",
+    }]
+    assert "imageData" not in str(payload)
+
+
+def test_upscale_validation_failure_uses_safe_generated_trace_for_malformed_body() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/upscale",
+            content=b"not-json",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["errorCode"] == "REQUEST_VALIDATION_FAILED"
+    assert payload["status"] == 422
+    assert payload["traceId"]
+    assert isinstance(payload["detail"], list)
+    assert all(set(item) == {"field", "type", "message"} for item in payload["detail"])
+
+
 def test_upscale_rejects_base64_encoded_html() -> None:
     import base64
 

@@ -40,7 +40,7 @@
 
 ## Next exact action
 
-Run representative live-reader acceptance on current public TruyenQQ Manga/Manhwa/Manhua chapters, then hentaivnx when no external challenge blocks automation. Require stable DOM Blob replacement, zero false-positive chrome, zero duplicate/stale work, settled queues, and no temporary Referer rules.
+Repair and re-run the live reader gate with a clean isolated backend. Hive still has 66/75 stable original-image replacements (88%) and nine detected-but-unreplaced images. Manhua reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix. The local backend became unresponsive after repeated live runs, so hentaivnx and a clean Manga rerun remain blocked.
 
 ## Protected-read lifecycle acceptance checkpoint
 
@@ -53,6 +53,16 @@ Run representative live-reader acceptance on current public TruyenQQ Manga/Manhw
 - `chrome.runtime.reload()` now recovers without page reload. Content script block scoping permits safe reinjection, and a DOM-backed instance lease prevents old/new content contexts from racing or duplicating replacements.
 - Edge lifecycle result: zero browser exceptions, zero duplicate replacements, zero residual Referer rules, and queue/active/retry/read-lock state settled to zero.
 - Verification: 47 backend tests, 126 extension tests, JavaScript syntax checks, Ruff, 71% backend coverage, and real Edge fixture/lifecycle E2E passed.
+- Commit/push: `f21a208b31b228e4f6043dae211cbb93f3bded12` is at `origin/main` with zero divergence and a clean tree at the checkpoint boundary.
+
+## Live reader slicing and candidate-filter checkpoint
+
+- Real HTMLElement getter-only `dataset` objects now work through raw-slice preparation and segment registration without replacing the DOM property.
+- Reader-chrome detection walks nested `.reading-detail.box_doc` ancestors; common one-pixel tracking GIFs and `noavatar` assets are rejected before scheduling.
+- The live harness snapshots original chapter images before raw-slice insertion and measures a sliced original as complete only when every raw slice has a stable Blob replacement.
+- Hive 293 measured 75/75 detected, 66/75 replacements (88%), 184/184 backend successes, zero sanitized failures, zero residual rules, and zero extension exceptions; nine originals remained unreplaced.
+- Manhua 320 measured 26/26 replacements with 110/110 backend successes in the clean first-pass run, but two reader-chrome false positives blocked PASS.
+- Backend `/health` stopped responding after repeated live runs; no hentaivnx or clean Manga result is claimed.
 
 ## Worker-restart Referer cleanup checkpoint
 
