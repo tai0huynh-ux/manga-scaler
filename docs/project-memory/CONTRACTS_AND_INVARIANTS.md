@@ -5,6 +5,7 @@
 1. A stale completion, failure, cancellation, or removal must never delete or overwrite a newer operation with the same `imageId`.
 2. `imageId` alone is never mutation authority; use `operationId` and `sourceRevision`, plus `sourceFingerprint` for completion matching when available.
 3. Queue counters, active maps, futures, workers, and slots must settle after success, failure, cancellation, timeout, preemption, and shutdown.
+4. Browser image fetch and response-body reads must both race abort; a response implementation that ignores `AbortSignal` must not retain a preprocessing slot.
 4. A cancelled queue key must not be resurrected by a delayed retry or late async callback.
 5. Tab navigation generation must reject delayed storage reads and messages from the old page.
 6. Render rollback may restore only DOM state still owned by that transaction; it must not overwrite a newer page or renderer assignment.

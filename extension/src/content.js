@@ -78,6 +78,15 @@ class ImageProvider {
   }
 
   isInterfaceOrAdvertisement(image) {
+    const reader = image?.parentElement;
+    const isReaderChrome = Boolean(
+      reader?.classList?.contains?.("reading-detail") &&
+      reader?.classList?.contains?.("box_doc") &&
+      reader?.querySelector?.(".page-chapter img") &&
+      !image?.closest?.(".page-chapter")
+    );
+    // Some reader mirrors place a promotional image beside, rather than inside, page containers.
+    if (isReaderChrome) return true;
     const attributes = [
       image?.alt,
       image?.title,

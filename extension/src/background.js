@@ -674,6 +674,7 @@ class BackendUpscaleProvider {
     const readController = new AbortController();
     const timeout = setTimeout(() => readController.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
     const readSignal = this.combineSignals(signal, readController.signal);
+    const abortRead = this.rejectOnAbort(readSignal);
     try {
       if (pageUrl) {
         await chrome.declarativeNetRequest.updateSessionRules({
@@ -692,16 +693,19 @@ class BackendUpscaleProvider {
           }],
         });
       }
-      const response = await fetch(imageUrl, {
-        method: "GET",
-        cache: "force-cache",
-        credentials: "include",
-        signal: readSignal,
-      });
+      const response = await Promise.race([
+        fetch(imageUrl, {
+          method: "GET",
+          cache: "force-cache",
+          credentials: "include",
+          signal: readSignal,
+        }),
+        abortRead,
+      ]);
       if (!response.ok) {
         throw new Error(`Browser could not read displayed image (${response.status})`);
       }
-      const buffer = await response.arrayBuffer();
+      const buffer = await Promise.race([response.arrayBuffer(), abortRead]);
       if (!this.isImageBuffer(buffer)) {
         throw new Error("Website returned HTML or non-image data instead of the displayed image");
       }
@@ -758,6 +762,18 @@ class BackendUpscaleProvider {
     primarySignal?.addEventListener("abort", abort, { once: true });
     timeoutSignal.addEventListener("abort", abort, { once: true });
     return controller.signal;
+  }
+
+  rejectOnAbort(signal) {
+    return new Promise((_, reject) => {
+      const abort = () => {
+        const error = new Error("Browser image read was aborted");
+        error.name = "AbortError";
+        reject(error);
+      };
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    });
   }
 }
 

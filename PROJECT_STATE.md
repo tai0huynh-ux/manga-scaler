@@ -8,13 +8,13 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
 - Recovered baseline: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- Automated baseline before the active fixture checkpoint: 47 backend tests, 98 extension tests, JavaScript syntax checks, Ruff, and 71% backend coverage passed on 2026-07-18.
+- Automated baseline: 47 backend tests, 107 extension tests, JavaScript syntax checks, Ruff, and 71% backend coverage passed on 2026-07-18.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
 - Not yet proven: representative live-site acceptance, production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
 
 ## Active milestone
 
-Run representative live-site Chrome/Edge acceptance and capture repeatable anti-hotlink or reader incompatibilities. The deterministic fixture and real Edge unpacked-extension/backend gate are implemented.
+Continue representative live-site Chrome/Edge acceptance. The deterministic Edge gate remains green, the reproduced hentaivnx reader banner false positive and non-settling browser-read boundary have regression fixes, and live chapter replacement remains blocked/unproven by CDN Referer behavior plus unstable worker diagnostics. A verified public TruyenQQ reader URL is still required.
 
 ## Required reading
 

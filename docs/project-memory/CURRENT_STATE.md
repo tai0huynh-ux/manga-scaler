@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result on the baseline:
 
 - Backend: 47 tests passed.
-- Extension: 98 tests passed.
+- Extension: 107 tests passed.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
@@ -40,10 +40,14 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Extension minimum input dimensions aligned to the documented/shared 300 px contract with boundary regressions.
 - Extreme-tall slicing row coverage and safe extreme-wide rejection regressions.
 - Automated Edge unpacked-extension E2E against the deterministic fixture with the real DirectML backend/model: two accepted/completed jobs, zero failures, Blob replacement, dynamic discovery, false-positive rejection, and settled queue.
+- Reader chrome outside explicit `.page-chapter` containers is rejected on `reading-detail box_doc` readers, preventing a reproduced live-site banner replacement.
+- Browser image reads race both the fetch and response body against abort, so a non-cooperative CDN response cannot hold preprocessing slots indefinitely.
 
 ## Known limitations
 
 - Representative live-site validation is still manual.
+- `www.hentaivnx.live` reader HTML and Edge discovery were verified, but chapter replacement remains unproven: its CDN returns a redirect without Referer and a JPEG with Referer, while the final worker diagnostic did not yield a stable completion record.
+- A current public TruyenQQ reader/chapter URL is not verified; guessed or SEO-shell domains are not acceptance evidence.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -55,9 +59,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Run real Chrome/Edge validation on representative manga and webtoon hosts.
-2. Record anti-hotlink/browser-read failures with structured logs and network evidence.
-3. Add site-specific handling only for repeatable, evidenced incompatibilities.
+1. Obtain one current public TruyenQQ reader/chapter URL without a session token.
+2. Re-run sanitized Edge acceptance on `www.hentaivnx.live` and the verified TruyenQQ reader with worker-restart-safe evidence capture.
+3. Resolve the evidenced CDN Referer/read incompatibility only if the stable diagnostic proves the remaining product boundary.
 4. Expand the deterministic E2E matrix for navigation, reload, backend restart, cancellation, and long-image rendering.
 5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 

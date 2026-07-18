@@ -8,6 +8,8 @@
 - **Dashboard reloaded image nodes every poll:** resolved with keyed row updates.
 - **Remote original previews displayed broken-image icons:** resolved by showing a placeholder unless a stable local preview URL exists.
 - **Current-page Dashboard mixed tabs:** already resolved before this change; regression coverage confirms `PageImageRegistry.list(tabId)` is used.
+- **Live reader chrome was processed as chapter content:** resolved for readers that expose `reading-detail box_doc` with explicit `.page-chapter` containers; direct chrome outside those containers is rejected.
+- **A non-cooperative CDN response body could retain preprocessing forever:** resolved by racing both browser fetch and body reads against abort.
 
 ## Remaining limitations
 
@@ -17,6 +19,8 @@
 - Per-tile trace events are intentionally not emitted in default mode.
 - GPU/VRAM trace sampling is not implemented.
 - Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
+- Hentaivnx live chapter replacement remains unproven. Its sampled CDN requires Referer, and the final worker diagnostic was not stable enough to claim a completed replacement after the timeout fix.
+- A current public TruyenQQ reader URL is still unverified.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Chrome can suspend the MV3 service worker; tab generation checks prevent stale resurrection, but runtime inspection should account for worker restarts.
 - Browser-level extension behavior still requires manual verification on representative manga sites.

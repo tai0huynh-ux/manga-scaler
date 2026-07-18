@@ -114,7 +114,7 @@ function loadBackgroundClasses(options = {}) {
       tabs: { sendMessage: async () => undefined },
       declarativeNetRequest: { updateSessionRules: async () => undefined },
     },
-    fetch: async () => ({ ok: true }),
+    fetch: options.fetch || (async () => ({ ok: true })),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
@@ -606,6 +606,29 @@ test("background READ_IMAGE_FOR_SLICING reports read timeouts", async () => {
 
   assert.equal(responses.at(-1).ok, false);
   assert.equal(responses.at(-1).reason, "read-timeout");
+});
+
+test("DISCOVERY-003 browser image reads settle when a response body ignores abort", async () => {
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    fetch: async () => ({
+      ok: true,
+      arrayBuffer: () => new Promise(() => {}),
+    }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  const controller = new AbortController();
+  controller.abort();
+
+  const outcome = await Promise.race([
+    provider.readBrowserImage(
+      "https://cdn.example.test/chapter/page.jpg",
+      "https://reader.example.test/chapter/1",
+      controller.signal,
+    ).then(() => "resolved", (error) => `${error?.name || "Error"}:${error?.message || "rejected"}`),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 50)),
+  ]);
+
+  assert.match(outcome, /^AbortError:/);
 });
 
 function makeTallImage(index) {
@@ -2176,6 +2199,34 @@ test("candidate evaluator rejects explicitly marked interface and advertising im
 
   assert.equal(viewportProvider.canProcessCandidate(advertisement), false);
   assert.equal(viewportProvider.canProcessCandidate(navigationIcon), false);
+});
+
+test("DISCOVERY-002 candidate evaluator rejects reader chrome outside explicit page containers", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const pageContainer = {};
+  const reader = {
+    classList: { contains: (name) => name === "reading-detail" || name === "box_doc" },
+    querySelector: (selector) => selector === ".page-chapter img" ? {} : null,
+  };
+  const banner = makeTallImage("reader-chrome");
+  banner.src = "https://reader.example.test/images/bn.png";
+  banner.currentSrc = banner.src;
+  banner.alt = "Reader online";
+  banner.parentElement = reader;
+  banner.closest = () => null;
+
+  const chapter = makeTallImage("chapter-page");
+  chapter.parentElement = reader;
+  chapter.closest = (selector) => selector === ".page-chapter" ? pageContainer : null;
+
+  assert.equal(imageProvider.canProcess(banner), false);
+  assert.equal(imageProvider.canProcess(chapter), true);
 });
 
 test("candidate evaluator rejects fixed banner overlays", () => {

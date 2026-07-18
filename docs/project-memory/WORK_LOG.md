@@ -50,3 +50,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: The first E2E attempt reproduced deterministic SVG rejection before the backend. After switching the inference route to generated PNG, `test:e2e:edge-fixture` passed with two accepted/completed jobs, zero failed/cancelled jobs, two `768x768` Blob outputs, and queue size/waiting/processing all zero. The full gate passed 47 backend tests and 105 extension tests with Ruff, JavaScript syntax checks, and 71% backend coverage.
 - Git: Introduced by the automatic sync commit for "Real Edge fixture E2E"; use `git log -- extension/tests/e2e/edge_fixture_e2e.cjs` to recover its exact hash.
 - Remaining: Representative live-site and expanded navigation/restart/long-image browser acceptance remain unproven.
+
+## 2026-07-18 - Live reader false-positive and browser-read settlement
+
+- Request: Continue recovery into the first incomplete live-site checkpoint, preserve Git integrity, and fix only runtime-proven failures.
+- Changes: Rejected reader chrome outside explicit page containers and added an abort race around browser fetch plus response-body reads; added `DISCOVERY-002` and `DISCOVERY-003` regressions.
+- Invariant/decision: Reader chrome must not be upscaled as chapter content, and a CDN response that ignores abort must never retain a preprocessing slot indefinitely.
+- Verification: Both regressions failed before their fixes and passed afterward. Fast verification passed 47 backend tests and 107 extension tests. The real Edge deterministic E2E passed with two `768x768` Blob replacements and settled queues. Hentaivnx HTTP/DOM discovery and Referer behavior were verified, but live chapter replacement was not proven because the final worker diagnostic became unavailable.
+- Git: Introduced by the automatic sync commit for "Live reader false-positive and browser-read settlement"; use `git log -- docs/project-memory/WORK_LOG.md` to recover its exact hash.
+- Remaining: Obtain one current public TruyenQQ reader URL and repeat worker-restart-safe live acceptance; do not claim representative live-site PASS yet.

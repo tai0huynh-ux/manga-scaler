@@ -23,7 +23,7 @@
 
 - Architecture ownership and runtime flows are mapped under `docs/project-memory/`.
 - Unit and VM-based extension regressions cover core queue, stale-operation, renderer, slicing, API, provider, and tracing invariants.
-- Browser-level unpacked-extension E2E is not automated.
+- Deterministic Edge unpacked-extension E2E is automated and green against the real loopback backend/model.
 - Representative manga/webtoon live-site acceptance remains manual and unproven for the current baseline.
 - Production ONNX quality, DirectML/CUDA execution, OCR quality, text removal/reinsertion, soak, packaging, clean install, upgrade, and uninstall are not release-proven.
 
@@ -39,7 +39,7 @@
 
 ## Next exact action
 
-Verify the active TruyenQQ domain and run sanitized representative-site Chrome/Edge acceptance. Record eligible/detected/requested/replaced counts, false positives, lazy-load behavior, ordering, anti-hotlink evidence, and external blockers without committing cookies, profiles, screenshots, or downloaded site content.
+Obtain one current public TruyenQQ reader/chapter URL without a session token, then re-run worker-restart-safe Edge acceptance for TruyenQQ and `www.hentaivnx.live`. Do not treat guessed domains or the `truyenqq.link` WordPress/SEO shell as acceptance evidence.
 
 ## Unpacked-extension E2E checkpoint
 
@@ -51,3 +51,13 @@ Verify the active TruyenQQ domain and run sanitized representative-site Chrome/E
 - Rejection: `299x299`, `300x100`, and a 300 px logo were not scheduled.
 - Settlement: backend queue size/waiting/processing returned to zero; failed and cancelled stayed zero.
 - Boundary: this proves the focused local flow, not live-site Manga/Manhwa/Manhua acceptance or long-running service-worker restart behavior.
+
+## Live-site discovery checkpoint
+
+- Git was revalidated after quarantining one recreated `.git/objects/0f/desktop.ini`; `git fsck --full` returned success with only the known dangling blob, fetch passed, `HEAD` matched `origin/main` at `37cc0ed`, divergence was zero, and the tree was clean.
+- `www.hentaivnx.live` and a public reader returned HTTP 200. The sampled reader exposed 15 chapter images on a cross-origin CDN plus non-chapter reader chrome.
+- Edge reproduced `DISCOVERY-002`: `/images/bn.png` reader chrome was accepted and rendered as a Blob. A structural regression now rejects direct reader chrome outside explicit `.page-chapter` containers while preserving page images.
+- Edge reproduced `DISCOVERY-003`: chapter records could remain in `preprocessing` while the backend queue stayed empty. Browser image reads now race both `fetch` and `response.arrayBuffer()` against abort, with a regression for a response body that ignores the signal.
+- CDN evidence: the sampled image redirected without Referer and returned HTTP 200 JPEG with the reader Referer. The final live diagnostic did not produce stable chapter completion evidence because worker evaluation became unavailable; cleanup succeeded and backend queue counters settled to zero.
+- No cookies, browser profiles, screenshots, downloaded reader content, or session-token URLs were committed.
+- TruyenQQ remains an external/manual blocker: previously attempted domains timed out or resolved to an unrelated SEO shell, so one current public reader/chapter URL is required.
