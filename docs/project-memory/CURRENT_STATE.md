@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-19, Asia/Bangkok.
-- Branch: `main`.
+- Branch: `codex/live-reader-acceptance-c518` in the isolated `c518` worktree; the main checkout is not modified.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
@@ -52,6 +52,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
 - Live Edge acceptance passed on public `truyenqqko.com` for one Manga chapter (64/64 image replacements, including two sliced images) and one Manhua chapter (3/3 replacements, including one sliced image); both runs had zero false positives, duplicate jobs, browser exceptions, and residual Referer rules.
 - Reader comment avatars using lazy `noavatar.png` are rejected as UI assets, and live-reader E2E diagnostics redact source URL values while detecting backend uptime/counter resets.
+- Processing Monitor schema version 1 now defines the public stage vocabulary, allowed transitions, terminal-state rules, structured error normalization, URL sanitization, sensitive-field exclusion, and measured-progress requirement. `COMPLETED` is invalid without a confirmed renderer commit. Runtime/dashboard wiring is not implemented yet.
 
 ## Known limitations
 
@@ -63,6 +64,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
 - GPU/VRAM trace sampling is not implemented.
+- The Processing Monitor contract exists, but the current Dashboard still consumes the legacy page-image registry and has no persisted timeline, recovery, cancel/retry controls, or diagnostic export.
 - OCR depends on local Tesseract installation.
 - Translation uses an unofficial best-effort Google endpoint and requires network access.
 - Backend network exposure is not hardened; keep it loopback-only.
@@ -70,9 +72,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Complete a bounded Manhwa acceptance on a representative chapter after addressing heavy segmentation throughput/backend restart behavior.
-2. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
-3. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
-4. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
+1. Wire real content/background lifecycle events into the Processing Monitor while preserving operation and tab-generation authority.
+2. Move `COMPLETED` authority from backend response receipt to confirmed content-side DOM render commit.
+3. Add bounded monitor history/recovery and extend the existing Dashboard with timeline, structured errors, safe previews, filters, cancel/retry, and sanitized export.
+4. Resume bounded Manhwa and hentaivnx acceptance after the monitor checkpoint is complete.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

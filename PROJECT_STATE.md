@@ -14,7 +14,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-Continue Phase A1 with live-reader acceptance. Manga and Manhua chapters on the current public `truyenqqko.com` reader passed sanitized Edge DOM-replacement gates. Heavy Manhwa chapters still need a bounded throughput/restart fix before representative live-site PASS; live hentaivnx replacement remains unproven.
+Complete the Processing Monitor in the isolated `c518` worktree. Schema version 1 and its security/state-machine contract are verified; runtime lifecycle storage, DOM-commit terminal authority, Dashboard timeline/details, safe previews, cancel/retry, recovery, and load/E2E acceptance remain in progress. Manga and Manhua live acceptance stays green; heavy Manhwa and hentaivnx limitations remain unchanged.
 
 ## Required reading
 

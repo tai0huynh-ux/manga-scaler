@@ -102,3 +102,11 @@ Manga and Manhua live-reader gates are green on current public `truyenqqko.com` 
 - CDN evidence: the sampled image redirected without Referer and returned HTTP 200 JPEG with the reader Referer. The final live diagnostic did not produce stable chapter completion evidence because worker evaluation became unavailable; cleanup succeeded and backend queue counters settled to zero.
 - No cookies, browser profiles, screenshots, downloaded reader content, or session-token URLs were committed.
 - TruyenQQ remains an external/manual blocker: previously attempted domains timed out or resolved to an unrelated SEO shell, so one current public reader/chapter URL is required.
+
+## Processing Monitor contract checkpoint
+
+- Work continues only on `codex/live-reader-acceptance-c518` in the isolated `c518` worktree. Starting `HEAD` and branch upstream matched `093fd7b3988f9a22b5018d6587a5a1f0def0b90c`; no main-checkout integration was performed.
+- Added a versioned processing-event contract and lifecycle ownership map. Terminal states cannot revive, progress is indeterminate unless measured, structured 422 errors are non-retryable, and sensitive image/credential/URL data is excluded.
+- `COMPLETED` now has a contract-level renderer-commit guard. Runtime still uses the legacy registry and must be wired in the next checkpoint before this invariant is production-enforced.
+- Verification: 139 extension tests, 47 backend tests, JavaScript syntax checks, Ruff, and 71% backend coverage passed. Full-equivalent backend gates used the existing project virtualenv because the isolated worktree has no `.venv`.
+- Next exact action: add the bounded monitor store and operation-aware lifecycle ingestion, then make content-side render confirmation the only completion event.

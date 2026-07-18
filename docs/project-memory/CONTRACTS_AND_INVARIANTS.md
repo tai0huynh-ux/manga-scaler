@@ -92,3 +92,13 @@ The extension runtime and `shared/config/defaults.json` use a 300 px minimum for
 ## Security boundary
 
 The backend is designed for a trusted local machine and binds to loopback by default. Before network exposure, add authenticated access, strict origin policy, SSRF protection, and URL allow/deny controls. Browser byte supply is preferred because it reuses browser cookies/cache and avoids backend access to protected remote URLs.
+
+## Processing Monitor contract
+
+- Monitor events use schema version 1 and exact operation identity; `imageId` or `traceId` alone never authorizes mutation.
+- Terminal stages cannot transition to active or completed work. A retry creates a visibly new attempt/operation rather than reviving a terminal event.
+- `COMPLETED` requires a confirmed renderer transaction commit for the current image or segment. Backend success alone is `RECEIVING_RESULT`, never completion.
+- Progress remains `null` unless a producer supplies an explicitly measured value.
+- Diagnostics exclude image bytes/base64, credentials, cookies, raw request/response bodies, browser profiles, personal paths, URL query values, and fragments.
+- Source identity contains only scheme, hostname, shortened path, and query-key names. Fingerprints are exposed only as short prefixes.
+- OCR, text removal, inpainting, and typesetting stages are not emitted unless the current runtime reports that exact work.

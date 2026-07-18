@@ -103,3 +103,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Full gate-equivalent commands passed using the existing project Python runtime: 47 backend tests, 133 extension tests, JavaScript checks, Ruff, and 71% coverage. Deterministic Edge lifecycle E2E passed. Manga One Piece on `truyenqqko.com` passed 64/64 replacements and 116/116 backend completions, including two sliced images. Manhua Yêu Thần Ký passed 3/3 replacements and 17/17 backend completions, including one sliced image. A heavy Manhwa chapter did not settle within 240 seconds; an earlier heavy chapter caused a backend restart under load, now detected as a failed acceptance condition.
 - Git: Pending the isolated worktree checkpoint commit and push; no main-checkout files were changed.
 - Remaining: Bound and fix heavy Manhwa segmentation/backend restart behavior; rerun hentaivnx only when external challenges permit stable evidence.
+
+## 2026-07-19 - Processing Monitor event contract
+
+- Request: Begin the Processing Monitor/Image Diagnostic mission in the isolated `c518` worktree without modifying the main checkout.
+- Changes: Added schema version 1, the real/optional stage vocabulary, allowed transitions, terminal guards, renderer-commit completion enforcement, structured error normalization, URL sanitization, sensitive payload exclusion, measured-progress enforcement, and a verified lifecycle ownership map.
+- Invariant/decision: Backend response completion is not DOM completion. `COMPLETED` is legal only after the current content renderer confirms its transaction commit. Internal stages are indeterminate and must not be fabricated when no current event reports them.
+- Verification: The new tests first failed because the contract module did not exist. The completed checkpoint passed 139 extension tests, 47 backend tests, JavaScript syntax checks, Ruff, and 71% backend coverage. The repository verification script could not locate a worktree-local `.venv`; the same full commands were run with the existing project virtualenv against this isolated worktree.
+- Git: Pending automatic isolated-branch sync for `feat(monitor): define processing event contract`.
+- Remaining: Wire lifecycle events and persisted bounded history, then move terminal completion authority to the confirmed renderer commit.

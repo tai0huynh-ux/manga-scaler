@@ -13,6 +13,7 @@
 | Background queue/cache | `extension/src/background.js` | content messages, backend API, dashboard | `queue_scheduler.test.cjs` |
 | Discovery/slicing/render | `extension/src/content.js` | background message boundary only | `queue_scheduler.test.cjs` |
 | Dashboard reconciliation | `extension/src/dashboard.js` | background registry contract | `dashboard_rendering.test.cjs` |
+| Processing Monitor contract | `extension/src/processing-monitor.js` | content, background, Dashboard | `processing_monitor.test.cjs`, then adjacent queue/dashboard tests |
 | Shared settings | all three config files | popup, dashboard, content, background, backend | config/API tests plus extension suite |
 | Native startup | `native-host/*`, background launch functions | backend health/start flow | manual Chrome/Edge verification |
 | Reader fixture contract | `extension/tests/fixtures/reader/server.cjs` | content discovery and browser E2E | `reader_fixture.test.cjs` plus `test:e2e:edge-fixture` |
@@ -68,6 +69,7 @@ Full verification runs:
 - Real Edge MV3 worker stop/reactivation, full navigation invalidation, and unpacked-extension reload with automatic content recovery.
 - Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
 - Dashboard stable keyed rows and safe preview policy.
+- Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.
 
 ## Manual gaps
 
