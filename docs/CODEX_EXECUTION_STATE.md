@@ -7,8 +7,8 @@
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
 - Starting recovered HEAD: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- Current committed HEAD before the active DNR checkpoint: `5a015f5c93afbed79e2e925cc9a88c7e61e2cec2`.
-- `origin/main`: matched `5a015f5c93afbed79e2e925cc9a88c7e61e2cec2` after a successful fetch.
+- Current committed HEAD before the active worker-recovery checkpoint: `86ef39f57ad08f7ad451bc76a21b608309658fca`.
+- `origin/main`: matched `86ef39f57ad08f7ad451bc76a21b608309658fca` after a successful fetch.
 - Divergence: `0` local-only / `0` remote-only commits.
 - Working tree at recovery: clean; no staged, unstaged, or untracked source/test files.
 - Git integrity: `git fsck --full` passed after exactly 250 injected `desktop.ini` files were moved out of `.git` into a recoverable external backup. One unreachable blob remained and Git classified it as dangling, not corruption.
@@ -40,7 +40,16 @@
 
 ## Next exact action
 
-Extend deterministic Edge acceptance to navigation and extension reload while a protected browser read is active. Prove cancellation settles, temporary DNR rules do not remain, the per-URL read registry clears, and no unhandled rejection occurs.
+Extend deterministic Edge acceptance to real worker termination/reload and navigation while a protected browser read is active. Prove startup cleanup removes the interrupted rule, cancellation settles, and no unhandled rejection occurs.
+
+## Worker-restart Referer cleanup checkpoint
+
+- Provider initialization enumerates extension session rules and removes only Referer-modifying rules with IDs from `1000` through `199999`, covering current temporary rules and the retired broad-rule range.
+- New browser reads await the cleanup barrier, preventing a new rule from racing removal of a reused stale ID.
+- The regression first failed with rule IDs `1000` and `100000` left active, then passed after the fix while unrelated rules were preserved.
+- Full verification passed 47 backend tests and 114 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage.
+- Real Edge fixture E2E remained green with two completed `768x768` Blob replacements and queue size/waiting/processing all zero.
+- Browser-level worker termination/reload during an active protected read remains unproven.
 
 ## Exact-URL Referer isolation checkpoint
 

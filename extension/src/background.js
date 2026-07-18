@@ -503,6 +503,7 @@ class BackendUpscaleProvider {
     this.requestTimeoutMs = requestTimeoutMs;
     this.nextHeaderRuleId = 1000;
     this.imageReadLocks = new Map();
+    this.headerRuleCleanup = this.cleanupStaleHeaderRules();
   }
 
   async upscale(imageUrl, options, abortSignal) {
@@ -671,6 +672,7 @@ class BackendUpscaleProvider {
   }
 
   async readBrowserImageWithRule(imageUrl, pageUrl, signal) {
+    await this.headerRuleCleanup;
     const ruleId = this.nextHeaderRuleId++;
     const readController = new AbortController();
     const timeout = setTimeout(() => readController.abort(), AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs);
@@ -716,6 +718,23 @@ class BackendUpscaleProvider {
       if (pageUrl) {
         await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }).catch(() => {});
       }
+    }
+  }
+
+  async cleanupStaleHeaderRules() {
+    try {
+      const rules = await chrome.declarativeNetRequest.getSessionRules();
+      const removeRuleIds = rules
+        .filter((rule) => (
+          Number.isInteger(rule.id) && rule.id >= 1000 && rule.id < 200000 &&
+          rule.action?.requestHeaders?.some((header) => String(header.header).toLowerCase() === "referer")
+        ))
+        .map((rule) => rule.id);
+      if (removeRuleIds.length) {
+        await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds });
+      }
+    } catch {
+      // A read still performs its own exact-rule cleanup when session-rule inspection is unavailable.
     }
   }
 

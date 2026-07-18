@@ -4,8 +4,8 @@
 
 - Verified date: 2026-07-18, Asia/Bangkok.
 - Branch: `main`.
-- Current committed baseline before the active DNR checkpoint: `5a015f5`.
-- Upstream before the active DNR checkpoint: `origin/main` matched `5a015f5` with zero divergence.
+- Current committed baseline before the active worker-recovery checkpoint: `86ef39f`.
+- Upstream before the active worker-recovery checkpoint: `origin/main` matched `86ef39f` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
 - Runtime stack: Python 3.12, FastAPI, ONNX Runtime DirectML, Pillow/NumPy, Chrome/Edge MV3.
 
@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result on the baseline:
 
 - Backend: 47 tests passed.
-- Extension: 113 tests passed in the full gate for the active DNR checkpoint.
+- Extension: 114 tests passed in the full gate for the active worker-recovery checkpoint.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
@@ -44,6 +44,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Browser image reads race both the fetch and response body against abort, so a non-cooperative CDN response cannot hold preprocessing slots indefinitely.
 - The deterministic reader fixture models exact per-chapter Referer requirements, different bytes at one protected URL, slow and hanging bodies, mid-body disconnects, HTTP 200 non-image payloads, invalid image magic bytes, and abortable large streaming responses.
 - Discovery no longer installs broad persistent Referer rules. Browser reads use exact-URL temporary rules, serialize only reads for the same image URL, remove rules on success/failure/abort, and release their per-URL lock after settlement.
+- A newly initialized background provider removes interrupted temporary and legacy Referer session rules in the extension-owned ID range before installing a new read rule.
 
 ## Known limitations
 
@@ -61,7 +62,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Continue Phase A1 with navigation and extension-reload acceptance while an exact-URL read rule is active, including cancellation and worker-restart-safe cleanup evidence.
+1. Continue Phase A1 with real Edge navigation and extension-reload acceptance while an exact-URL read rule is active; startup cleanup is unit-proven but worker termination/restart still needs browser evidence.
 2. Obtain one current public TruyenQQ reader/chapter URL without a session token.
 3. Re-run sanitized Edge acceptance on `www.hentaivnx.live` and the verified TruyenQQ reader with worker-restart-safe evidence capture.
 4. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.

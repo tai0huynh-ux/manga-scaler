@@ -112,7 +112,10 @@ function loadBackgroundClasses(options = {}) {
     importScripts() {},
     chrome: {
       tabs: { sendMessage: async () => undefined },
-      declarativeNetRequest: { updateSessionRules: options.updateSessionRules || (async () => undefined) },
+      declarativeNetRequest: {
+        getSessionRules: options.getSessionRules || (async () => []),
+        updateSessionRules: options.updateSessionRules || (async () => undefined),
+      },
     },
     fetch: options.fetch || (async () => ({ ok: true })),
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
@@ -3433,6 +3436,29 @@ test("temporary Referer rules are removed on every browser-read terminal path", 
   const addedRuleId = ruleUpdates.find((update) => update.addRules?.length)?.addRules[0].id;
   assert.ok(Number.isInteger(addedRuleId));
   assert.ok(ruleUpdates.some((update) => update.removeRuleIds?.includes(addedRuleId) && !update.addRules));
+});
+
+test("service worker initialization removes interrupted Referer session rules", async () => {
+  const ruleUpdates = [];
+  const refererAction = {
+    type: "modifyHeaders",
+    requestHeaders: [{ header: "Referer", operation: "set", value: "https://reader.example.test/chapter/a" }],
+  };
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    getSessionRules: async () => [
+      { id: 1000, action: refererAction },
+      { id: 100000, action: refererAction },
+      { id: 999, action: refererAction },
+      { id: 1001, action: { type: "block" } },
+    ],
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+  });
+
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+  await provider.headerRuleCleanup;
+
+  assert.equal(ruleUpdates.length, 1);
+  assert.deepEqual([...ruleUpdates[0].removeRuleIds], [1000, 100000]);
 });
 
 test("page image registry stale remove does not delete current operation", async () => {

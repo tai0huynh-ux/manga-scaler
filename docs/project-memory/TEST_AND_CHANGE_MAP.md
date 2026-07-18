@@ -63,6 +63,7 @@ Full verification runs:
 - Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, Blob rendering, false-positive rejection, and queue settlement.
 - Background operation isolation, retry invalidation, cache identity, tab generation.
 - Exact-URL Referer rule serialization, terminal cleanup, and discovery-time rule rejection.
+- Background-provider initialization cleanup for interrupted temporary and legacy Referer session rules.
 - Dashboard stable keyed rows and safe preview policy.
 
 ## Manual gaps

@@ -77,3 +77,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Both regressions failed before the fix: discovery produced one broad session rule and concurrent same-URL reads started two fetches. Seven focused DNR/read tests passed after the fix; the full gate passed 47 backend tests and 113 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; real Edge fixture E2E passed with two `768x768` Blob replacements, zero failures/cancellations, and settled queues.
 - Git: Introduced by the automatic sync commit for exact-URL Referer rule isolation; use `git log -- extension/src/background.js` to recover its exact hash.
 - Remaining: Prove navigation and extension reload cleanup while a protected read is active, then resume representative live-site acceptance.
+
+## 2026-07-18 - Worker-restart Referer cleanup
+
+- Request: Continue Phase A1 and prevent a terminated MV3 worker from leaving Referer session rules active after the next worker initialization.
+- Changes: Added a provider initialization barrier that enumerates session rules, removes only Referer-modifying rules in the extension-owned current/legacy ID range, and completes before any new browser-read rule is installed.
+- Invariant/decision: Worker initialization must recover interrupted DNR state without deleting unrelated session rules or racing a new exact-URL read with stale-rule cleanup.
+- Verification: The regression first failed with both interrupted rule IDs still present. Five focused DNR tests passed after the fix; the full gate passed 47 backend tests and 114 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; real Edge fixture E2E remained green with two `768x768` Blob replacements and settled queues.
+- Git: Introduced by the automatic sync commit for worker-restart Referer cleanup; use `git log -- extension/src/background.js` to recover its exact hash.
+- Remaining: Real browser worker termination/reload during an active protected read is still unproven.
