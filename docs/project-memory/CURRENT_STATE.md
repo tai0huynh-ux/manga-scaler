@@ -4,8 +4,8 @@
 
 - Verified date: 2026-07-18, Asia/Bangkok.
 - Branch: `main`.
-- Recovered baseline commit: `7b8da56`.
-- Upstream after recovery: `origin/main` matched `7b8da56` with zero divergence.
+- Current committed baseline: `8495a77`.
+- Upstream before the active fixture checkpoint: `origin/main` matched `8495a77` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
 - Runtime stack: Python 3.12, FastAPI, ONNX Runtime DirectML, Pillow/NumPy, Chrome/Edge MV3.
 
@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result on the baseline:
 
 - Backend: 47 tests passed.
-- Extension: 107 tests passed.
+- Extension: 110 tests passed in the full gate for the active fixture checkpoint.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
@@ -42,6 +42,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Automated Edge unpacked-extension E2E against the deterministic fixture with the real DirectML backend/model: two accepted/completed jobs, zero failures, Blob replacement, dynamic discovery, false-positive rejection, and settled queue.
 - Reader chrome outside explicit `.page-chapter` containers is rejected on `reading-detail box_doc` readers, preventing a reproduced live-site banner replacement.
 - Browser image reads race both the fetch and response body against abort, so a non-cooperative CDN response cannot hold preprocessing slots indefinitely.
+- The deterministic reader fixture models exact per-chapter Referer requirements, different bytes at one protected URL, slow and hanging bodies, mid-body disconnects, HTTP 200 non-image payloads, invalid image magic bytes, and abortable large streaming responses.
 
 ## Known limitations
 
@@ -59,9 +60,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Obtain one current public TruyenQQ reader/chapter URL without a session token.
-2. Re-run sanitized Edge acceptance on `www.hentaivnx.live` and the verified TruyenQQ reader with worker-restart-safe evidence capture.
-3. Resolve the evidenced CDN Referer/read incompatibility only if the stable diagnostic proves the remaining product boundary.
+1. Complete Phase A1 DNR lifecycle regressions: remove persistent broad Referer rules, isolate concurrent same-image reads, and prove temporary-rule cleanup on every terminal path.
+2. Obtain one current public TruyenQQ reader/chapter URL without a session token.
+3. Re-run sanitized Edge acceptance on `www.hentaivnx.live` and the verified TruyenQQ reader with worker-restart-safe evidence capture.
 4. Expand the deterministic E2E matrix for navigation, reload, backend restart, cancellation, and long-image rendering.
 5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 

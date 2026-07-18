@@ -256,6 +256,65 @@ async function startReaderFixture() {
       response.end(syntheticSvg("referrer-sensitive"));
       return;
     }
+    if (url.pathname === "/protected/referer.png") {
+      const referer = String(request.headers.referer || "");
+      const expectedOrigin = `http://${request.headers.host}`;
+      const version = referer === `${expectedOrigin}/chapter/a` ? 1
+        : referer === `${expectedOrigin}/chapter/b` ? 2
+          : 0;
+      if (!version) {
+        response.writeHead(403, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+        response.end("exact fixture referer required");
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.end(syntheticPng(300, 301, version));
+      return;
+    }
+    if (url.pathname === "/protected/slow-body.png") {
+      const png = syntheticPng(300, 301, 3);
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.write(png.subarray(0, 8));
+      const timer = setTimeout(() => response.end(png.subarray(8)), 200);
+      response.once("close", () => clearTimeout(timer));
+      return;
+    }
+    if (url.pathname === "/protected/hanging-body.png") {
+      const png = syntheticPng(300, 301, 4);
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.write(png.subarray(0, 8));
+      return;
+    }
+    if (url.pathname === "/protected/disconnect-body.png") {
+      const png = syntheticPng(300, 301, 5);
+      response.writeHead(200, {
+        "Content-Type": "image/png",
+        "Content-Length": String(png.length),
+        "Cache-Control": "no-store",
+      });
+      response.write(png.subarray(0, Math.min(64, png.length)));
+      const timer = setTimeout(() => response.destroy(), 10);
+      response.once("close", () => clearTimeout(timer));
+      return;
+    }
+    if (url.pathname === "/protected/html-as-image") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end("<!doctype html><title>not an image</title>");
+      return;
+    }
+    if (url.pathname === "/protected/fake-image.png") {
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.end("not-png fixture payload");
+      return;
+    }
+    if (url.pathname === "/protected/large-body.png") {
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
+      response.write(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const chunk = Buffer.alloc(64 * 1024, 0x5a);
+      const timer = setInterval(() => response.write(chunk), 5);
+      response.once("close", () => clearInterval(timer));
+      return;
+    }
     if (url.pathname.startsWith("/png/")) {
       const width = Number(url.searchParams.get("w")) || 300;
       const height = Number(url.searchParams.get("h")) || 300;

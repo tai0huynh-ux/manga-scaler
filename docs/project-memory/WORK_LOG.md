@@ -59,3 +59,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Both regressions failed before their fixes and passed afterward. Fast verification passed 47 backend tests and 107 extension tests. The real Edge deterministic E2E passed with two `768x768` Blob replacements and settled queues. Hentaivnx HTTP/DOM discovery and Referer behavior were verified, but live chapter replacement was not proven because the final worker diagnostic became unavailable.
 - Git: Introduced by the automatic sync commit for "Live reader false-positive and browser-read settlement"; use `git log -- docs/project-memory/WORK_LOG.md` to recover its exact hash.
 - Remaining: Obtain one current public TruyenQQ reader URL and repeat worker-restart-safe live acceptance; do not claim representative live-site PASS yet.
+
+## 2026-07-18 - Protected reader transport fixture
+
+- Request: Continue Phase A1 with deterministic evidence for protected-reader Referer and response-body failure boundaries.
+- Changes: Added exact per-chapter Referer responses with distinct bytes at one URL, slow and hanging bodies, mid-body disconnect, HTTP 200 HTML, invalid PNG magic bytes, and an abortable large stream; documented the fixture matrix.
+- Invariant/decision: The fixture must reproduce transport and validation boundaries without external sites, copyrighted content, unbounded buffers, or leaked response timers. Production behavior is unchanged in this checkpoint.
+- Verification: The new tests first failed with HTTP 404 before the fixture routes existed. Focused fixture tests passed 6/6; the full repository gate passed 47 backend tests and 110 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage; the real Edge fixture E2E passed with two `768x768` Blob replacements and all queue counters at zero.
+- Git: Introduced by the automatic sync commit for the protected reader transport fixture; use `git log -- extension/tests/fixtures/reader/server.cjs` to recover its exact hash.
+- Remaining: Add failing DNR lifecycle/isolation regressions, then apply the smallest production fix and repeat real browser acceptance.

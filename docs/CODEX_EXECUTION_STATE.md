@@ -6,8 +6,9 @@
 - Active project: `manga-scaler` / AI Manga Upscaler.
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
-- Starting and recovered HEAD: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- `origin/main`: matched recovered HEAD after a successful fetch.
+- Starting recovered HEAD: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
+- Current committed HEAD before the active fixture checkpoint: `8495a7704d324a1b3108ddda985cf85ff8fc525e`.
+- `origin/main`: matched `8495a7704d324a1b3108ddda985cf85ff8fc525e` after a successful fetch.
 - Divergence: `0` local-only / `0` remote-only commits.
 - Working tree at recovery: clean; no staged, unstaged, or untracked source/test files.
 - Git integrity: `git fsck --full` passed after exactly 250 injected `desktop.ini` files were moved out of `.git` into a recoverable external backup. One unreachable blob remained and Git classified it as dangling, not corruption.
@@ -39,7 +40,16 @@
 
 ## Next exact action
 
-Obtain one current public TruyenQQ reader/chapter URL without a session token, then re-run worker-restart-safe Edge acceptance for TruyenQQ and `www.hentaivnx.live`. Do not treat guessed domains or the `truyenqq.link` WordPress/SEO shell as acceptance evidence.
+Add failing regressions for DNR rule lifecycle and concurrent same-image reads with different page Referers. Remove persistent broad Referer mutation only when the regression proves the defect, serialize or otherwise isolate exact-URL temporary rules, and prove cleanup after success, abort, body failure, and disconnect.
+
+## Protected reader transport fixture checkpoint
+
+- Exact `/chapter/a` and `/chapter/b` Referers return distinct valid PNG bytes from the same image URL; missing or incorrect Referer returns HTTP 403.
+- Slow, hanging, disconnected, invalid-MIME/body, invalid-magic, and large streaming response paths are deterministic and dependency-free.
+- The tests first failed with HTTP 404 before route implementation, then passed 6/6.
+- Full verification passed 47 backend tests and 110 extension tests with JavaScript syntax checks, Ruff, and 71% backend coverage.
+- Real Edge fixture E2E remained green with two `768x768` Blob replacements and queue size/waiting/processing all zero.
+- No production runtime behavior changes in this fixture-only checkpoint.
 
 ## Unpacked-extension E2E checkpoint
 

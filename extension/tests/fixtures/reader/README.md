@@ -37,6 +37,11 @@ The E2E gate uses an isolated temporary browser profile, loads the repository ex
 | Blob URL | `#blob-url` | Discoverable; page-owned Blob lifetime may limit reads |
 | Cross-origin image | `#cross-origin` | Supported when browser permissions/read rules allow it |
 | Cookie/referrer-sensitive image | protected endpoints | Supported through browser-context reads |
+| Exact per-reader Referer | `/protected/referer.png` | Returns distinct PNG bytes for `/chapter/a` and `/chapter/b`; rejects missing or incorrect Referer |
+| Slow or non-settling body | `/protected/slow-body.png`, `/protected/hanging-body.png` | Deterministic body-consumption abort coverage |
+| Mid-body disconnect | `/protected/disconnect-body.png` | Deterministic truncated transport failure |
+| Invalid image response | `/protected/html-as-image`, `/protected/fake-image.png` | HTTP 200 HTML and false image MIME/magic-byte coverage |
+| Large streaming response | `/protected/large-body.png` | Bounded chunk generation with client-abort cleanup |
 | Open Shadow DOM | `#shadow-host` | Not supported by the current light-DOM scanner |
 | Same-origin iframe | `#same-origin-frame` | Not supported because the content script does not run in all frames |
 | CSS background image | `#css-background` | Not supported |

@@ -59,6 +59,7 @@ Full verification runs:
 - Long-image transaction commit, rollback, sibling cancellation, and segment ordering.
 - Minimum-dimension boundaries, extreme-tall row coverage, and safe extreme-wide rejection.
 - Dependency-free local reader endpoints for responsive, lazy, dynamic, protected, cross-origin, and unsupported source categories.
+- Protected-reader transport endpoints for exact per-page Referer bytes, slow/hanging/disconnected bodies, invalid image payloads, and abortable large streams.
 - Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, Blob rendering, false-positive rejection, and queue settlement.
 - Background operation isolation, retry invalidation, cache identity, tab generation.
 - Dashboard stable keyed rows and safe preview policy.

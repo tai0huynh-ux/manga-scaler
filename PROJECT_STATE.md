@@ -7,14 +7,14 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Project: `manga-scaler` / AI Manga Upscaler.
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
-- Recovered baseline: `7b8da5616a36a7fcfbab4520a49a9211868c06f7`.
-- Automated baseline: 47 backend tests, 107 extension tests, JavaScript syntax checks, Ruff, and 71% backend coverage passed on 2026-07-18.
+- Current committed baseline: `8495a7704d324a1b3108ddda985cf85ff8fc525e`.
+- Active fixture checkpoint: the full gate passed 47 backend tests, 110 extension tests, JavaScript syntax checks, Ruff, and 71% backend coverage on 2026-07-18.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
 - Not yet proven: representative live-site acceptance, production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
 
 ## Active milestone
 
-Continue representative live-site Chrome/Edge acceptance. The deterministic Edge gate remains green, the reproduced hentaivnx reader banner false positive and non-settling browser-read boundary have regression fixes, and live chapter replacement remains blocked/unproven by CDN Referer behavior plus unstable worker diagnostics. A verified public TruyenQQ reader URL is still required.
+Continue Phase A1 protected-reader acceptance. The deterministic fixture now covers exact per-chapter Referer bytes and response-body failure modes. Next, prove DNR rule isolation and cleanup with failing regressions before changing production behavior. Live hentaivnx chapter replacement remains unproven, and a verified public TruyenQQ reader URL is still required.
 
 ## Required reading
 
