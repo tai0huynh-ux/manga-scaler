@@ -2,7 +2,7 @@
 
 ## Baseline
 
-- Verified date: 2026-07-18, Asia/Bangkok.
+- Verified date: 2026-07-19, Asia/Bangkok.
 - Branch: `main`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result on the baseline:
 
 - Backend: 47 tests passed.
-- Extension: 126 tests passed in the protected-read lifecycle gate.
+- Extension: 133 tests passed in the partial public live-reader gate.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 71%, above the 45% gate.
@@ -50,12 +50,15 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Real Edge acceptance stops and reactivates the actual MV3 worker during a stalled protected read, proves orphan cleanup and unrelated-rule preservation, and settles queue/registry/lock state.
 - Full same-tab navigation invalidates Chapter A while Chapter B discovers and renders normally with no stale registry entry or residual rule.
 - Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
+- Live Edge acceptance passed on public `truyenqqko.com` for one Manga chapter (64/64 image replacements, including two sliced images) and one Manhua chapter (3/3 replacements, including one sliced image); both runs had zero false positives, duplicate jobs, browser exceptions, and residual Referer rules.
+- Reader comment avatars using lazy `noavatar.png` are rejected as UI assets, and live-reader E2E diagnostics redact source URL values while detecting backend uptime/counter resets.
 
 ## Known limitations
 
-- Representative live-site validation is still manual.
+- Representative live-site validation is still partial: Manga and Manhua are verified on `truyenqqko.com`; no Manhwa chapter has completed the gate yet.
+- Heavy Manhwa chapters can create hundreds of long-image segment jobs. One run restarted the backend under load; another remained at 71 queued segment jobs after 240 seconds. The gate now reports these conditions instead of claiming completion.
 - `www.hentaivnx.live` reader HTML and Edge discovery were verified, but chapter replacement remains unproven: its CDN returns a redirect without Referer and a JPEG with Referer, while the final worker diagnostic did not yield a stable completion record.
-- A current public TruyenQQ reader/chapter URL is not verified; guessed or SEO-shell domains are not acceptance evidence.
+- The verified public reader is `truyenqqko.com`; guessed or SEO-shell domains such as `qqtruyen.co.uk` are not acceptance evidence.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -67,10 +70,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-1. Obtain current public TruyenQQ Manga, Manhwa, and Manhua reader/chapter URLs without session tokens.
-2. Run sanitized Edge DOM-replacement acceptance on those readers and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.
-3. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
-4. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
-5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
+1. Complete a bounded Manhwa acceptance on a representative chapter after addressing heavy segmentation throughput/backend restart behavior.
+2. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
+3. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
+4. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

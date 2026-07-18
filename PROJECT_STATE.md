@@ -14,7 +14,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-Continue Phase A1 with live-reader acceptance. The deterministic lifecycle gate now proves owned orphan cleanup, unrelated-rule preservation, actual MV3 worker stop/reactivation, full navigation cancellation, automatic extension-reload recovery, zero duplicate replacements, and settled queues/rules. Live hentaivnx chapter replacement remains unproven, and a verified public TruyenQQ reader URL is still required.
+Continue Phase A1 with live-reader acceptance. Manga and Manhua chapters on the current public `truyenqqko.com` reader passed sanitized Edge DOM-replacement gates. Heavy Manhwa chapters still need a bounded throughput/restart fix before representative live-site PASS; live hentaivnx replacement remains unproven.
 
 ## Required reading
 

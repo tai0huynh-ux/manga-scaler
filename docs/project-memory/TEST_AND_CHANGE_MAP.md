@@ -66,6 +66,7 @@ Full verification runs:
 - Background-provider initialization cleanup for interrupted temporary and legacy Referer session rules.
 - Rule-ownership preservation, ID collision avoidance, delayed-startup races, URL normalization, redirect matching, cancellation, and timeout lock release.
 - Real Edge MV3 worker stop/reactivation, full navigation invalidation, and unpacked-extension reload with automatic content recovery.
+- Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
 - Dashboard stable keyed rows and safe preview policy.
 
 ## Manual gaps

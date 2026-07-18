@@ -22,7 +22,8 @@
 - GPU/VRAM trace sampling is not implemented.
 - Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
 - Hentaivnx live chapter replacement remains unproven. Its sampled CDN requires Referer, and the final worker diagnostic was not stable enough to claim a completed replacement after the timeout fix.
-- A current public TruyenQQ reader URL is still unverified.
+- `truyenqqko.com` is the currently verified public reader; Manga and Manhua pass, while heavy Manhwa throughput remains unresolved.
+- Current public `truyenqqko.com` Manga and Manhua chapters pass live replacement, but heavy Manhwa chapters can exceed the bounded gate or restart the backend while processing hundreds of long-image segments; representative Manhwa PASS remains open.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - Browser-level extension behavior still requires manual verification on representative manga sites.

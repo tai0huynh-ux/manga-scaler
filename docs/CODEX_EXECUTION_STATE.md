@@ -40,7 +40,7 @@
 
 ## Next exact action
 
-Run representative live-reader acceptance on current public TruyenQQ Manga/Manhwa/Manhua chapters, then hentaivnx when no external challenge blocks automation. Require stable DOM Blob replacement, zero false-positive chrome, zero duplicate/stale work, settled queues, and no temporary Referer rules.
+Manga and Manhua live-reader gates are green on current public `truyenqqko.com` chapters. Complete a bounded Manhwa gate after addressing heavy segmentation throughput/backend restart behavior, then retry hentaivnx when no external challenge blocks automation. Require stable DOM Blob replacement, zero false-positive chrome, zero duplicate/stale work, settled queues, and no temporary Referer rules.
 
 ## Protected-read lifecycle acceptance checkpoint
 

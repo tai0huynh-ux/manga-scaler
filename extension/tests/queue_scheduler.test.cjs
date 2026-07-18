@@ -361,9 +361,9 @@ function loadContentClasses(options = {}) {
   };
 }
 
-function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, sendMessage = undefined } = {}) {
+function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, createElement = undefined, sendMessage = undefined } = {}) {
   const traceEvents = [];
-  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, sendMessage, traceEvents });
+  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, createElement, sendMessage, traceEvents });
   const viewportProvider = new ViewportImageProvider({
     imageProvider: imageProvider || {
       canProcess: () => true,
@@ -2281,6 +2281,42 @@ test("DISCOVERY-002 candidate evaluator rejects reader chrome outside explicit p
   assert.equal(imageProvider.canProcess(chapter), true);
 });
 
+test("reader chrome detection walks nested reading-detail ancestors", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const reader = {
+    classList: { contains: (name) => name === "reading-detail" || name === "box_doc" },
+    querySelector: (selector) => selector === ".page-chapter img" ? {} : null,
+  };
+  const banner = makeTallImage("nested-reader-chrome");
+  banner.parentElement = { parentElement: reader };
+  banner.closest = (selector) => selector === ".reading-detail.box_doc" ? reader : null;
+
+  assert.equal(imageProvider.canProcess(banner), false);
+});
+
+test("candidate evaluator rejects lazy comment noavatar assets", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const avatar = makeTallImage("comment-avatar");
+  avatar.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///w==";
+  avatar.currentSrc = "https://static.example.test/images/noavatar.png";
+  avatar.className = "lazy-image";
+  avatar.closest = (selector) => selector.includes(".avartar-comment") ? { tagName: "FIGURE" } : null;
+
+  assert.equal(imageProvider.canProcess(avatar), false);
+});
+
 test("candidate evaluator rejects fixed banner overlays", () => {
   const banner = makeTallImage("banner");
   banner.naturalHeight = 500;
@@ -2515,6 +2551,79 @@ test("raw slice load error rolls back DOM and falls back to the full image", asy
   assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_FALLBACK").length, 1);
   assert.deepEqual(sentMessages.filter((message) => message.type === "REMOVE_IMAGE"), []);
   assert.deepEqual(urlApi.revoked, ["blob:segment-0"]);
+});
+
+test("raw slicing supports HTMLElement dataset getters through segment registration", async () => {
+  const rawImages = [];
+  const readonlyDataset = (element) => {
+    const dataset = element.dataset || {};
+    Object.defineProperty(element, "dataset", {
+      configurable: true,
+      enumerable: true,
+      get: () => dataset,
+    });
+    return element;
+  };
+  const createElement = () => readonlyDataset({
+    style: {},
+    children: [],
+    appendChild(child) {
+      this.children.push(child);
+      child.parentNode = this;
+    },
+    remove() {
+      this.parentNode?.removeChild?.(this);
+      this.parentNode = null;
+    },
+  });
+  const classes = loadContentClasses({
+    createElement,
+    onImageCreated: (rawImage) => rawImages.push(readonlyDataset(rawImage)),
+  });
+  const renderer = new classes.Renderer();
+  renderer.waitForImageLoad = async () => undefined;
+  const viewportProvider = new classes.ViewportImageProvider({
+    imageProvider: {
+      canProcess: () => true,
+      read: (image) => ({
+        imageUrl: image.src,
+        src: image.src,
+        srcset: null,
+        sizes: null,
+        width: image.clientWidth,
+        height: image.clientHeight,
+        pictureSources: [],
+      }),
+    },
+    renderer,
+  });
+  viewportProvider.imageSlicingEnabled = true;
+  viewportProvider.imageSliceMaxHeight = 1000;
+  viewportProvider.readDisplayedImage = async () => "image-data";
+  viewportProvider.cropImageSegments = async () => [{
+    index: 0,
+    sourceY: 0,
+    sourceHeight: 1000,
+    renderedHeight: 1000,
+    objectUrl: "blob:readonly-dataset",
+    imageData: "segment-data",
+  }];
+  const image = makeTallImage("readonly-dataset");
+  image.parentNode = {
+    insertBefore(wrapper) {
+      wrapper.parentNode = this;
+    },
+    removeChild(wrapper) {
+      wrapper.parentNode = null;
+    },
+  };
+
+  await viewportProvider.schedule(image);
+
+  const segmentMessages = classes.sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && message.cacheVariant?.startsWith("segment-"));
+  assert.equal(segmentMessages.length, 1, JSON.stringify(classes.sentMessages));
+  assert.equal(rawImages[0].dataset.aiEnhancerImageId, segmentMessages[0].imageId);
+  assert.equal(image.dataset.aiEnhancerSliced, "true");
 });
 
 test("raw slice rollback removes active object URLs and is idempotent", () => {
