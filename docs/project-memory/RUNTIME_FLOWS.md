@@ -18,7 +18,7 @@ DOM discovery
   -> fixed/cache
 ```
 
-Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. A discovered offscreen image remains `seen` until it enters the prefetch margin or is selected by the bounded ahead-processing window. The window is limited by `aheadProcessingImageLimit`, selects the nearest eligible images, and retains its keys until those images enter normal prefetch or are cancelled.
+Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. After initial DOM discovery, each page runs one ahead-processing pass limited by `aheadProcessingImageLimit` and selects the nearest eligible offscreen images. That pass never repeats for later mutations, intersections, scrolls, resizes, or settings refreshes. Any image not selected by the initial pass remains `seen` until it enters the normal prefetch margin; operation and completed-key guards suppress duplicate work.
 
 ## Identity model
 

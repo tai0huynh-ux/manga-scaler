@@ -672,6 +672,7 @@ class ViewportImageProvider {
     this.aheadProcessingImageLimit = AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit;
     this.prefetchMarginPx = AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
     this.aheadProcessingKeys = new Map();
+    this.aheadProcessingCompleted = false;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
     this.imageSliceMaxWidth = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
@@ -728,6 +729,7 @@ class ViewportImageProvider {
       ? Number(stored.prefetchMarginPx)
       : AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
     this.observeExistingImages();
+    this.runInitialAheadProcessing();
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -879,8 +881,6 @@ class ViewportImageProvider {
       });
       if (this.isWithinPrefetch(image)) {
         this.schedule(image, true, { allowPrefetch: true });
-      } else {
-        this.scheduleAheadProcessing();
       }
     };
     reportSeen();
@@ -914,7 +914,6 @@ class ViewportImageProvider {
             this.deferPreprocessingOperation(existing, "cancelled-outside-prefetch");
           }
         }
-        this.scheduleAheadProcessing();
       }
     }
   }
@@ -2282,11 +2281,18 @@ class ViewportImageProvider {
         }
       }
     });
-    this.scheduleAheadProcessing();
     this.drainPreprocessingQueue();
   }
 
+  runInitialAheadProcessing() {
+    if (this.aheadProcessingCompleted) return false;
+    this.scheduleAheadProcessing();
+    this.aheadProcessingCompleted = true;
+    return true;
+  }
+
   scheduleAheadProcessing() {
+    if (this.aheadProcessingCompleted) return;
     for (const [baseKey, image] of this.aheadProcessingKeys.entries()) {
       const isCurrent = image?.dataset?.aiEnhancerKey === baseKey;
       const isAttached = !document.documentElement?.contains || document.documentElement.contains(image);
