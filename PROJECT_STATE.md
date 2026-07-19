@@ -16,6 +16,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Clean live-reader acceptance is green on TruyenQQ Manga (`22/22`), Manhwa (`75/75`), Manhua (`26/26`), and hentaivnx (`16/16`); deterministic geometry tests cover the 300 px boundary, `512x16384`/`768x32768` tall slicing, and safe `16384x512`/`32768x768` wide rejection.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
 - Not yet proven: production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
+- Real Edge geometry gate now covers `768x32768`: vertical slicing produced 55 raw slices with 55/55 Blob commits, one source DOM node, and settled backend queue.
 
 - Main integration is intentionally pending until the bounded Hive/Manhwa decision and exact hentaivnx external blocker are recorded.
 

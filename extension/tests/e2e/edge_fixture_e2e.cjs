@@ -68,6 +68,10 @@ class CdpClient {
       if (message.error) pending.reject(new Error(message.error.message));
       else pending.resolve(message.result);
     });
+    this.socket.addEventListener("close", () => {
+      for (const pending of this.pending.values()) pending.reject(new Error("CDP target disconnected."));
+      this.pending.clear();
+    });
     return this;
   }
 
@@ -223,6 +227,7 @@ async function main() {
   let pageClient = null;
   let browserClient = null;
   let dashboardClient = null;
+  let geometryClient = null;
   const workerClients = [];
 
   try {
@@ -589,6 +594,44 @@ async function main() {
     dashboardClient.close();
     dashboardClient = null;
     await browserClient.send("Target.closeTarget", { targetId: createdDashboard.targetId });
+
+    const geometryTargetCreated = await browserClient.send("Target.createTarget", { url: `${fixture.origin}/geometry-e2e` });
+    const geometryTarget = await waitFor("extreme geometry fixture target", async () => {
+      const currentTargets = await listTargets(port);
+      return currentTargets.find((target) => target.id === geometryTargetCreated.targetId && target.webSocketDebuggerUrl) || null;
+    }, 20000);
+    geometryClient = await connectTarget(geometryTarget);
+    await geometryClient.send("Page.enable");
+    const geometryState = await waitFor("real 768x32768 DOM render", async () => geometryClient.evaluate(`(() => {
+      const image = document.querySelector('#eligible-extreme');
+      const wrapper = image?.previousElementSibling?.classList.contains('ai-enhancer-slice-wrapper') ? image.previousElementSibling : null;
+      const rawSlices = wrapper ? [...wrapper.querySelectorAll('img.ai-enhancer-raw-slice')] : [];
+      const direct = Boolean(image?.classList.contains('ai-manga-upscaler-ready') && image.src.startsWith('blob:'));
+      const sliced = Boolean(image?.dataset.aiEnhancerSliced === 'true' && rawSlices.length > 1 && rawSlices.every((raw) => raw.classList.contains('ai-manga-upscaler-ready') && raw.src.startsWith('blob:')));
+      return image && (direct || sliced) ? {
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        direct,
+        sliced,
+        rawSlices: rawSlices.length,
+        readyRawSlices: rawSlices.filter((raw) => raw.classList.contains('ai-manga-upscaler-ready')).length,
+        imageCount: document.querySelectorAll('#eligible-extreme').length,
+      } : null;
+    })()`), 180000);
+    assert.equal(geometryState.width, 768);
+    assert.equal(geometryState.height, 32768);
+    assert.equal(geometryState.imageCount, 1);
+    assert.equal(geometryState.direct, false, "768x32768 must use vertical slicing in the browser");
+    assert.equal(geometryState.sliced, true);
+    assert.equal(geometryState.readyRawSlices, geometryState.rawSlices);
+    const geometryHealth = await waitFor("extreme geometry backend settlement", async () => {
+      const health = await readHealth();
+      return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 ? health : null;
+    }, 180000);
+    const geometryEvidence = { ...geometryState, queue: geometryHealth.queue };
+    geometryClient.close();
+    geometryClient = null;
+    await browserClient.send("Target.closeTarget", { targetId: geometryTargetCreated.targetId });
     initialWorkerClient.close();
 
     const lifecycleEvidence = {};
@@ -761,12 +804,14 @@ async function main() {
       dynamicOutput: [pageState.state.dynamicImage.naturalWidth, pageState.state.dynamicImage.naturalHeight],
       queue: pageState.health.queue,
       dashboard: dashboardEvidence,
+      geometry: geometryEvidence,
       lifecycle: lifecycleEvidence,
       browserExceptions: browserExceptions.length,
     }, null, 2));
   } finally {
     for (const client of workerClients) client.close();
     dashboardClient?.close();
+    geometryClient?.close();
     browserClient?.close();
     pageClient?.close();
     await fixture.close();

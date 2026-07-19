@@ -181,3 +181,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: The shared 300 px minimum remains exact, every tall source row is represented once, and unsafe extreme-wide images are rejected without invoking vertical slicing. No production behavior changed, and no real-browser `32768`-pixel render is claimed.
 - Verification: Focused geometry tests passed `3/3`; fixture tests passed `7/7`; full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% coverage. Real Edge fixture/lifecycle E2E passed with queue/rules settled and zero duplicate replacements, stale navigation entries, or browser exceptions. Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans returned zero findings; `git fsck --full` succeeded with dangling objects only.
 - Remaining: Start the Processing Monitor checkpoint with a fresh branch/worktree/ancestry preflight and direct Dashboard browser E2E acceptance.
+
+## 2026-07-19 - Real-browser extreme geometry acceptance
+
+- Request: Complete the next documented geometry checkpoint after Processing Monitor integration.
+- Changes: Added a dedicated `/geometry-e2e` deterministic reader page containing a real `768x32768` PNG, a focused fixture regression, and an Edge target that waits for the actual vertical-slice Blob DOM commit and backend settlement.
+- Invariant/decision: The extreme image must remain one source DOM node, must not be treated as a direct replacement, and every raw slice must commit as a ready Blob before the browser gate passes. Interrupted repeated runs may leave heavy backend work queued and are not counted as acceptance.
+- Verification: Focused reader fixture tests passed 9/9; full extension suite passed 180 tests; backend passed 52 tests; Ruff and 72% coverage passed. A clean Edge run passed `768x32768` with 55 raw slices, 55/55 ready Blob replacements, one source node, zero browser exceptions, and settled queue state.
+- Git: Pending feature checkpoint commit and fast-forward integration into `main`; no main files changed in this change set yet.
+- Remaining: Expand backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.

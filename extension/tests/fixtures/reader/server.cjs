@@ -141,6 +141,21 @@ function e2eReaderHtml() {
 </html>`;
 }
 
+function geometryE2eReaderHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Manga Upscaler Extreme Geometry Fixture</title>
+  <style>body { margin: 0; background: #ece6da; } img { display: block; width: 768px; height: auto; }</style>
+</head>
+<body data-fixture="geometry-e2e-v1">
+  <main><img id="eligible-extreme" src="/png/geometry-768x32768.png?w=768&amp;h=32768" width="768" height="32768"></main>
+</body>
+</html>`;
+}
+
 function lifecycleReaderHtml(lifecycleCase, imagePath, { recoveryButton = false } = {}) {
   return `<!doctype html>
 <html lang="en">
@@ -250,6 +265,11 @@ async function startReaderFixture() {
     if (url.pathname === "/e2e") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       response.end(e2eReaderHtml());
+      return;
+    }
+    if (url.pathname === "/geometry-e2e") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(geometryE2eReaderHtml());
       return;
     }
     if (url.pathname === "/lifecycle/worker") {

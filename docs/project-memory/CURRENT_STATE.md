@@ -73,7 +73,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Hive 293 reached 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images. Manhua 320 reached 26/26 replacements but earlier runs exposed reader-chrome tracking/avatar false positives.
 - The local backend became unresponsive after repeated live runs; hentaivnx and a clean Manga rerun remain unverified.
 - Live-site acceptance is point-in-time and may drift with external markup, advertisements, CDN policy, or anti-bot changes.
-- A real-browser render of the new `768x32768` geometry case is not yet covered; its row-complete slicing contract is proven at the focused test boundary.
+- Real Edge rendered the `768x32768` geometry case through vertical slicing with 55 raw slices and 55/55 ready Blob replacements; repeated interrupted runs can leave heavy backend work queued and are not acceptance evidence.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.

@@ -55,6 +55,19 @@ test("deterministic reader fixture exposes a focused unpacked-extension E2E page
   }
 });
 
+test("deterministic reader fixture exposes the extreme geometry browser page", async (context) => {
+  const fixture = await startReaderFixture();
+  context.after(() => fixture.close());
+
+  const response = await fetch(`${fixture.origin}/geometry-e2e`);
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /data-fixture="geometry-e2e-v1"/);
+  assert.match(html, /id="eligible-extreme"/);
+  assert.match(html, /geometry-768x32768\.png\?w=768&amp;h=32768/);
+});
+
 test("deterministic reader fixture exposes worker, navigation, and reload lifecycle pages", async (context) => {
   const fixture = await startReaderFixture();
   context.after(() => fixture.close());
