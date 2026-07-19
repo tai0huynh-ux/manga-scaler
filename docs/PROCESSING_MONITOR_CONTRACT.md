@@ -1,13 +1,13 @@
 # Processing Monitor contract
 
-This document maps the verified 2026-07-19 runtime before the monitor is wired into production. A row marked `not emitted` must remain indeterminate in the Dashboard; its name must not be presented as active work merely because the backend contains a related capability.
+This document maps the verified 2026-07-19 runtime after monitor wiring and Dashboard browser acceptance. A row marked `not emitted` must remain indeterminate in the Dashboard; its name must not be presented as active work merely because the backend contains a related capability.
 
 ## Lifecycle ownership
 
 | Stage | Owner | Input | Output | Identifier | Error path | Cancellation path | Current coverage |
 |---|---|---|---|---|---|---|---|
 | Content discovery / `DETECTED` | content script | eligible DOM `img` | `IMAGE_SEEN` registry record | `tabId`, `imageId`, `operationId`, source revision | candidate rejected or preprocessing error | removal, navigation, disable | queue scheduler and Edge fixture/live-reader tests |
-| Viewport wait / `WAITING_FOR_VIEWPORT` | content script | detected offscreen image | retained `seen` operation | image and operation identity | removal or source change | removal, navigation, disable | viewport scheduling tests; monitor event not wired yet |
+| Viewport wait / `WAITING_FOR_VIEWPORT` | content script | detected offscreen image | retained `seen` operation | image and operation identity | removal or source change | removal, navigation, disable | viewport scheduling and Dashboard browser tests |
 | Source acquisition / `READING_SOURCE` | content plus background browser reader | displayed `currentSrc` | browser-owned bytes | operation, source revision | timeout, HTTP, MIME/magic, abort | preprocessing signal and background fetch abort | protected-reader and queue tests |
 | Source validation / `VALIDATING_SOURCE` | content script | acquired bytes and DOM metadata | fingerprint and enqueue payload | `sourceFingerprint` | empty/invalid/non-image/size/slice failures | preprocessing signal | source-read and slicing regressions |
 | Queue admission / `QUEUED` | background scheduler | `ENQUEUE_IMAGE` | operation-keyed pending job | `queueKey = tabId:imageId:operationId` | disabled, stale generation, invalid identity | explicit cancel, tab cleanup, cancel-all | queue scheduler tests |

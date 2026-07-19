@@ -107,20 +107,31 @@ function renderMonitor(snapshot, pageImages = [], stats = {}) {
   const stageValues = [...new Set(jobs.map((job) => job.stage).filter(Boolean))].sort();
   const modeValues = [...new Set(jobs.map((job) => job.mode).filter(Boolean))].sort();
   const providerValues = [...new Set(jobs.map((job) => job.provider).filter(Boolean))].sort();
+  const siteValues = [...new Set(jobs.map((job) => job.source?.hostname).filter(Boolean))].sort();
+  const tabValues = [...new Set(jobs.map((job) => String(job.tabId)).filter(Boolean))].sort((left, right) => Number(left) - Number(right));
   updateMonitorOptions("monitorStageFilter", stageValues);
   updateMonitorOptions("monitorModeFilter", modeValues);
   updateMonitorOptions("monitorProviderFilter", providerValues);
+  updateMonitorOptions("monitorSiteFilter", siteValues);
+  updateMonitorOptions("monitorTabFilter", tabValues);
   const filtered = jobs.filter((job) => {
     const statusFilter = monitorFilterValue("monitorStatusFilter");
     const stageFilter = monitorFilterValue("monitorStageFilter");
     const modeFilter = monitorFilterValue("monitorModeFilter");
     const providerFilter = monitorFilterValue("monitorProviderFilter");
     const cacheFilter = monitorFilterValue("monitorCacheFilter");
+    const siteFilter = monitorFilterValue("monitorSiteFilter");
+    const tabFilter = monitorFilterValue("monitorTabFilter");
+    const searchFilter = String(document.getElementById("monitorSearchFilter")?.value || "").trim().toLowerCase();
+    const searchableIdentity = [job.jobId, job.imageId, job.operationId, job.traceId].filter(Boolean).join(" ").toLowerCase();
     return (statusFilter === "ALL" || (statusFilter === "ACTIVE" ? job.status !== "TERMINAL" : job.stage === statusFilter)) &&
       (stageFilter === "ALL" || job.stage === stageFilter) &&
       (modeFilter === "ALL" || job.mode === modeFilter) &&
       (providerFilter === "ALL" || job.provider === providerFilter) &&
-      (cacheFilter === "ALL" || job.cache === cacheFilter);
+      (cacheFilter === "ALL" || job.cache === cacheFilter) &&
+      (siteFilter === "ALL" || job.source?.hostname === siteFilter) &&
+      (tabFilter === "ALL" || String(job.tabId) === tabFilter) &&
+      (!searchFilter || searchableIdentity.includes(searchFilter));
   });
   const table = document.getElementById("monitorJobs");
   const empty = document.getElementById("monitorEmpty");
@@ -576,12 +587,16 @@ imageSettingIds.forEach((id) => {
 });
 [
   "monitorStatusFilter", "monitorStageFilter", "monitorModeFilter", "monitorProviderFilter", "monitorCacheFilter",
+  "monitorSiteFilter", "monitorTabFilter",
 ].forEach((id) => document.getElementById(id).addEventListener("change", () => renderMonitor(monitorSnapshot || { jobs: [] })));
+document.getElementById("monitorSearchFilter").addEventListener("input", () => renderMonitor(monitorSnapshot || { jobs: [] }));
 document.getElementById("refreshMonitor").addEventListener("click", refresh);
-document.getElementById("clearMonitorHistory").addEventListener("click", async () => {
-  await chrome.runtime.sendMessage({ type: "CLEAR_PROCESSING_HISTORY" });
-  selectedMonitorKey = null;
-  await refresh();
+[["clearMonitorCompleted", "COMPLETED"], ["clearMonitorFailed", "FAILED"]].forEach(([id, stage]) => {
+  document.getElementById(id).addEventListener("click", async () => {
+    await chrome.runtime.sendMessage({ type: "CLEAR_PROCESSING_HISTORY", stage });
+    selectedMonitorKey = null;
+    await refresh();
+  });
 });
 document.getElementById("exportMonitor").addEventListener("click", () => {
   const payload = JSON.stringify(monitorSnapshot || { jobs: [] }, null, 2);

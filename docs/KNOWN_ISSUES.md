@@ -29,4 +29,4 @@
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - Browser-level extension behavior still requires manual verification on representative manga sites.
-- Hentaivnx and a clean post-fix Manga run remain unverified; do not promote this checkpoint to live-site PASS.
+- Hentaivnx and a clean post-fix Manga run remain unverified; an exact root probe of `https://hentaivnx.live` failed with an external `fetch failed` before reader discovery, so do not promote this checkpoint to live-site PASS.

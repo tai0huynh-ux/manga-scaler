@@ -2388,7 +2388,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         type: "RETRY_IMAGE",
         imageId: message.imageId,
         operationId: message.operationId,
-      }).then((response) => sendResponse({ retried: Boolean(response?.retried) })).catch(() => sendResponse({ retried: false, reason: "Content tab unavailable." }));
+      }).then(async (response) => {
+        if (!response?.retried || !response.operationId) {
+          sendResponse({ retried: false, reason: "Content image is no longer retryable." });
+          return;
+        }
+        const retry = processingMonitor.createRetry(
+          tabId,
+          message.imageId,
+          message.operationId,
+          response.operationId,
+        );
+        await persistProcessingMonitor();
+        sendResponse({
+          retried: retry.accepted,
+          operationId: response.operationId,
+          traceId: response.traceId || null,
+          reason: retry.accepted ? null : retry.reason,
+        });
+      }).catch(() => sendResponse({ retried: false, reason: "Content tab unavailable." }));
     });
     return true;
   }

@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
 
 - Backend: 52 tests passed.
-- Extension: 148 tests passed.
+- Extension: 172 tests passed, including real Dashboard browser interaction and 500-job load acceptance.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 72%, above the 45% gate.
@@ -58,6 +58,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
+- Dashboard browser acceptance now proves summary counts, status/stage/site/tab/search filters, sanitized 422 details/export, linked retry attempts, real queue/backend cancellation, terminal clearing, reload recovery, and 500 synthetic-job render/filter/detail latency.
 
 ## Known limitations
 
@@ -83,9 +84,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 Live-reader checkpoint (2026-07-19): clean Manga 1188 reached 64/64 stable Blob replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and settled queue/DNR state. Hive 293 remained 66/75 (88%) with nine bottom reader images left in `seen` after controlled viewport passes; Manhua and hentaivnx remain unverified. Extreme-image work is intentionally blocked until this live gate is green.
 
-1. Add real Dashboard E2E assertions for persistence, filters, details, cancel/retry, clear, export, and reload.
-2. Add a 500-job browser-render load gate and verify filter/detail latency and bounded retention.
-3. Repair the nine detected-but-unreplaced Hive images and rerun Manhwa throughput with a clean backend.
-4. Re-run `www.hentaivnx.live` acceptance or record the exact external blocker.
+1. Repair the nine detected-but-unreplaced Hive images and rerun Manhwa throughput with a clean backend.
+2. Re-run `www.hentaivnx.live` acceptance or preserve the exact external fetch/challenge blocker.
+3. Integrate the green feature branch into `main` only after the live-site decision is recorded.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

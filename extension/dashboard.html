@@ -18,7 +18,10 @@
           <label>Mode<select id="monitorModeFilter"><option value="ALL">All</option></select></label>
           <label>Provider<select id="monitorProviderFilter"><option value="ALL">All</option></select></label>
           <label>Cache<select id="monitorCacheFilter"><option value="ALL">All</option><option value="HIT">Hit</option><option value="MISS">Miss</option><option value="UNKNOWN">Unknown</option></select></label>
-          <button id="exportMonitor" type="button">Export sanitized diagnostics</button><button id="clearMonitorHistory" type="button">Clear terminal history</button>
+          <label>Site<select id="monitorSiteFilter"><option value="ALL">All</option></select></label>
+          <label>Tab<select id="monitorTabFilter"><option value="ALL">All</option></select></label>
+          <label>Search<input id="monitorSearchFilter" type="search" placeholder="Job or trace ID"></label>
+          <button id="exportMonitor" type="button">Export sanitized diagnostics</button><button id="clearMonitorCompleted" type="button">Clear completed</button><button id="clearMonitorFailed" type="button">Clear failed</button>
         </div>
         <div class="monitor-layout">
           <div class="monitor-table-wrap"><table class="monitor-table"><thead><tr><th>Image</th><th>Stage</th><th>Status</th><th>Elapsed</th><th>Input</th><th>Cache</th><th>Error</th><th>Actions</th></tr></thead><tbody id="monitorJobs"></tbody></table><p id="monitorEmpty" class="muted">No processing records yet.</p></div>

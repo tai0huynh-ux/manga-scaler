@@ -2367,7 +2367,13 @@ class ViewportImageProvider {
     }
     delete image.dataset.aiEnhancerOperationId;
     delete image.dataset.aiEnhancerTraceId;
-    return Boolean(this.schedule(image, true, { allowPrefetch: true }));
+    this.schedule(image, true, { allowPrefetch: true });
+    const newOperationId = image.dataset.aiEnhancerOperationId || null;
+    return {
+      retried: Boolean(newOperationId && newOperationId !== operationId),
+      operationId: newOperationId,
+      traceId: image.dataset.aiEnhancerTraceId || null,
+    };
   }
 
   cleanupRemovedNode(node) {
@@ -2533,8 +2539,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "RETRY_IMAGE") {
-    const retried = viewportProvider.retryImage(message.imageId, message.operationId);
-    sendResponse({ retried });
+    sendResponse(viewportProvider.retryImage(message.imageId, message.operationId));
     return false;
   }
 

@@ -53,7 +53,7 @@ Repair and re-run the live reader gate with a clean isolated backend. Hive still
 - Commit/push: `f0da83c7c94d796b0e240d02d4945ef7d190133d` reached `origin/main` with zero divergence.
 - Live-site URL acceptance was not rerun because `AI_MANGA_LIVE_URL` was not supplied; the deterministic contract-equivalent fixture is the current runtime proof.
 
-Processing Monitor synchronization is now in progress on `codex/live-reader-acceptance-c518`; direct Dashboard browser interaction/load acceptance must pass before integration into `main`.
+Processing Monitor synchronization is now in progress on `codex/live-reader-acceptance-c518`; direct Dashboard browser interaction/load acceptance passed after the normal merge from current `origin/main`. Main integration remains pending the live-site decision.
 
 ## Protected-read lifecycle acceptance checkpoint
 

@@ -220,6 +220,7 @@ async function main() {
   let browserProcess = null;
   let pageClient = null;
   let browserClient = null;
+  let dashboardClient = null;
   const workerClients = [];
 
   try {
@@ -301,10 +302,291 @@ async function main() {
     }
     assert.ok(pageState.health.queue.completed >= healthBefore.queue.completed + 2);
     const monitorState = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
+    const dashboardEvidence = {};
     const completedMonitorJobs = monitorState.jobs.filter((job) => job.stage === "COMPLETED");
     assert.ok(completedMonitorJobs.length >= 2, "monitor must record DOM-committed completions");
     assert.ok(completedMonitorJobs.every((job) => job.renderCommit?.confirmed === true), "monitor completion must include renderer confirmation");
     assert.equal(JSON.stringify(monitorState).includes("imageData"), false, "monitor snapshot must exclude image bytes");
+
+    const retrySource = completedMonitorJobs[0];
+    const dashboardSeed = await initialWorkerClient.evaluate(`(async () => {
+      processingMonitor.clearTerminal();
+      const tabId = ${JSON.stringify(retrySource.tabId)};
+      const now = Date.now() - 10000;
+      let sequence = 0;
+      const emit = (identity, stage, extra = {}) => processingMonitor.ingest(AI_PROCESSING_MONITOR.createEvent({
+        tabId,
+        imageId: identity.imageId,
+        operationId: identity.operationId,
+        jobId: identity.jobId || tabId + ':' + identity.imageId + ':' + identity.operationId,
+        traceId: identity.traceId,
+        sourceUrl: identity.sourceUrl || 'https://cdn.example.test/chapter/page.jpg?token=secret&part=1',
+        sourceFingerprint: identity.sourceFingerprint || 'sha256-dashboard-fixture',
+        stage,
+        timestamp: new Date(now + (++sequence * 10)).toISOString(),
+        mode: extra.mode || 'manga',
+        provider: extra.provider || 'DmlExecutionProvider',
+        model: extra.model || 'anime_x4',
+        cache: extra.cache || 'MISS',
+        retryCount: extra.retryCount || 0,
+        input: extra.input || { width: 900, height: 1400, mime: 'image/jpeg', sourceKind: 'browser-owned-bytes' },
+        output: extra.output || null,
+        renderCommit: extra.renderCommit || null,
+        error: extra.error || null,
+        metadata: extra.metadata || {},
+      }));
+      const lifecycle = (identity, terminal, extra = {}) => {
+        for (const stage of ['DETECTED', 'READING_SOURCE', 'VALIDATING_SOURCE', 'QUEUED', 'SENDING_TO_BACKEND']) emit(identity, stage, extra);
+        if (terminal === 'COMPLETED') {
+          emit(identity, 'RECEIVING_RESULT', extra);
+          emit(identity, 'PREPARING_RENDER', extra);
+          emit(identity, 'RENDERING', extra);
+          emit(identity, 'COMPLETED', { ...extra, renderCommit: { confirmed: true, committedAt: new Date(now + (++sequence * 10)).toISOString() }, output: { width: 1800, height: 2800, mime: 'image/webp', byteLength: 123456 } });
+        } else {
+          emit(identity, terminal, extra);
+        }
+      };
+      lifecycle({ imageId: 'dash-completed', operationId: 'dash-completed-op', traceId: 'trace-dashboard-completed' }, 'COMPLETED');
+      lifecycle({ imageId: 'dash-cache', operationId: 'dash-cache-op', traceId: 'trace-dashboard-cache' }, 'COMPLETED', { cache: 'HIT' });
+      lifecycle({ imageId: ${JSON.stringify(retrySource.imageId)}, operationId: ${JSON.stringify(retrySource.operationId)}, traceId: ${JSON.stringify(retrySource.traceId)} }, 'FAILED', {
+        error: { errorCode: 'BACKEND_UNAVAILABLE', category: 'NETWORK', message: 'Temporary backend outage.', status: 503, retryable: true },
+      });
+      lifecycle({ imageId: 'dash-422', operationId: 'dash-422-op', traceId: 'trace-dashboard-422' }, 'FAILED', {
+        error: { errorCode: 'REQUEST_VALIDATION_FAILED', category: 'BACKEND_CONTRACT', message: 'Output width is below backend minimum.', status: 422, field: 'maxOutputWidth', retryable: false },
+      });
+      emit({ imageId: 'dash-cancelled', operationId: 'dash-cancelled-op', traceId: 'trace-dashboard-cancelled' }, 'DETECTED');
+      emit({ imageId: 'dash-cancelled', operationId: 'dash-cancelled-op', traceId: 'trace-dashboard-cancelled' }, 'CANCELLED', {
+        error: { errorCode: 'JOB_CANCELLED', category: 'CANCELLATION', message: 'Cancelled fixture.', retryable: true },
+      });
+      emit({ imageId: 'dash-timeout', operationId: 'dash-timeout-op', traceId: 'trace-dashboard-timeout' }, 'DETECTED');
+      emit({ imageId: 'dash-timeout', operationId: 'dash-timeout-op', traceId: 'trace-dashboard-timeout' }, 'TIMED_OUT', {
+        error: { errorCode: 'PROCESSING_TIMEOUT', category: 'TIMEOUT', message: 'Timed out fixture.', status: 504, retryable: true },
+      });
+      const cancelJob = {
+        tabId, imageId: 'dash-active-cancel', operationId: 'dash-active-cancel-op', traceId: 'trace-dashboard-active-cancel',
+        queueKey: tabId + ':dash-active-cancel:dash-active-cancel-op', attempt: 1, imageUrl: 'https://cdn.example.test/chapter/slow.jpg?token=private',
+        sourceFingerprint: 'sha256-dashboard-cancel', mode: 'manga', pageOrder: 99, viewportDistance: 0,
+      };
+      emit(cancelJob, 'DETECTED');
+      emit(cancelJob, 'READING_SOURCE');
+      emit(cancelJob, 'VALIDATING_SOURCE');
+      emit(cancelJob, 'QUEUED');
+      globalThis.__dashboardBackendCancelCalls = 0;
+      const cancelBackendJob = upscaleProvider.cancel.bind(upscaleProvider);
+      upscaleProvider.cancel = (jobId) => {
+        globalThis.__dashboardBackendCancelCalls += 1;
+        return cancelBackendJob(jobId);
+      };
+      scheduler.active.set(cancelJob.queueKey, { ...cancelJob, abortController: new AbortController() });
+      pageImageRegistry.update(tabId, cancelJob.imageId, { operationId: cancelJob.operationId, status: 'waiting' });
+      await persistProcessingMonitor();
+      return processingMonitor.snapshot();
+    })()`);
+    assert.equal(dashboardSeed.summary.completed, 2);
+    assert.equal(dashboardSeed.summary.failed, 2);
+    assert.equal(dashboardSeed.summary.cancelled, 1);
+    assert.equal(dashboardSeed.summary.timedOut, 1);
+    assert.equal(dashboardSeed.summary.queued, 1);
+    assert.equal(dashboardSeed.summary.cacheHits, 1);
+
+    const dashboardUrl = new URL("../dashboard.html", extensionWorker.url);
+    dashboardUrl.searchParams.set("tabId", String(retrySource.tabId));
+    const createdDashboard = await browserClient.send("Target.createTarget", { url: dashboardUrl.href });
+    const dashboardTarget = await waitFor("extension Dashboard target", async () => {
+      const currentTargets = await listTargets(port);
+      return currentTargets.find((target) => target.id === createdDashboard.targetId && target.webSocketDebuggerUrl) || null;
+    }, 20000);
+    dashboardClient = await connectTarget(dashboardTarget);
+    await dashboardClient.send("Page.enable");
+    await waitFor("Dashboard monitor render", async () => dashboardClient.evaluate(
+      "document.readyState === 'complete' && document.querySelectorAll('#monitorSummary article').length === 13 && document.querySelectorAll('#monitorJobs tr').length >= 7",
+    ), 20000);
+
+    const dashboardObservedSnapshot = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
+    const dashboardState = await dashboardClient.evaluate(`(() => ({
+      summary: Object.fromEntries([...document.querySelectorAll('#monitorSummary article')].map((card) => [card.querySelector('span')?.textContent, card.querySelector('strong')?.textContent])),
+      rows: [...document.querySelectorAll('#monitorJobs tr')].map((row) => ({ key: row.dataset.key, text: row.textContent, status: row.children[2]?.textContent, actions: [...row.querySelectorAll('[data-action]')].map((item) => item.dataset.action) })),
+      containsImageData: document.documentElement.outerHTML.includes('imageData'),
+    }))()`);
+    assert.equal(Number(dashboardState.summary.Completed), dashboardObservedSnapshot.summary.completed);
+    assert.equal(Number(dashboardState.summary.Failed), dashboardObservedSnapshot.summary.failed);
+    assert.equal(Number(dashboardState.summary.Cancelled), dashboardObservedSnapshot.summary.cancelled);
+    assert.equal(Number(dashboardState.summary["Timed out"]), dashboardObservedSnapshot.summary.timedOut);
+    assert.equal(Number(dashboardState.summary.Queued), dashboardObservedSnapshot.summary.queued);
+    assert.equal(Number(dashboardState.summary["Cache hits"]), dashboardObservedSnapshot.summary.cacheHits);
+    assert.ok(dashboardState.rows.every((row) => row.status), "Dashboard status must be visible as text");
+    assert.equal(dashboardState.containsImageData, false);
+
+    const completedFilter = await dashboardClient.evaluate(`(() => {
+      const select = document.getElementById('monitorStatusFilter');
+      select.value = 'COMPLETED';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return [...document.querySelectorAll('#monitorJobs tr')].map((row) => row.dataset.key);
+    })()`);
+    assert.equal(completedFilter.length, dashboardObservedSnapshot.summary.completed);
+    const compoundFilter = await dashboardClient.evaluate(`(() => {
+      const status = document.getElementById('monitorStatusFilter');
+      const stage = document.getElementById('monitorStageFilter');
+      const site = document.getElementById('monitorSiteFilter');
+      const tab = document.getElementById('monitorTabFilter');
+      status.value = 'FAILED'; status.dispatchEvent(new Event('change', { bubbles: true }));
+      stage.value = 'FAILED'; stage.dispatchEvent(new Event('change', { bubbles: true }));
+      site.value = 'cdn.example.test'; site.dispatchEvent(new Event('change', { bubbles: true }));
+      tab.value = ${JSON.stringify(String(retrySource.tabId))}; tab.dispatchEvent(new Event('change', { bubbles: true }));
+      return [...document.querySelectorAll('#monitorJobs tr')].map((row) => row.dataset.key);
+    })()`);
+    assert.equal(compoundFilter.length, 2);
+    const searchResult = await dashboardClient.evaluate(`(() => {
+      document.getElementById('monitorStatusFilter').value = 'ALL';
+      document.getElementById('monitorStatusFilter').dispatchEvent(new Event('change', { bubbles: true }));
+      for (const id of ['monitorStageFilter', 'monitorSiteFilter', 'monitorTabFilter', 'monitorModeFilter', 'monitorProviderFilter', 'monitorCacheFilter']) {
+        const select = document.getElementById(id);
+        select.value = 'ALL';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const input = document.getElementById('monitorSearchFilter');
+      input.value = 'trace-dashboard-422';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return [...document.querySelectorAll('#monitorJobs tr')].map((row) => row.dataset.key);
+    })()`);
+    assert.deepEqual(searchResult, [String(retrySource.tabId) + ':dash-422:dash-422-op']);
+    const detailState = await dashboardClient.evaluate(`(() => {
+      document.querySelector('#monitorJobs tr')?.click();
+      return { text: document.getElementById('monitorDetail').textContent, retryVisible: Boolean(document.querySelector('#monitorJobs [data-action="retry"]')) };
+    })()`);
+    assert.match(detailState.text, /REQUEST_VALIDATION_FAILED/);
+    assert.match(detailState.text, /maxOutputWidth/);
+    assert.match(detailState.text, /cdn\.example\.test\/chapter\/page\.jpg \?part, token/);
+    assert.doesNotMatch(detailState.text, /secret|token=|private/);
+    assert.equal(detailState.retryVisible, false, "HTTP 422 must not expose Retry");
+
+    const retryStarted = await dashboardClient.evaluate(`(() => {
+      document.getElementById('monitorSearchFilter').value = '';
+      document.getElementById('monitorSearchFilter').dispatchEvent(new Event('input', { bubbles: true }));
+      for (const id of ['monitorStageFilter', 'monitorSiteFilter', 'monitorTabFilter', 'monitorModeFilter', 'monitorProviderFilter', 'monitorCacheFilter']) {
+        const select = document.getElementById(id);
+        select.value = 'ALL';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const row = document.querySelector('tr[data-key="${retrySource.tabId}:${retrySource.imageId}:${retrySource.operationId}"]');
+      const button = row?.querySelector('[data-action="retry"]');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    assert.equal(retryStarted, true, "Retryable failure must expose a Retry action");
+    const retryRecord = await waitFor("Dashboard retry attempt", async () => initialWorkerClient.evaluate(`(() => {
+      const operationId = processingMonitor.currentOperation(${retrySource.tabId}, ${JSON.stringify(retrySource.imageId)});
+      if (!operationId || operationId === ${JSON.stringify(retrySource.operationId)}) return null;
+      const job = processingMonitor.get(${retrySource.tabId}, ${JSON.stringify(retrySource.imageId)}, operationId);
+      return job?.retryCount === 1 && job.parentJobId === ${JSON.stringify(retrySource.key)} ? job : null;
+    })()`), 20000);
+    assert.notEqual(retryRecord.operationId, retrySource.operationId);
+    const originalRetryRecord = await initialWorkerClient.evaluate(`processingMonitor.get(${retrySource.tabId}, ${JSON.stringify(retrySource.imageId)}, ${JSON.stringify(retrySource.operationId)})`);
+    assert.equal(originalRetryRecord.stage, "FAILED");
+    await waitFor("retried image queue settlement", async () => {
+      const health = await readHealth();
+      const worker = await initialWorkerClient.evaluate("({ queue: scheduler.snapshot(), active: scheduler.active.size, pending: scheduler.pending.size })");
+      return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 && worker.active === 1 && worker.pending === 0 ? true : null;
+    }, 30000);
+    const retryDomState = await pageClient.evaluate(`(() => ({
+      matches: document.querySelectorAll('#eligible-static').length,
+      ready: document.querySelector('#eligible-static')?.classList.contains('ai-manga-upscaler-ready') || false,
+      src: document.querySelector('#eligible-static')?.src || null,
+    }))()`);
+    assert.equal(retryDomState.matches, 1);
+    assert.equal(retryDomState.ready, true);
+    assert.match(retryDomState.src, /^blob:/);
+
+    await dashboardClient.evaluate(`(() => {
+      document.getElementById('monitorSearchFilter').value = '';
+      document.getElementById('monitorSearchFilter').dispatchEvent(new Event('input', { bubbles: true }));
+      for (const id of ['monitorStatusFilter', 'monitorStageFilter', 'monitorSiteFilter', 'monitorTabFilter', 'monitorModeFilter', 'monitorProviderFilter', 'monitorCacheFilter']) {
+        const select = document.getElementById(id);
+        select.value = 'ALL';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      document.querySelector('tr[data-key="${retrySource.tabId}:dash-active-cancel:dash-active-cancel-op"] [data-action="cancel"]').click();
+      return true;
+    })()`);
+    const cancelledFromDashboard = await waitFor("Dashboard cancellation", async () => initialWorkerClient.evaluate(`(() => {
+      const job = processingMonitor.get(${retrySource.tabId}, 'dash-active-cancel', 'dash-active-cancel-op');
+      return job?.stage === 'CANCELLED' && !scheduler.active.has('${retrySource.tabId}:dash-active-cancel:dash-active-cancel-op') && globalThis.__dashboardBackendCancelCalls === 1 ? job : null;
+    })()`), 20000);
+    assert.equal(cancelledFromDashboard.stage, "CANCELLED");
+    assert.equal(cancelledFromDashboard.timeline.some((event) => event.stage === "COMPLETED"), false);
+
+    const exported = await dashboardClient.evaluate(`(async () => {
+      window.__dashboardExport = null;
+      URL.createObjectURL = (blob) => { blob.text().then((text) => { window.__dashboardExport = text; }); return 'blob:dashboard-export'; };
+      HTMLAnchorElement.prototype.click = function click() {};
+      document.getElementById('exportMonitor').click();
+      for (let index = 0; index < 100 && !window.__dashboardExport; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      return window.__dashboardExport;
+    })()`);
+    const exportedDiagnostic = JSON.parse(exported);
+    assert.equal(exportedDiagnostic.schemaVersion, 1);
+    assert.ok(exportedDiagnostic.jobs.some((job) => job.error?.field === "maxOutputWidth"));
+    assert.equal(/imageData|Authorization|cookie|token=secret|browserprofile|requestbody|responsebody/i.test(exported), false);
+
+    await dashboardClient.evaluate("document.getElementById('clearMonitorCompleted').click()");
+    await waitFor("clear completed history", async () => initialWorkerClient.evaluate(`(() => {
+      const snapshot = processingMonitor.snapshot();
+      return snapshot.summary.completed === 0 && snapshot.summary.failed === 2 ? snapshot : null;
+    })()`), 20000);
+
+    await dashboardClient.send("Page.reload");
+    await waitFor("Dashboard reload recovery", async () => dashboardClient.evaluate(
+      "document.readyState === 'complete' && document.querySelectorAll('#monitorJobs tr').length >= 5 && !document.body.textContent.includes('dash-completed')",
+    ), 20000);
+
+    const heapBefore = await dashboardClient.evaluate("performance.memory?.usedJSHeapSize || 0");
+    const loadSeed = await initialWorkerClient.evaluate(`(async () => {
+      const started = performance.now();
+      for (let index = 0; index < 500; index += 1) {
+        processingMonitor.ingest(AI_PROCESSING_MONITOR.createEvent({
+          tabId: ${retrySource.tabId}, imageId: 'load-' + index, operationId: 'load-op-' + index,
+          traceId: 'trace-load-' + index, sourceUrl: 'https://load.example.test/chapter/page-' + index + '.jpg?token=hidden',
+          stage: 'DETECTED', mode: index % 2 ? 'manga' : 'auto', provider: 'DmlExecutionProvider',
+          input: { width: 900, height: 1400, mime: 'image/jpeg', sourceKind: 'fixture' },
+        }));
+      }
+      await persistProcessingMonitor();
+      return { elapsedMs: performance.now() - started, snapshot: processingMonitor.snapshot() };
+    })()`);
+    assert.equal(loadSeed.snapshot.jobs.filter((job) => job.imageId.startsWith("load-")).length, 500);
+    const dashboardLoad = await dashboardClient.evaluate(`(async () => {
+      const refreshStarted = performance.now();
+      document.getElementById('refreshMonitor').click();
+      for (let index = 0; index < 300 && document.querySelectorAll('#monitorJobs tr').length < 500; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      const renderMs = performance.now() - refreshStarted;
+      const filterStarted = performance.now();
+      const status = document.getElementById('monitorStatusFilter');
+      status.value = 'ACTIVE';
+      status.dispatchEvent(new Event('change', { bubbles: true }));
+      const filterMs = performance.now() - filterStarted;
+      const detailStarted = performance.now();
+      document.querySelector('#monitorJobs tr')?.click();
+      const detailMs = performance.now() - detailStarted;
+      return { renderMs, filterMs, detailMs, rows: document.querySelectorAll('#monitorJobs tr').length };
+    })()`);
+    const heapAfter = await dashboardClient.evaluate("performance.memory?.usedJSHeapSize || 0");
+    assert.ok(dashboardLoad.rows >= 500, "Dashboard must render all 500 synthetic active jobs");
+    assert.ok(dashboardLoad.renderMs < 3000, `Dashboard 500-job render took ${dashboardLoad.renderMs} ms`);
+    assert.ok(dashboardLoad.filterMs < 3000, `Dashboard filter took ${dashboardLoad.filterMs} ms`);
+    assert.ok(dashboardLoad.detailMs < 3000, `Dashboard detail took ${dashboardLoad.detailMs} ms`);
+    if (heapBefore && heapAfter) assert.ok(heapAfter - heapBefore < 128 * 1024 * 1024, "Dashboard heap growth must remain bounded");
+    dashboardEvidence.summary = dashboardSeed.summary;
+    dashboardEvidence.filters = { completedRows: completedFilter.length, compoundRows: compoundFilter.length, searchRows: searchResult.length };
+    dashboardEvidence.retry = { oldOperation: retrySource.operationId, newOperation: retryRecord.operationId, retryCount: retryRecord.retryCount, linkedParent: retryRecord.parentJobId === retrySource.key };
+    dashboardEvidence.cancel = { stage: cancelledFromDashboard.stage, backendCancelCalls: 1 };
+    dashboardEvidence.exportSanitized = true;
+    dashboardEvidence.reloadRecovered = true;
+    dashboardEvidence.load = { syntheticJobs: 500, renderedRows: dashboardLoad.rows, renderMs: Math.round(dashboardLoad.renderMs), filterMs: Math.round(dashboardLoad.filterMs), detailMs: Math.round(dashboardLoad.detailMs), heapGrowthBytes: heapBefore && heapAfter ? heapAfter - heapBefore : null };
+
+    dashboardClient.close();
+    dashboardClient = null;
+    await browserClient.send("Target.closeTarget", { targetId: createdDashboard.targetId });
     initialWorkerClient.close();
 
     const lifecycleEvidence = {};
@@ -472,11 +754,13 @@ async function main() {
       staticOutput: [pageState.state.staticImage.naturalWidth, pageState.state.staticImage.naturalHeight],
       dynamicOutput: [pageState.state.dynamicImage.naturalWidth, pageState.state.dynamicImage.naturalHeight],
       queue: pageState.health.queue,
+      dashboard: dashboardEvidence,
       lifecycle: lifecycleEvidence,
       browserExceptions: browserExceptions.length,
     }, null, 2));
   } finally {
     for (const client of workerClients) client.close();
+    dashboardClient?.close();
     browserClient?.close();
     pageClient?.close();
     await fixture.close();
