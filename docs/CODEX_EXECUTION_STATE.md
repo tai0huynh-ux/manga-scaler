@@ -40,7 +40,15 @@
 
 ## Next exact action
 
-Start a fresh Processing Monitor preflight and reconcile any isolated Monitor branch with current `main` through a normal non-destructive merge. Preserve the green live-reader, HTTP 422, worker/DNR lifecycle, and geometry contracts, and require direct Dashboard browser E2E before acceptance.
+Add real-browser rendering coverage for the `768x32768` geometry case, then expand backend restart/cancellation E2E without reopening the green Processing Monitor, HTTP 422, live-reader, or worker/DNR contracts.
+
+## Processing Monitor integration checkpoint
+
+- Feature branch `codex/live-reader-acceptance-c518` was synchronized with current `main` by a reviewed normal merge and integrated into `main` by fast-forward at `0e4f3f91bf15463ba5454e6b455438f32aa80d0e`.
+- Processing Monitor schema version 1 records sanitized lifecycle events, rejects invalid terminal transitions, ignores stale operations, restores worker state safely, and permits `COMPLETED` only after `renderCommit.confirmed`.
+- The real extension Dashboard E2E verifies summary counts, status/stage/site/tab/search filters, structured 422 details, sanitized export, real cancel, linked retry attempts, clear-history behavior, reload recovery, and 500 synthetic jobs.
+- Final main gate passed 52 backend tests, 179 extension tests, JavaScript checks, Ruff, and 72% backend coverage.
+- Final Edge fixture/lifecycle/Monitor E2E passed with queue size/waiting/processing `0`, duplicate replacements `0`, stale Chapter A entries `0`, residual Referer rules `0`, browser exceptions `0`, and a 500-job Dashboard render in 49 ms with 5 ms filtering and 4 ms detail opening.
 
 ## Extreme-image geometry contract checkpoint
 

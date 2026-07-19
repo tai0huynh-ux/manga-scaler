@@ -3,8 +3,8 @@
 ## Baseline
 
 - Verified date: 2026-07-19, Asia/Bangkok.
-- Branch under verification: `codex/live-reader-acceptance-c518` in the isolated `c518` worktree, synchronized by a normal merge from current `origin/main`; main integration has not occurred.
-- Green live-reader/geometry baseline: `9ada89648003c3d5aa1bbeacc6948290aa49fac0` before this feature-branch merge; main integration has not occurred.
+- Branch: `main`; Processing Monitor feature integration commit: `0e4f3f91bf15463ba5454e6b455438f32aa80d0e`.
+- Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
@@ -15,7 +15,7 @@
 Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
 
 - Backend: 52 tests passed.
-- Extension: 172 tests passed, including real Dashboard browser interaction and 500-job load acceptance.
+- Extension: 179 tests passed, including real Dashboard browser interaction and 500-job load acceptance.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 72%, above the 45% gate.
@@ -65,13 +65,6 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Known limitations
 
-- Representative live-site validation is still partial: Manga and Manhua are verified on `truyenqqko.com`; no Manhwa chapter has completed the gate yet.
-- Heavy Manhwa chapters can create hundreds of long-image segment jobs. One run restarted the backend under load; another remained at 71 queued segment jobs after 240 seconds. The gate now reports these conditions instead of claiming completion.
-- `www.hentaivnx.live` reader HTML and Edge discovery were verified, but chapter replacement remains unproven: its CDN returns a redirect without Referer and a JPEG with Referer, while the final worker diagnostic did not yield a stable completion record.
-- The verified public reader is `truyenqqko.com`; guessed or SEO-shell domains are not acceptance evidence.
-- Current public TruyenQQ URLs are verified for One Piece 1188 (Manga), Hive 293 (Manhwa), and Người Trên Vạn Người 320 (Manhua), but live acceptance is not green.
-- Hive 293 reached 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images. Manhua 320 reached 26/26 replacements but earlier runs exposed reader-chrome tracking/avatar false positives.
-- The local backend became unresponsive after repeated live runs; hentaivnx and a clean Manga rerun remain unverified.
 - Live-site acceptance is point-in-time and may drift with external markup, advertisements, CDN policy, or anti-bot changes.
 - A real-browser render of the new `768x32768` geometry case is not yet covered; its row-complete slicing contract is proven at the focused test boundary.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
@@ -89,8 +82,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
-1. Repair the nine detected-but-unreplaced Hive images and rerun Manhwa throughput with a clean backend.
-2. Re-run `www.hentaivnx.live` acceptance or preserve the exact external fetch/challenge blocker.
-3. Integrate the green feature branch into `main` only after the live-site decision is recorded.
+1. Add real-browser rendering coverage for the `768x32768` geometry case.
+2. Expand backend restart/cancellation E2E and improve focused model-manager/downloader/upscaler coverage.
+3. Run longer reliability soak and production-quality benchmarks before release claims.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.
