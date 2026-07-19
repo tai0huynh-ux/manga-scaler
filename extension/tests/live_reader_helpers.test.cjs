@@ -3,10 +3,12 @@ const assert = require("node:assert/strict");
 const {
   classifyUnreplaced,
   duplicateEnqueueCount,
+  duplicateIdentities,
   duplicateOperationCount,
   isPromotedState,
   registryStatus,
   selectOverlayDismissal,
+  isOverlayProbe,
   isRendererOwnedImage,
   operationIdentity,
   sanitizeUrl,
@@ -42,6 +44,21 @@ test("slices sharing a parent trace are distinct enqueue variants", () => {
   ];
   assert.equal(duplicateEnqueueCount(events), 0);
   assert.equal(duplicateEnqueueCount([...events, events[0]]), 1);
+});
+
+test("replacement operations sharing a trace are distinct jobs", () => {
+  const events = [
+    { traceId: "parent", attempt: 1, metadata: { operation_id_prefix: "op-1", cache_variant: "full" } },
+    { traceId: "parent", attempt: 1, metadata: { operation_id_prefix: "op-2", cache_variant: "full" } },
+  ];
+  assert.equal(duplicateEnqueueCount(events), 0);
+  assert.equal(duplicateEnqueueCount([...events, events[0]]), 1);
+});
+
+test("duplicate identity evidence reports only repeated keys", () => {
+  assert.deepEqual(duplicateIdentities([
+    { id: "a" }, { id: "b" }, { id: "a" }, { id: "a" },
+  ], (entry) => entry.id), [{ identity: "a", count: 3 }]);
 });
 
 test("unreplaced entries receive one deterministic primary classification", () => {
@@ -80,4 +97,9 @@ test("overlay dismissal prefers a visible close control over ad content", () => 
     { id: "hidden-close", className: "popup-icon-close", text: "\u00d7", visible: false },
   ]);
   assert.equal(selected.id, "close-overlay");
+});
+
+test("ad images count as overlay probes while reader images do not", () => {
+  assert.equal(isOverlayProbe({ tag: "IMG", id: "img-_pop-qqgo-11", className: "ads-banner" }), true);
+  assert.equal(isOverlayProbe({ tag: "IMG", id: "ai-image-source", className: "" }), false);
 });

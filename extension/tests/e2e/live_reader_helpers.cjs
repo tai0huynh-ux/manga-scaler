@@ -58,11 +58,24 @@ function duplicateEnqueueCount(events = []) {
   const seen = new Set();
   let duplicates = 0;
   for (const event of events) {
-    const identity = [event?.traceId || "", event?.attempt || 1, event?.metadata?.cache_variant || "full"].join("|");
+    const identity = [event?.traceId || "", event?.metadata?.operation_id_prefix || "",
+      event?.attempt || 1, event?.metadata?.cache_variant || "full"].join("|");
     if (seen.has(identity)) duplicates += 1;
     else seen.add(identity);
   }
   return duplicates;
+}
+
+function duplicateIdentities(events = [], identityOf) {
+  const counts = new Map();
+  for (const event of events) {
+    const identity = identityOf(event);
+    if (!identity) continue;
+    counts.set(identity, (counts.get(identity) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([identity, count]) => ({ identity, count }));
 }
 
 function isPromotedState({ rendered = false, status = null } = {}) {
@@ -94,6 +107,11 @@ function selectOverlayDismissal(candidates = []) {
   return ranked[0]?.candidate || null;
 }
 
+function isOverlayProbe(probe = {}) {
+  const signal = [probe.id, probe.className].filter(Boolean).join(" ").toLowerCase();
+  return probe.tag !== "IMG" || /overlay|popup|ads-banner|close/.test(signal);
+}
+
 function sanitizeUrl(value) {
   try {
     const url = new URL(String(value));
@@ -116,8 +134,10 @@ module.exports = {
   classifyUnreplaced,
   duplicateOperationCount,
   duplicateEnqueueCount,
+  duplicateIdentities,
   isPromotedState,
   registryStatus,
   selectOverlayDismissal,
+  isOverlayProbe,
   sanitizeUrl,
 };

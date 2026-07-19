@@ -2054,6 +2054,26 @@ test("queue distinguishes operations with the same image id", () => {
   assert.equal(scheduler.pending.size, 2);
 });
 
+test("pending enqueue updates priority without creating a second job identity", () => {
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({ traceEvents });
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 0,
+    cacheProvider: {},
+    upscaleProvider: { cancel() {} },
+    statisticsTracker: {},
+  });
+  const job = makeJob("pending-dedupe");
+
+  scheduler.enqueue(job);
+  scheduler.enqueue({ ...job, traceId: "replacement-trace", viewportDistance: 10 });
+
+  assert.equal(scheduler.pending.size, 1);
+  assert.equal([...scheduler.pending.values()][0].traceId, job.traceId);
+  assert.equal(traceEvents.filter((event) => event.event === "background.job.enqueued").length, 1);
+  assert.equal(traceEvents.filter((event) => event.event === "background.job.reprioritized").length, 1);
+});
+
 test("operationless scheduler cancel cannot use image id as authority", () => {
   const QueueScheduler = loadQueueScheduler();
   const scheduler = new QueueScheduler({

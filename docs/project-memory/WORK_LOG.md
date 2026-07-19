@@ -120,3 +120,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: `npm.cmd test` passed 148 extension tests and JavaScript checks; `scripts/verify.ps1 -Fast` passed 52 backend tests and 148 extension tests. Clean Manga 1188 passed 64/64 replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and zero residual rules. Clean Hive 293 remained 66/75 replacements (88%) with nine bottom reader images left `seen`; no backend failures, duplicate jobs, stale replacements, extension exceptions, or residual rules were observed.
 - Decision: Live gate remains `FIX_REQUIRED`; extreme-image work is not started.
 - Remaining: Determine why the nine bottom Hive nodes remain `seen` despite `refreshPriorities()` requeue coverage, then rerun Manhwa, Manhua, and hentaivnx.
+
+## 2026-07-19 - Clean four-site live-reader acceptance
+
+- Request: Finish the interrupted live-reader checkpoint, repair only runtime-proven site failures, and require at least 95% stable Blob replacement with zero false positives, duplicate/stale work, residual rules, or unsettled queues.
+- Changes: The Edge harness now waits by stable marker, captures promotion blockers, and clicks a real visible semantic close control when an advertisement overlay occludes the reader. Pending queue updates preserve the original trace and emit `background.job.reprioritized`; enqueue duplicate evidence includes operation identity so separate replacement operations sharing a correlation trace remain distinct.
+- Invariant/decision: Production occlusion rules remain conservative. The harness may dismiss a visible overlay through its actual control but never mutates site DOM to hide or remove it. Job identity is operation-scoped, while trace identity remains correlation-scoped.
+- Verification: TruyenQQ Manga passed `22/22` with `42/42` backend completions; Manhwa passed `75/75` with `56/56`; Manhua passed `26/26` with `109/109`; hentaivnx passed `16/16` with `33/33`. Every run reported false positives `0`, duplicate jobs `0`, stale replacements `0`, failures `0`, residual Referer rules `0`, and queue size/waiting/processing `0`. Deterministic Edge worker/navigation/reload E2E passed. Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% coverage.
+- Git: Pending the green Conventional Commit and push for this checkpoint.
+- Remaining: Start extreme-image geometry and rendering acceptance from the pushed green baseline.

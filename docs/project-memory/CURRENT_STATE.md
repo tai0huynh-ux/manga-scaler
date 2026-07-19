@@ -14,7 +14,7 @@
 Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
 
 - Backend: 52 tests passed.
-- Extension: 148 tests passed.
+- Extension: 155 tests passed.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 72%, above the 45% gate.
@@ -51,17 +51,14 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Full same-tab navigation invalidates Chapter A while Chapter B discovers and renders normally with no stale registry entry or residual rule.
 - Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
 - FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
+- Clean Edge live acceptance passed TruyenQQ Manga, Manhwa, Manhua, and hentaivnx with 100% eligible-image replacement and zero duplicate/stale work, false positives, failures, residual Referer rules, or unsettled queues.
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
 
 ## Known limitations
 
-- Representative live-site validation is still manual.
-- `www.hentaivnx.live` reader HTML and Edge discovery were verified, but chapter replacement remains unproven: its CDN returns a redirect without Referer and a JPEG with Referer, while the final worker diagnostic did not yield a stable completion record.
-- Current public TruyenQQ URLs are verified for One Piece 1188 (Manga), Hive 293 (Manhwa), and Người Trên Vạn Người 320 (Manhua), but live acceptance is not green.
-- Hive 293 reached 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images. Manhua 320 reached 26/26 replacements but earlier runs exposed reader-chrome tracking/avatar false positives.
-- The local backend became unresponsive after repeated live runs; hentaivnx and a clean Manga rerun remain unverified.
+- Live-site acceptance is point-in-time and may drift with external markup, advertisements, CDN policy, or anti-bot changes.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -74,12 +71,10 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-Live-reader checkpoint (2026-07-19): clean Manga 1188 reached 64/64 stable Blob replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and settled queue/DNR state. Hive 293 remained 66/75 (88%) with nine bottom reader images left in `seen` after controlled viewport passes; Manhua and hentaivnx remain unverified. Extreme-image work is intentionally blocked until this live gate is green.
+Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
-1. Repair the live scheduling path for the nine detected-but-unreplaced Hive images and re-run with a clean isolated backend.
-2. Re-run sanitized Edge DOM-replacement acceptance on TruyenQQ Manga/Manhwa/Manhua and record recall, false positives, duplicates, stale replacements, queue settlement, and remaining rules.
-3. Re-run `www.hentaivnx.live` acceptance with worker-restart-safe evidence capture when automation is not blocked by an external challenge.
-4. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
-5. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
+1. Begin the extreme-image geometry and rendering checkpoint from this green baseline.
+2. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
+3. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

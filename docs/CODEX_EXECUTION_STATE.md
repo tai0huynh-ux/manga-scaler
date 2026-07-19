@@ -25,7 +25,7 @@
 - Architecture ownership and runtime flows are mapped under `docs/project-memory/`.
 - Unit and VM-based extension regressions cover core queue, stale-operation, renderer, slicing, API, provider, and tracing invariants.
 - Deterministic Edge unpacked-extension E2E is automated and green against the real loopback backend/model.
-- Representative manga/webtoon live-site acceptance remains manual and unproven for the current baseline.
+- Representative Manga/Manhwa/Manhua and hentaivnx live-site acceptance is green for the current point-in-time public pages.
 - Production ONNX quality, DirectML/CUDA execution, OCR quality, text removal/reinsertion, soak, packaging, clean install, upgrade, and uninstall are not release-proven.
 
 ## Completed checkpoint
@@ -40,7 +40,19 @@
 
 ## Next exact action
 
-Repair and re-run the live reader gate with a clean isolated backend. Hive still has 66/75 stable original-image replacements (88%) and nine detected-but-unreplaced images. Manhua reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix. The local backend became unresponsive after repeated live runs, so hentaivnx and a clean Manga rerun remain blocked.
+Begin the extreme-image geometry checkpoint from the new green live-reader baseline. Preserve the operation-safe queue, browser-owned byte acquisition, exact temporary Referer cleanup, and stable Blob rendering contracts.
+
+## Clean live-reader acceptance checkpoint
+
+- The live harness scrolls by stable image markers, waits until each image owns preprocessing work, and clicks a real semantic close control when an advertisement overlay blocks the candidate probes. It never removes or hides site nodes directly.
+- Pending queue updates retain the original trace and emit `background.job.reprioritized` instead of a second enqueue event. Duplicate evidence includes operation identity, so replacement operations sharing one correlation trace are not conflated.
+- TruyenQQ Manga: `22/22` detected and replaced, `42/42` backend completions.
+- TruyenQQ Manhwa: `75/75` detected and replaced, `56/56` backend completions, `210/210` raw slices ready.
+- TruyenQQ Manhua: `26/26` detected and replaced, `109/109` backend completions, `108/108` raw slices ready.
+- hentaivnx: `16/16` detected and replaced, `33/33` backend completions, `32/32` raw slices ready.
+- Every live run completed with false positives `0`, duplicate jobs `0`, stale replacements `0`, sanitized failures `0`, residual Referer rules `0`, and queue size/waiting/processing `0`.
+- Deterministic Edge lifecycle acceptance passed worker stop/reactivation, unrelated-rule preservation, navigation invalidation, extension reload recovery, and queue/rule settlement with browser exceptions `0`.
+- Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage.
 
 ## HTTP 422 and browser-owned request checkpoint
 

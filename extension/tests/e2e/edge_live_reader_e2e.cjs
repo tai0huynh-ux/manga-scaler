@@ -6,8 +6,10 @@ const path = require("node:path");
 const {
   classifyUnreplaced,
   duplicateEnqueueCount,
+  duplicateIdentities,
   duplicateOperationCount,
   isPromotedState,
+  isOverlayProbe,
   operationIdentity,
   selectOverlayDismissal,
   sanitizeUrl,
@@ -192,7 +194,7 @@ async function main() {
 
     const promotionSnapshots = new Map();
     const dismissOccludingOverlay = async (pageState) => {
-      const blockers = (pageState?.probes || []).filter((probe) => probe && probe.tag !== "IMG");
+      const blockers = (pageState?.probes || []).filter((probe) => probe && isOverlayProbe(probe));
       if (!blockers.length) return null;
       const candidates = await pageClient.evaluate(`(() => {
         const blockerIds = ${JSON.stringify(blockers.map((probe) => probe.id).filter(Boolean))};
@@ -477,6 +479,13 @@ async function main() {
     const extensionExceptions = browserExceptionDetails.filter((error) => error.url?.startsWith("chrome-extension://"));
     const enqueuedTraces = final.worker.traces.filter((event) => event.event === "background.job.enqueued");
     const duplicateJobs = Math.max(duplicateEnqueueCount(enqueuedTraces), duplicateOperationCount(ledgerEntries));
+    const duplicateJobEvidence = {
+      enqueues: duplicateIdentities(enqueuedTraces, (event) => [
+        event?.traceId || "", event?.metadata?.operation_id_prefix || "",
+        event?.attempt || 1, event?.metadata?.cache_variant || "full",
+      ].join("|")),
+      operations: duplicateIdentities(ledgerEntries, operationIdentity),
+    };
     const requestEvidence = new Map(final.worker.traces
       .filter((event) => event.event === "background.backend.request.started")
       .map((event) => [event.traceId, event.metadata?.request_metadata || {}]));
@@ -539,6 +548,7 @@ async function main() {
         currentSource: sanitizeUrl(entry.currentSource),
       })),
       duplicateJobs,
+      duplicateJobEvidence,
       staleReplacements: 0,
       queueFinalState: final.worker.queue,
       remainingSessionRules: final.worker.rules.filter(isRefererRule).length,
