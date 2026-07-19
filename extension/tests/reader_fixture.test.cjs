@@ -43,6 +43,16 @@ test("deterministic reader fixture exposes a focused unpacked-extension E2E page
   assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   assert.equal(bytes.readUInt32BE(16), 300);
   assert.equal(bytes.readUInt32BE(20), 301);
+
+  for (const [width, height] of [
+    [16, 16], [64, 64], [128, 128], [299, 299],
+    [300, 300], [301, 301], [300, 100], [100, 300],
+  ]) {
+    const response = await fetch(`${fixture.origin}/png/geometry-${width}x${height}.png?w=${width}&h=${height}`);
+    const geometryBytes = Buffer.from(await response.arrayBuffer());
+    assert.equal(geometryBytes.readUInt32BE(16), width);
+    assert.equal(geometryBytes.readUInt32BE(20), height);
+  }
 });
 
 test("deterministic reader fixture exposes worker, navigation, and reload lifecycle pages", async (context) => {

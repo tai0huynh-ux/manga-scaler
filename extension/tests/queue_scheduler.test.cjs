@@ -2278,7 +2278,7 @@ test("tall images can enter slicing even when max input height is enabled", () =
   assert.equal(viewportProvider.canProcessCandidate(tallImage), true);
 });
 
-test("minimum image boundary follows the documented 300px contract", () => {
+test("image geometry matrix follows the documented 300px minimum", () => {
   const { ImageProvider, config } = loadContentClasses();
   const imageProvider = new ImageProvider({
     minInputWidthEnabled: true,
@@ -2294,11 +2294,18 @@ test("minimum image boundary follows the documented 300px contract", () => {
 
   assert.equal(config.images.minWidthPx, 300);
   assert.equal(config.images.minHeightPx, 300);
-  assert.equal(imageProvider.canProcess(image(299, 299)), false);
-  assert.equal(imageProvider.canProcess(image(300, 300)), true);
-  assert.equal(imageProvider.canProcess(image(301, 301)), true);
-  assert.equal(imageProvider.canProcess(image(300, 100)), false);
-  assert.equal(imageProvider.canProcess(image(100, 300)), false);
+  for (const [width, height, accepted] of [
+    [16, 16, false],
+    [64, 64, false],
+    [128, 128, false],
+    [299, 299, false],
+    [300, 300, true],
+    [301, 301, true],
+    [300, 100, false],
+    [100, 300, false],
+  ]) {
+    assert.equal(imageProvider.canProcess(image(width, height)), accepted, `${width}x${height}`);
+  }
 });
 
 test("image-limit message fallback reuses the configured 300px minimum", async () => {
@@ -2334,26 +2341,30 @@ test("extremely tall slicing covers every source row exactly once", async () => 
   });
   const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
   provider.imageSliceMaxHeight = 2200;
-  provider.decodeBase64Image = async () => ({ width: 512, height: 16384 });
   provider.canvasToSegmentPayload = async (canvas) => ({ objectUrl: `blob:${canvas.height}`, imageData: String(canvas.height) });
-  const image = makeTallImage("extreme-tall");
-  image.naturalWidth = 512;
-  image.naturalHeight = 16384;
-  image.clientWidth = 512;
-  image.clientHeight = 16384;
-  image.getBoundingClientRect = () => ({ width: 512, height: 16384, top: 0, bottom: 16384, left: 0, right: 512 });
 
-  const segments = await provider.cropImageSegments("synthetic-source", image);
+  for (const [width, height] of [[512, 16384], [768, 32768]]) {
+    drawCalls.length = 0;
+    provider.decodeBase64Image = async () => ({ width, height });
+    const image = makeTallImage(`extreme-tall-${width}x${height}`);
+    image.naturalWidth = width;
+    image.naturalHeight = height;
+    image.clientWidth = width;
+    image.clientHeight = height;
+    image.getBoundingClientRect = () => ({ width, height, top: 0, bottom: height, left: 0, right: width });
 
-  assert.ok(segments.length > 1);
-  assert.equal(segments[0].sourceY, 0);
-  assert.equal(segments.at(-1).sourceY + segments.at(-1).sourceHeight, 16384);
-  assert.equal(segments.reduce((total, segment) => total + segment.sourceHeight, 0), 16384);
-  for (let index = 1; index < segments.length; index += 1) {
-    assert.equal(segments[index].index, index);
-    assert.equal(segments[index].sourceY, segments[index - 1].sourceY + segments[index - 1].sourceHeight);
+    const segments = await provider.cropImageSegments("synthetic-source", image);
+
+    assert.ok(segments.length > 1, `${width}x${height}`);
+    assert.equal(segments[0].sourceY, 0, `${width}x${height}`);
+    assert.equal(segments.at(-1).sourceY + segments.at(-1).sourceHeight, height, `${width}x${height}`);
+    assert.equal(segments.reduce((total, segment) => total + segment.sourceHeight, 0), height, `${width}x${height}`);
+    assert.equal(drawCalls.length, segments.length, `${width}x${height}`);
+    for (let index = 1; index < segments.length; index += 1) {
+      assert.equal(segments[index].index, index);
+      assert.equal(segments[index].sourceY, segments[index - 1].sourceY + segments[index - 1].sourceHeight);
+    }
   }
-  assert.equal(drawCalls.length, segments.length);
 });
 
 test("extremely wide images never enter vertical slicing and are rejected safely", () => {
@@ -2371,15 +2382,17 @@ test("extremely wide images never enter vertical slicing and are rejected safely
   const provider = new ViewportImageProvider({ imageProvider, renderer: {} });
   provider.imageSlicingEnabled = true;
   provider.imageSliceMaxHeight = 2200;
-  const image = makeTallImage("extreme-wide");
-  image.naturalWidth = 16384;
-  image.naturalHeight = 512;
-  image.clientWidth = 16384;
-  image.clientHeight = 512;
-  image.getBoundingClientRect = () => ({ width: 16384, height: 512, top: 0, bottom: 512, left: 0, right: 16384 });
+  for (const [width, height] of [[16384, 512], [32768, 768]]) {
+    const image = makeTallImage(`extreme-wide-${width}x${height}`);
+    image.naturalWidth = width;
+    image.naturalHeight = height;
+    image.clientWidth = width;
+    image.clientHeight = height;
+    image.getBoundingClientRect = () => ({ width, height, top: 0, bottom: height, left: 0, right: width });
 
-  assert.equal(provider.shouldSliceImage(image), false);
-  assert.equal(provider.canProcessCandidate(image), false);
+    assert.equal(provider.shouldSliceImage(image), false, `${width}x${height}`);
+    assert.equal(provider.canProcessCandidate(image), false, `${width}x${height}`);
+  }
 });
 
 test("candidate evaluator rejects hidden and transparent images", () => {

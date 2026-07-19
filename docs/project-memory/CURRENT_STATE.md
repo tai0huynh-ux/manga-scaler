@@ -53,6 +53,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Unpacked-extension reload automatically resumes discovery without a page reload. Reinjectable block-scoped content code and a DOM instance lease prevent stale contexts and duplicate replacements.
 - FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
 - Clean Edge live acceptance passed TruyenQQ Manga, Manhwa, Manhua, and hentaivnx with 100% eligible-image replacement and zero duplicate/stale work, false positives, failures, residual Referer rules, or unsettled queues.
+- The deterministic geometry matrix covers eight minimum/boundary inputs, row-complete vertical slicing for `512x16384` and `768x32768`, and safe non-slicing rejection for `16384x512` and `32768x768`; fixture PNG dimensions are verified without tracked binary assets.
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
@@ -74,8 +75,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
-1. Begin the extreme-image geometry and rendering checkpoint from this green baseline.
-2. Expand the deterministic E2E matrix for backend restart, cancellation, and long-image rendering.
-3. Improve focused coverage around model manager, downloader, cache, and full upscaler orchestration.
+1. Begin the Processing Monitor and image diagnostic Dashboard from a fresh preflight, reconciling any isolated feature branch with current `main` through a normal non-destructive merge.
+2. Add direct Dashboard browser E2E and preserve the green live-reader, HTTP 422, worker/DNR lifecycle, and geometry contracts.
+3. Expand the deterministic E2E matrix for backend restart, cancellation, and real-browser extreme long-image rendering.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

@@ -129,3 +129,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: TruyenQQ Manga passed `22/22` with `42/42` backend completions; Manhwa passed `75/75` with `56/56`; Manhua passed `26/26` with `109/109`; hentaivnx passed `16/16` with `33/33`. Every run reported false positives `0`, duplicate jobs `0`, stale replacements `0`, failures `0`, residual Referer rules `0`, and queue size/waiting/processing `0`. Deterministic Edge worker/navigation/reload E2E passed. Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% coverage.
 - Git: Implementation and verified state committed as `915920450d9d3975fc6db807e530dd9292c9a129`; the documentation pointer follow-up records this hash before push.
 - Remaining: Start extreme-image geometry and rendering acceptance from the pushed green baseline.
+
+## 2026-07-19 - Deterministic extreme-image geometry contract
+
+- Request: Continue from the clean live-reader baseline and close the extreme-image geometry checkpoint before starting Processing Monitor work.
+- Changes: Expanded the minimum-dimension matrix to eight exact small/boundary cases; covered row-complete slicing for `512x16384` and `768x32768`; proved `16384x512` and `32768x768` never enter vertical slicing; and verified generated fixture PNG dimensions from IHDR metadata without binary assets.
+- Invariant/decision: The shared 300 px minimum remains exact, every tall source row is represented once, and unsafe extreme-wide images are rejected without invoking vertical slicing. No production behavior changed, and no real-browser `32768`-pixel render is claimed.
+- Verification: Focused geometry tests passed `3/3`; fixture tests passed `7/7`; full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% coverage. Real Edge fixture/lifecycle E2E passed with queue/rules settled and zero duplicate replacements, stale navigation entries, or browser exceptions. Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans returned zero findings; `git fsck --full` succeeded with dangling objects only.
+- Remaining: Start the Processing Monitor checkpoint with a fresh branch/worktree/ancestry preflight and direct Dashboard browser E2E acceptance.

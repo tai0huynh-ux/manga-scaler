@@ -20,7 +20,16 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-The live-reader gate is complete. The next milestone is extreme-image geometry and rendering acceptance, without reopening the HTTP 422 or live acquisition contracts unless a new regression proves they are involved.
+The deterministic extreme-image geometry contract is complete. The next milestone is the Processing Monitor and image diagnostic Dashboard, without reopening the HTTP 422, live acquisition, or protected-read lifecycle contracts unless a new regression proves they are involved.
+
+## Extreme-image geometry checkpoint
+
+- The exact minimum-dimension matrix covers `16x16`, `64x64`, `128x128`, `299x299`, `300x300`, `301x301`, `300x100`, and `100x300` against the shared 300 px contract.
+- Deterministic tall-image slicing proves complete, contiguous source-row coverage for `512x16384` and `768x32768`.
+- Extreme-wide inputs `16384x512` and `32768x768` do not enter vertical slicing and are rejected safely.
+- The reader fixture verifies generated PNG IHDR dimensions for all eight small/boundary cases without tracked image assets.
+- Production behavior did not change. Focused tests, 52 backend tests, 155 extension tests, JavaScript checks, Ruff, 72% coverage, and the real Edge fixture/lifecycle E2E passed.
+- Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans reported zero findings. `git fsck --full` succeeded with dangling objects only.
 
 ## Required reading
 

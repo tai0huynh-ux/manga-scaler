@@ -40,7 +40,17 @@
 
 ## Next exact action
 
-Begin the extreme-image geometry checkpoint from the new green live-reader baseline. Preserve the operation-safe queue, browser-owned byte acquisition, exact temporary Referer cleanup, and stable Blob rendering contracts.
+Start a fresh Processing Monitor preflight and reconcile any isolated Monitor branch with current `main` through a normal non-destructive merge. Preserve the green live-reader, HTTP 422, worker/DNR lifecycle, and geometry contracts, and require direct Dashboard browser E2E before acceptance.
+
+## Extreme-image geometry contract checkpoint
+
+- Added the exact eight-case minimum-dimension matrix from `16x16` through the `299/300/301` boundary and asymmetric `300x100` / `100x300` cases.
+- Expanded deterministic vertical slicing coverage to `512x16384` and `768x32768`, asserting every source row is covered exactly once with no gaps or overlap.
+- Expanded safe extreme-wide rejection to `16384x512` and `32768x768`; neither input may enter vertical slicing.
+- Verified synthetic fixture PNG dimensions from IHDR metadata for every small/boundary case; no binary reader asset was committed.
+- Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage. Real Edge fixture/lifecycle E2E passed with queue/rules settled and zero duplicate replacements, stale Chapter A entries, or browser exceptions.
+- Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans returned zero findings. `git fsck --full` returned success with dangling objects only.
+- This checkpoint changes tests and verified state only; it does not claim a real-browser render of the `32768`-pixel synthetic case.
 
 ## Clean live-reader acceptance checkpoint
 
