@@ -2413,7 +2413,65 @@ test("extremely tall slicing covers every source row exactly once", async () => 
   }
 });
 
-test("extremely wide images never enter vertical slicing and are rejected safely", () => {
+test("two-dimensional slicing covers every source pixel exactly once", async () => {
+  const drawCalls = [];
+  const { ViewportImageProvider } = loadContentClasses({
+    createElement: (tagName) => {
+      assert.equal(tagName, "canvas");
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: (...args) => drawCalls.push(args) }),
+      };
+    },
+  });
+  const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  provider.imageSliceMaxWidth = 1000;
+  provider.imageSliceMaxHeight = 1200;
+  provider.decodeBase64Image = async () => ({ width: 2500, height: 2500 });
+  provider.canvasToSegmentPayload = async (canvas) => ({ objectUrl: `blob:${canvas.width}x${canvas.height}`, imageData: "segment" });
+  const image = makeTallImage("grid-2500x2500");
+  image.naturalWidth = 2500;
+  image.naturalHeight = 2500;
+  image.clientWidth = 1000;
+  image.clientHeight = 1000;
+  image.getBoundingClientRect = () => ({ width: 1000, height: 1000, top: 0, bottom: 1000, left: 0, right: 1000 });
+
+  const segments = await provider.cropImageSegments("synthetic-source", image);
+
+  assert.equal(segments.length, 9);
+  assert.equal(drawCalls.length, 9);
+  assert.equal(segments.reduce((total, segment) => total + segment.sourceWidth * segment.sourceHeight, 0), 2500 * 2500);
+  assert.deepEqual(JSON.parse(JSON.stringify(segments.map(({ sourceX, sourceY, sourceWidth, sourceHeight }) => [sourceX, sourceY, sourceWidth, sourceHeight]))), [
+    [0, 0, 1000, 1200], [1000, 0, 1000, 1200], [2000, 0, 500, 1200],
+    [0, 1200, 1000, 1200], [1000, 1200, 1000, 1200], [2000, 1200, 500, 1200],
+    [0, 2400, 1000, 100], [1000, 2400, 1000, 100], [2000, 2400, 500, 100],
+  ]);
+});
+
+test("raw grid slices retain exact rendered positions", () => {
+  const rawImages = [];
+  const { Renderer } = loadContentClasses({ onImageCreated: (rawImage) => rawImages.push(rawImage) });
+  const renderer = new Renderer();
+  const image = makeTallImage("grid-layout");
+  const transaction = renderer.prepareRawSlices(image, { width: 1000, height: 800 }, [
+    { index: 0, sourceX: 0, sourceY: 0, sourceWidth: 1250, sourceHeight: 1250, renderedLeft: 0, renderedTop: 0, renderedWidth: 500, renderedHeight: 400, objectUrl: "blob:0" },
+    { index: 1, sourceX: 1250, sourceY: 0, sourceWidth: 1250, sourceHeight: 1250, renderedLeft: 500, renderedTop: 0, renderedWidth: 500, renderedHeight: 400, objectUrl: "blob:1" },
+    { index: 2, sourceX: 0, sourceY: 1250, sourceWidth: 1250, sourceHeight: 1250, renderedLeft: 0, renderedTop: 400, renderedWidth: 500, renderedHeight: 400, objectUrl: "blob:2" },
+    { index: 3, sourceX: 1250, sourceY: 1250, sourceWidth: 1250, sourceHeight: 1250, renderedLeft: 500, renderedTop: 400, renderedWidth: 500, renderedHeight: 400, objectUrl: "blob:3" },
+  ]);
+
+  assert.equal(transaction.wrapper.style.position, "relative");
+  assert.equal(transaction.wrapper.style.height, "800px");
+  assert.deepEqual(rawImages.map((raw) => [raw.style.left, raw.style.top, raw.style.width, raw.style.height, raw.style.position]), [
+    ["0px", "0px", "500px", "400px", "absolute"],
+    ["500px", "0px", "500px", "400px", "absolute"],
+    ["0px", "400px", "500px", "400px", "absolute"],
+    ["500px", "400px", "500px", "400px", "absolute"],
+  ]);
+});
+
+test("extremely wide images require explicit input permission before grid slicing", () => {
   const { ImageProvider, ViewportImageProvider, config } = loadContentClasses();
   const imageProvider = new ImageProvider({
     minInputWidthEnabled: true,
@@ -2436,9 +2494,26 @@ test("extremely wide images never enter vertical slicing and are rejected safely
     image.clientHeight = height;
     image.getBoundingClientRect = () => ({ width, height, top: 0, bottom: height, left: 0, right: width });
 
-    assert.equal(provider.shouldSliceImage(image), false, `${width}x${height}`);
+    assert.equal(provider.shouldSliceImage(image), true, `${width}x${height}`);
     assert.equal(provider.canProcessCandidate(image), false, `${width}x${height}`);
   }
+  imageProvider.updateLimits({
+    minInputWidthEnabled: true,
+    minInputHeightEnabled: true,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: true,
+    minInputWidth: 300,
+    minInputHeight: 300,
+    maxInputWidth: config.images.maxWidthPx,
+    maxInputHeight: config.images.maxHeightPx,
+  });
+  const permitted = makeTallImage("extreme-wide-permitted");
+  permitted.naturalWidth = 16384;
+  permitted.naturalHeight = 512;
+  permitted.clientWidth = 16384;
+  permitted.clientHeight = 512;
+  permitted.getBoundingClientRect = () => ({ width: 16384, height: 512, top: 0, bottom: 512, left: 0, right: 16384 });
+  assert.equal(provider.canProcessCandidate(permitted), true);
 });
 
 test("candidate evaluator rejects hidden and transparent images", () => {
@@ -3601,7 +3676,7 @@ test("segment registration transport failure rolls back the committed group atom
   const { viewportProvider, trackedImages, sentMessages } = makeContentProvider({
     renderer,
     sendMessage: (message) => {
-      if (message.type === "ENQUEUE_IMAGE" && message.cacheVariant === "segment-1-1000-1000") {
+      if (message.type === "ENQUEUE_IMAGE" && message.cacheVariant === "segment-1-0-1000-900-1000") {
         throw new Error("segment transport failed");
       }
       return Promise.resolve();

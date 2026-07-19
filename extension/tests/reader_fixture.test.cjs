@@ -65,7 +65,9 @@ test("deterministic reader fixture exposes the extreme geometry browser page", a
   assert.equal(response.status, 200);
   assert.match(html, /data-fixture="geometry-e2e-v1"/);
   assert.match(html, /id="eligible-extreme"/);
+  assert.match(html, /id="eligible-wide"/);
   assert.match(html, /geometry-768x32768\.png\?w=768&amp;h=32768/);
+  assert.match(html, /geometry-2048x1200\.png\?w=2048&amp;h=1200/);
 });
 
 test("deterministic reader fixture exposes worker, navigation, and reload lifecycle pages", async (context) => {

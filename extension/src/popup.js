@@ -16,7 +16,7 @@ class PopupController {
       "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
       "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
       "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
-      "imageSlicingEnabled", "imageSliceMaxHeight", "performanceBoost",
+      "imageSlicingEnabled", "imageSliceMaxWidth", "imageSliceMaxHeight", "performanceBoost",
       "textCleanupEnabled", "textTranslateEnabled", "textSourceLanguage", "textTargetLanguage",
     ];
     this.limitTogglePairs = {
@@ -162,6 +162,7 @@ class PopupController {
       preprocessingConcurrency: Number(value("preprocessingConcurrency")),
       upscaleConcurrency: Number(value("upscaleConcurrency")),
       imageSlicingEnabled: checked("imageSlicingEnabled"),
+      imageSliceMaxWidth: Number(value("imageSliceMaxWidth")),
       imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),
       performanceBoost: this.document.getElementById("performanceBoost").checked,
       textCleanupEnabled: checked("textCleanupEnabled"),

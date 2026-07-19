@@ -269,23 +269,41 @@ class Renderer {
       wrapper.style.width = `${metadata.width}px`;
       wrapper.style.maxWidth = "100%";
     }
+    wrapper.style.position = "relative";
     const previousDisplay = image.style.display;
     const slicedDataset = this.captureDatasetValue(image, "aiEnhancerSliced");
     const segmentUrls = new Set(segments.map((segment) => segment?.objectUrl).filter((objectUrl) => typeof objectUrl === "string"));
-    const rawImages = segments.map((segment) => {
+    let sequentialTop = 0;
+    const layouts = segments.map((segment) => {
+      const renderedLeft = Number(segment.renderedLeft) || 0;
+      const renderedTop = Number.isFinite(Number(segment.renderedTop)) ? Number(segment.renderedTop) : sequentialTop;
+      const renderedWidth = Number(segment.renderedWidth) || Number(metadata.width) || 0;
+      const renderedHeight = Number(segment.renderedHeight) || 0;
+      sequentialTop = Math.max(sequentialTop, renderedTop + renderedHeight);
+      return { renderedLeft, renderedTop, renderedWidth, renderedHeight };
+    });
+    const wrapperHeight = Math.max(Number(metadata.height) || 0, ...layouts.map((layout) => layout.renderedTop + layout.renderedHeight));
+    if (wrapperHeight > 0) wrapper.style.height = `${wrapperHeight}px`;
+    const rawImages = segments.map((segment, position) => {
+      const layout = layouts[position];
       const raw = new Image();
       raw.className = "ai-enhancer-raw-slice";
       raw.dataset.aiEnhancerRawSlice = "true";
       raw.dataset.aiEnhancerSliceToken = token;
       raw.dataset.aiEnhancerParentOperationId = identity.operationId || "";
       raw.dataset.aiEnhancerSegmentIndex = String(segment.index);
+      raw.dataset.aiEnhancerSourceX = String(segment.sourceX ?? 0);
       raw.dataset.aiEnhancerSourceY = String(segment.sourceY ?? 0);
+      raw.dataset.aiEnhancerSourceWidth = String(segment.sourceWidth ?? 0);
       raw.dataset.aiEnhancerSourceHeight = String(segment.sourceHeight ?? 0);
       raw.alt = image.alt || "";
       raw.decoding = "async";
       raw.src = segment.objectUrl;
-      raw.style.width = metadata.width > 0 ? `${metadata.width}px` : "100%";
-      raw.style.height = `${segment.renderedHeight}px`;
+      raw.style.position = "absolute";
+      raw.style.left = `${layout.renderedLeft}px`;
+      raw.style.top = `${layout.renderedTop}px`;
+      raw.style.width = layout.renderedWidth > 0 ? `${layout.renderedWidth}px` : "100%";
+      raw.style.height = `${layout.renderedHeight}px`;
       raw.style.display = "block";
       raw.style.objectFit = "fill";
       wrapper.appendChild(raw);
@@ -1172,11 +1190,19 @@ class ViewportImageProvider {
     }
 
     const records = segments.map((segment, position) => {
+      segment.sourceX = Number(segment.sourceX) || 0;
+      segment.sourceY = Number(segment.sourceY) || 0;
+      segment.sourceWidth = Number(segment.sourceWidth) || Number(image.naturalWidth) || Number(metadata.width) || 0;
+      segment.sourceHeight = Number(segment.sourceHeight) || Number(image.naturalHeight) || Number(metadata.height) || 0;
+      segment.renderedLeft = Number(segment.renderedLeft) || 0;
+      segment.renderedTop = Number(segment.renderedTop) || 0;
+      segment.renderedWidth = Number(segment.renderedWidth) || Number(metadata.width) || 0;
+      segment.renderedHeight = Number(segment.renderedHeight) || Number(metadata.height) || 0;
       const segmentId = `${imageId}-seg-${segment.index}`;
-      const segmentOperationId = `${operationId}-seg-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`;
+      const segmentOperationId = `${operationId}-seg-${segment.index}-${segment.sourceX}-${segment.sourceY}-${segment.sourceWidth}-${segment.sourceHeight}`;
       const segmentSourceFingerprint = segmentFingerprints[position];
       const rawImage = transaction.rawImages[position];
-      const segmentKey = `${baseKey}#segment:${segment.index}:${segment.sourceY}:${segment.sourceHeight}`;
+      const segmentKey = `${baseKey}#segment:${segment.index}:${segment.sourceX}:${segment.sourceY}:${segment.sourceWidth}:${segment.sourceHeight}`;
       const segmentOrder = (Number(image.dataset.aiEnhancerPageOrder) || 0) + (segment.index / 1000);
       const segmentMetadata = {
         ...metadata,
@@ -1184,7 +1210,7 @@ class ViewportImageProvider {
         src: segment.objectUrl,
         srcset: null,
         sizes: null,
-        width: metadata.width,
+        width: segment.renderedWidth,
         height: segment.renderedHeight,
         pictureSources: [],
       };
@@ -1252,7 +1278,9 @@ class ViewportImageProvider {
         rawImage.dataset.aiEnhancerKey = segmentKey;
         rawImage.dataset.aiEnhancerParentOperationId = operationId;
         rawImage.dataset.aiEnhancerSegmentIndex = String(segment.index);
+        rawImage.dataset.aiEnhancerSourceX = String(segment.sourceX);
         rawImage.dataset.aiEnhancerSourceY = String(segment.sourceY);
+        rawImage.dataset.aiEnhancerSourceWidth = String(segment.sourceWidth);
         rawImage.dataset.aiEnhancerSourceHeight = String(segment.sourceHeight);
       const segmentEntry = {
           imageId: segmentId,
@@ -1285,12 +1313,14 @@ class ViewportImageProvider {
           parentSourceFingerprint: group.parentSourceFingerprint,
           imageUrl: metadata.imageUrl,
           imageData: segment.imageData,
-          cacheVariant: `segment-${segment.index}-${segment.sourceY}-${segment.sourceHeight}`,
+          cacheVariant: `segment-${segment.index}-${segment.sourceX}-${segment.sourceY}-${segment.sourceWidth}-${segment.sourceHeight}`,
           pageOrder: segmentOrder,
           viewportDistance: this.viewportDistance(rawImage) + segment.index,
           displayMetrics: {
             ...this.displayMetrics(rawImage),
+            sourceWidth: segment.sourceWidth,
             sourceHeight: segment.sourceHeight,
+            renderedWidth: segment.renderedWidth,
             renderedHeight: segment.renderedHeight,
           },
         }, "segment-enqueue-timeout");
@@ -1762,7 +1792,8 @@ class ViewportImageProvider {
     if (!this.imageSlicingEnabled) return false;
     const sourceHeight = image.naturalHeight || 0;
     const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || 0;
-    return sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
+    const sourceWidth = image.naturalWidth || 0;
+    return sourceWidth > this.imageSliceMaxWidth || sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
   }
 
   canProcessCandidate(image, options = {}) {
@@ -1864,46 +1895,58 @@ class ViewportImageProvider {
       throw this.preprocessingError(signal.reason || "cancelled");
     }
     const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || source.height;
+    const renderedWidth = image.getBoundingClientRect().width || image.clientWidth || source.width;
     const sourcePerRenderedPixel = source.height / Math.max(renderedHeight, 1);
     const screenSourceHeight = Math.round((window.innerHeight || 900) * 1.25 * sourcePerRenderedPixel);
     const segmentSourceHeight = Math.min(Math.max(screenSourceHeight, 512), this.imageSliceMaxHeight);
+    const segmentSourceWidth = Math.min(Math.max(this.imageSliceMaxWidth, 512), source.width);
     const renderedPerSourcePixel = renderedHeight / source.height;
+    const renderedWidthPerSourcePixel = renderedWidth / source.width;
     const segments = [];
     try {
-      for (let sourceY = 0, index = 0; sourceY < source.height; sourceY += segmentSourceHeight, index += 1) {
-        if (this.isPreprocessingCancelled(signal)) {
-          throw this.preprocessingError(signal.reason || "cancelled");
+      let index = 0;
+      for (let sourceY = 0; sourceY < source.height; sourceY += segmentSourceHeight) {
+        for (let sourceX = 0; sourceX < source.width; sourceX += segmentSourceWidth) {
+          if (this.isPreprocessingCancelled(signal)) {
+            throw this.preprocessingError(signal.reason || "cancelled");
+          }
+          const sourceWidth = Math.min(segmentSourceWidth, source.width - sourceX);
+          const sourceHeight = Math.min(segmentSourceHeight, source.height - sourceY);
+          const canvas = document.createElement("canvas");
+          canvas.width = sourceWidth;
+          canvas.height = sourceHeight;
+          const context = canvas.getContext("2d", { alpha: false });
+          if (!context) {
+            throw this.preprocessingError("slice-crop-error", "Unable to create image segment canvas.");
+          }
+          try {
+            context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+          } catch (error) {
+            throw this.preprocessingError("slice-crop-error", error?.message || "Unable to crop image segment.");
+          }
+          const payload = await this.withTimeout(
+            Promise.resolve(this.canvasToSegmentPayload(canvas, signal)),
+            AI_MANGA_UPSCALER_CONFIG.images.sliceEncodeTimeoutMs,
+            "slice-encode-timeout",
+          );
+          if (this.isPreprocessingCancelled(signal)) {
+            this.discardSegments([payload]);
+            throw this.preprocessingError(signal.reason || "cancelled");
+          }
+          segments.push({
+            index,
+            sourceX,
+            sourceY,
+            sourceWidth,
+            sourceHeight,
+            renderedLeft: sourceX * renderedWidthPerSourcePixel,
+            renderedTop: sourceY * renderedPerSourcePixel,
+            renderedWidth: sourceWidth * renderedWidthPerSourcePixel,
+            renderedHeight: sourceHeight * renderedPerSourcePixel,
+            ...payload,
+          });
+          index += 1;
         }
-        const sourceHeight = Math.min(segmentSourceHeight, source.height - sourceY);
-        const canvas = document.createElement("canvas");
-        canvas.width = source.width;
-        canvas.height = sourceHeight;
-        const context = canvas.getContext("2d", { alpha: false });
-        if (!context) {
-          throw this.preprocessingError("slice-crop-error", "Unable to create image segment canvas.");
-        }
-        try {
-          context.drawImage(source, 0, sourceY, source.width, sourceHeight, 0, 0, source.width, sourceHeight);
-        } catch (error) {
-          throw this.preprocessingError("slice-crop-error", error?.message || "Unable to crop image segment.");
-        }
-        const payload = await this.withTimeout(
-          Promise.resolve(this.canvasToSegmentPayload(canvas, signal)),
-          AI_MANGA_UPSCALER_CONFIG.images.sliceEncodeTimeoutMs,
-          "slice-encode-timeout",
-        );
-        if (this.isPreprocessingCancelled(signal)) {
-          this.discardSegments([payload]);
-          throw this.preprocessingError(signal.reason || "cancelled");
-        }
-        segments.push({
-          index,
-          sourceY,
-          sourceHeight,
-          renderedTop: sourceY * renderedPerSourcePixel,
-          renderedHeight: sourceHeight * renderedPerSourcePixel,
-          ...payload,
-        });
       }
     } catch (error) {
       this.discardSegments(segments);

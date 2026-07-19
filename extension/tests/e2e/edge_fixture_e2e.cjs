@@ -595,6 +595,7 @@ async function main() {
     dashboardClient = null;
     await browserClient.send("Target.closeTarget", { targetId: createdDashboard.targetId });
 
+    await initialWorkerClient.evaluate("chrome.storage.local.set({ imageSliceMaxWidth: 1024, imageSliceMaxHeight: 2200, maxInputWidthEnabled: false })");
     const geometryTargetCreated = await browserClient.send("Target.createTarget", { url: `${fixture.origin}/geometry-e2e` });
     const geometryTarget = await waitFor("extreme geometry fixture target", async () => {
       const currentTargets = await listTargets(port);
@@ -624,14 +625,33 @@ async function main() {
     assert.equal(geometryState.direct, false, "768x32768 must use vertical slicing in the browser");
     assert.equal(geometryState.sliced, true);
     assert.equal(geometryState.readyRawSlices, geometryState.rawSlices);
+    const wideGeometryState = await waitFor("real 2048x1200 grid DOM render", async () => geometryClient.evaluate(`(() => {
+      const image = document.querySelector('#eligible-wide');
+      const wrapper = image?.previousElementSibling?.classList.contains('ai-enhancer-slice-wrapper') ? image.previousElementSibling : null;
+      const rawSlices = wrapper ? [...wrapper.querySelectorAll('img.ai-enhancer-raw-slice')] : [];
+      if (image?.dataset.aiEnhancerSliced !== 'true' || rawSlices.length !== 2 || !rawSlices.every((raw) => raw.classList.contains('ai-manga-upscaler-ready') && raw.src.startsWith('blob:'))) return null;
+      return {
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        rawSlices: rawSlices.length,
+        positions: rawSlices.map((raw) => ({ left: raw.style.left, top: raw.style.top, width: raw.style.width, position: raw.style.position })),
+        wrapperPosition: wrapper.style.position,
+      };
+    })()`), 180000);
+    assert.equal(wideGeometryState.width, 2048);
+    assert.equal(wideGeometryState.height, 1200);
+    assert.equal(wideGeometryState.wrapperPosition, "relative");
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.left), ["0px", "512px"]);
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.position), ["absolute", "absolute"]);
     const geometryHealth = await waitFor("extreme geometry backend settlement", async () => {
       const health = await readHealth();
       return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 ? health : null;
     }, 180000);
-    const geometryEvidence = { ...geometryState, queue: geometryHealth.queue };
+    const geometryEvidence = { ...geometryState, wide: wideGeometryState, queue: geometryHealth.queue };
     geometryClient.close();
     geometryClient = null;
     await browserClient.send("Target.closeTarget", { targetId: geometryTargetCreated.targetId });
+    await initialWorkerClient.evaluate("chrome.storage.local.set({ imageSliceMaxWidth: 8192, imageSliceMaxHeight: 2200, maxInputWidthEnabled: true })");
     initialWorkerClient.close();
 
     const lifecycleEvidence = {};

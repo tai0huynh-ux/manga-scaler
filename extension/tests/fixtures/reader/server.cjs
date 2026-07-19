@@ -148,10 +148,13 @@ function geometryE2eReaderHtml() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI Manga Upscaler Extreme Geometry Fixture</title>
-  <style>body { margin: 0; background: #ece6da; } img { display: block; width: 768px; height: auto; }</style>
+  <style>body { margin: 0; background: #ece6da; } img { display: block; width: 768px; height: auto; } #eligible-wide { width: 1024px; }</style>
 </head>
 <body data-fixture="geometry-e2e-v1">
-  <main><img id="eligible-extreme" src="/png/geometry-768x32768.png?w=768&amp;h=32768" width="768" height="32768"></main>
+  <main>
+    <img id="eligible-wide" src="/png/geometry-2048x1200.png?w=2048&amp;h=1200" width="2048" height="1200">
+    <img id="eligible-extreme" src="/png/geometry-768x32768.png?w=768&amp;h=32768" width="768" height="32768">
+  </main>
 </body>
 </html>`;
 }
