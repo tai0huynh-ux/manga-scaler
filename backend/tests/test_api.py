@@ -6,6 +6,7 @@ import threading
 import time
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from app.main import app
 from app.models.schemas import UpscaleResponse
@@ -22,6 +23,16 @@ def test_health_is_available_without_model_artifacts() -> None:
     assert payload["provider"] in payload["gpu"]["availableProviders"]
     assert payload["model"] == "anime_x4"
     assert {"queue", "cache", "uptime"} <= payload.keys()
+
+
+def test_health_uses_cached_file_count_without_rescanning_the_cache_directory() -> None:
+    with TestClient(app) as client:
+        expected_files = client.app.state.cache.file_count
+        with patch("pathlib.Path.iterdir", side_effect=AssertionError("health must not scan the cache directory")):
+            response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["cache"]["files"] == expected_files
 
 
 def test_upscale_rejects_invalid_browser_image_data() -> None:

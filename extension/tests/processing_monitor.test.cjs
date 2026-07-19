@@ -351,3 +351,29 @@ test("MON-LOAD retains and filters 500 synthetic jobs without dropping terminal 
   assert.equal(filtered.length, 250);
   assert.ok(Date.now() - started < 3000, "500-job monitor snapshot/filter should remain bounded");
 });
+
+test("MON-LOAD prunes the oldest active jobs at the configured limit", () => {
+  const monitor = loadMonitor();
+  const store = new monitor.ProcessingMonitorStore({ maxActiveHistory: 500, retentionHours: 1000 });
+  const started = Date.now();
+  for (let index = 0; index < 503; index += 1) {
+    store.ingest(monitor.createEvent({
+      tabId: 11,
+      imageId: `active-image-${index}`,
+      operationId: `active-operation-${index}`,
+      eventId: `active-event-${index}`,
+      stage: "DETECTED",
+      timestamp: new Date(started + index).toISOString(),
+    }));
+  }
+
+  store.prune(started + 503);
+  const snapshot = store.snapshot();
+
+  assert.equal(snapshot.summary.active, 500);
+  assert.equal(snapshot.jobs.length, 500);
+  assert.equal(store.currentOperation(11, "active-image-0"), null);
+  assert.equal(store.currentOperation(11, "active-image-1"), null);
+  assert.equal(store.currentOperation(11, "active-image-2"), null);
+  assert.equal(store.currentOperation(11, "active-image-502"), "active-operation-502");
+});
