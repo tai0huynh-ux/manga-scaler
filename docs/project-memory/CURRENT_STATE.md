@@ -3,6 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-19, Asia/Bangkok.
+- Current green feature checkpoint: `f634734` (`feat(discovery): process bounded images ahead of viewport`).
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -15,7 +16,7 @@
 Full `scripts/verify.ps1` result on integrated `main` after the real-browser geometry checkpoint:
 
 - Backend: 57 tests passed, including HTTP cancellation/lifespan restart and queue-capacity shutdown races.
-- Extension: 180 tests passed, including real Dashboard browser interaction, 500-job load acceptance, and the geometry fixture regression.
+- Extension: 187 tests passed, including bounded lookahead scheduling, real Dashboard browser interaction, 500-job load acceptance, and the geometry fixture regression.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -25,6 +26,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 ## Implemented capabilities
 
 - Viewport-aware `<img>` discovery and preprocessing.
+- User-configurable bounded ahead-of-viewport processing: nearest eligible images are preprocessed before scrolling, with strict visible/prefetch/lookahead priority, duplicate suppression, and a retained bounded window.
 - Operation-aware stale-result protection across content, background, and backend.
 - Transactional long-image slicing with full-image fallback.
 - User-configurable two-dimensional slicing with exact source X/Y/width/height identity and positioned DOM tile reconstruction; the default `8192` width preserves normal vertical manga slicing.
@@ -59,6 +61,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
 - Clean Edge live acceptance passed TruyenQQ Manga, Manhwa, Manhua, and hentaivnx with 100% eligible-image replacement and zero duplicate/stale work, false positives, failures, residual Referer rules, or unsettled queues.
 - The deterministic geometry matrix covers eight minimum/boundary inputs, row-complete vertical slicing for `512x16384` and `768x32768`, and safe non-slicing rejection for `16384x512` and `32768x768`; fixture PNG dimensions are verified without tracked binary assets.
+- Settings schema version 3 persists `aheadProcessingEnabled`, `aheadProcessingImageLimit`, and `prefetchMarginPx` with bounded migration and Popup/Dashboard controls.
+- Real Edge lookahead acceptance committed an offscreen image at `rectTop=3200` and `viewportDistance=2715` with `scrollY=0`; queue/rules settled and browser exceptions remained zero.
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.

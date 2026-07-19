@@ -2,7 +2,7 @@
 
 ## Recovery result
 
-- Verified date: 2026-07-18, Asia/Bangkok.
+- Verified date: 2026-07-19, Asia/Bangkok.
 - Active project: `manga-scaler` / AI Manga Upscaler.
 - Repository: `https://github.com/tai0huynh-ux/manga-scaler.git`.
 - Branch: `main`.
@@ -19,6 +19,7 @@
 - Commit `4a2e304` was the last implementation baseline documented before project-memory creation.
 - Commit `7b8da56` added verified project-memory documentation without runtime changes.
 - Full baseline verification on `7b8da56`: 47 backend tests passed, 98 extension tests passed, JavaScript syntax checks passed, Ruff passed, and total backend coverage was 71% against the 45% gate.
+- Current feature checkpoint `f634734` adds bounded ahead-of-viewport processing with schema-version-3 settings, strict priority tiers, and real Edge no-scroll acceptance beyond the legacy prefetch margin.
 
 ## Architecture and acceptance state
 
@@ -41,6 +42,15 @@
 ## Next exact action
 
 Improve focused model-manager/downloader/upscaler coverage, then run longer reliability soak and production-quality benchmarks without reopening the green lifecycle contracts.
+
+## Bounded ahead-of-viewport processing checkpoint
+
+- Popup and Dashboard expose an enable toggle, a bounded 1-50 image lookahead window, and a 0-12000 px prefetch margin. Defaults are enabled, 8 images, and 1800 px.
+- The content scheduler retains only the nearest eligible offscreen image keys, promotes them when they enter normal prefetch, and orders preprocessing as visible, prefetch, then lookahead.
+- Repeated refreshes cannot duplicate jobs. Disable, cancellation, removal, source replacement, and pagehide clear owned lookahead state while existing guarded slot and background cancellation paths settle work.
+- Full verification passed 57 backend tests, 187 extension tests, JavaScript syntax checks, Ruff, and 73% backend coverage.
+- Real Edge committed the lookahead fixture as a Blob at `rectTop=3200` and `viewportDistance=2715` while `scrollY=0`. Worker stop/reactivation, navigation invalidation, extension reload, geometry, rule cleanup, registry settlement, and zero browser exceptions remained green.
+- Implementation commit: `f634734` on `main`; this state update records the completed full gate and Edge acceptance.
 
 ## Backend restart/cancellation checkpoint
 

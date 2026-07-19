@@ -238,3 +238,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: Input maximums remain an independent safety gate; extreme-wide processing requires explicit user permission. Every source pixel belongs to exactly one tile, and any segment registration/render failure rolls back the entire group.
 - Verification: New grid crop/layout regressions failed before implementation, then passed. Fast verification passed 57 backend tests and 182 extension tests. Real Edge passed two `1024x1200` source tiles rendered at exact `0px`/`512px` positions, retained 55/55 tall slices, reported zero browser exceptions/duplicates/stale work, and settled queues/rules.
 - Remaining: Add bounded processing of images ahead of the viewport with user controls and navigation/reload settlement coverage.
+
+## 2026-07-19 - Bounded ahead-of-viewport processing
+
+- Request: Preprocess eligible images before they enter the viewport without scheduling an unbounded chapter and without weakening worker/navigation/reload lifecycle guarantees.
+- Changes: Added schema-version-3 settings for `aheadProcessingEnabled`, `aheadProcessingImageLimit`, and `prefetchMarginPx`; added Popup/Dashboard controls; selected nearest eligible `seen` images into a retained bounded window; added strict visible/prefetch/lookahead queue tiers, duplicate suppression, disable/cancel cleanup, and deterministic reader/Edge lookahead fixtures.
+- Invariant/decision: Lookahead owns only the bounded image window and never stores image bytes. Visible work outranks lookahead. Keys are released when images enter normal prefetch, are cancelled, replaced, removed, or the page is hidden; existing guarded slot, queue, DNR, registry, and Blob-commit settlement paths remain authoritative.
+- Verification: The new regressions failed before implementation and then passed. Full verification passed 57 backend tests, 187 extension tests, JavaScript checks, Ruff, and 73% backend coverage. Real Edge passed worker termination/reactivation, same-tab navigation, extension reload, two-dimensional geometry, and the new offscreen lookahead case (`rectTop=3200`, `viewportDistance=2715`, `scrollY=0`) with zero browser exceptions, duplicate replacements, stale entries, residual Referer rules, and unsettled queues.
+- Git: Green implementation committed as `f634734` on `main`; this documentation checkpoint records the verified baseline.
+- Remaining: Improve focused model-manager/downloader/upscaler coverage, then run reliability soak and production-quality benchmarks.

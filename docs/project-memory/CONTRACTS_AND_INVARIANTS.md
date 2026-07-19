@@ -73,6 +73,10 @@ The extension runtime and `shared/config/defaults.json` use a 300 px minimum for
 
 Persisted settings schema version 2 adds bounded `imageSliceMaxWidth` ownership. The internal default is `8192`, accepted values are `512` through `8192`, and migration must remain idempotent before the width setting is exposed through slicing behavior or UI.
 
+Persisted settings schema version 3 adds `aheadProcessingEnabled`, `aheadProcessingImageLimit` (1 through 50, default 8), and `prefetchMarginPx` (0 through 12000, default 1800). Migration is bounded and idempotent. Ahead processing may schedule only the nearest eligible `seen` images outside the prefetch margin, never duplicates an existing operation, and retains a bounded window rather than walking an entire chapter without viewport movement.
+
+Preprocessing priority is strict: visible work outranks normal prefetch, which outranks ahead work. A queued ahead waiter may be promoted when it enters the prefetch margin; distant normal-prefetch waiters may be deferred, but ahead waiters are not cancelled solely for being beyond `cancelDistancePx`. Navigation, pagehide, disable, source replacement, and cancellation clear owned ahead keys and release preprocessing slots through the existing guarded settlement paths.
+
 Two-dimensional segment identity includes source X, Y, width, and height in operation IDs, source revisions, cache variants, DOM datasets, and display metrics. The renderer positions tiles by exact rendered left/top/width/height inside one fixed-size relative wrapper; rollback remains group-atomic and idempotent.
 
 ## Discovery support boundary
