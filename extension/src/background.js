@@ -18,6 +18,7 @@ const DEFAULT_STATE = Object.freeze({
   maxOutputWidthEnabled: true,
   maxOutputHeightEnabled: true,
   imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
+  imageSliceMaxWidth: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx,
   imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
   outputQuality: AI_MANGA_UPSCALER_CONFIG.images.outputQuality,
   sizingMode: "auto",
@@ -44,7 +45,7 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
-const STORAGE_SCHEMA_VERSION = 1;
+const STORAGE_SCHEMA_VERSION = 2;
 const STORAGE_BOOLEAN_KEYS = new Set([
   "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
   "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
@@ -59,6 +60,7 @@ const STORAGE_NUMERIC_BOUNDS = {
   maxInputHeight: [1, 32768],
   maxOutputWidth: [256, 16383],
   maxOutputHeight: [256, 16383],
+  imageSliceMaxWidth: [512, 8192],
   imageSliceMaxHeight: [512, 8192],
   outputQuality: [50, 100],
   preprocessingConcurrency: [1, 12],
@@ -424,6 +426,7 @@ class StatisticsTracker {
       maxOutputWidthEnabled: current.maxOutputWidthEnabled !== false,
       maxOutputHeightEnabled: current.maxOutputHeightEnabled !== false,
       imageSlicingEnabled: current.imageSlicingEnabled !== false,
+      imageSliceMaxWidth: Number(current.imageSliceMaxWidth ?? AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx),
       imageSliceMaxHeight: Number(current.imageSliceMaxHeight ?? AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx),
       outputQuality: Number(current.outputQuality),
       sizingMode: current.sizingMode || "auto",
@@ -2597,6 +2600,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       maxOutputWidthEnabled: message.maxOutputWidthEnabled !== false,
       maxOutputHeightEnabled: message.maxOutputHeightEnabled !== false,
       imageSlicingEnabled: message.imageSlicingEnabled !== false,
+      imageSliceMaxWidth: clamp(message.imageSliceMaxWidth, 512, 8192, AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx),
       imageSliceMaxHeight: clamp(message.imageSliceMaxHeight, 512, 8192, AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx),
       outputQuality: clamp(message.outputQuality, 50, 100, 90),
       sizingMode: ["pixel", "auto", "screen"].includes(message.sizingMode) ? message.sizingMode : "auto",

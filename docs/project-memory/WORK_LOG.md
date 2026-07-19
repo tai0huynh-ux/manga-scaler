@@ -222,3 +222,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Changes: Pushed feature commit `edd461eecafd2807335f70f08f6b607a856c9ce4` and fast-forwarded the clean, unchanged `main` worktree to it.
 - Verification: Final main `scripts/verify.ps1` passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% coverage. The first Edge run was rejected after a transient pre-reload registry count of two; an unchanged clean rerun passed Dashboard, 55/55 geometry slices, worker restart, navigation, extension reload, zero browser exceptions, and settled queues/rules.
 - Remaining: Improve focused model-manager/downloader/upscaler coverage, then run reliability soak and production-quality benchmarks.
+
+## 2026-07-19 - Slice-width settings contract
+
+- Request: Add user-controlled slice width/height and bounded ahead-of-viewport processing without destabilizing the green lifecycle.
+- Changes: Added aligned `sliceMaxWidthPx=8192` defaults, persisted `imageSliceMaxWidth`, schema-version-2 migration bounds, background status/message handling, and content-side settings loading. No UI or slicing behavior is exposed in this checkpoint.
+- Invariant/decision: A user-visible control is not published until the two-dimensional crop/render path is green. Existing vertical slicing remains unchanged, and migration is bounded and idempotent.
+- Verification: The new migration and message-contract assertions failed before implementation, then passed. Fast verification passed 57 backend tests, 180 extension tests, JavaScript checks, and all existing lifecycle regressions.
+- Remaining: Implement two-dimensional segmentation and exact DOM layout, then expose the width/height controls.

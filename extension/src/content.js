@@ -651,6 +651,7 @@ class ViewportImageProvider {
     this.preprocessingWaiters = [];
     this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
+    this.imageSliceMaxWidth = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.sliceGroups = new Map();
     this.sliceGroupsByParent = new WeakMap();
@@ -681,6 +682,7 @@ class ViewportImageProvider {
       maxInputWidthEnabled: true,
       maxInputHeightEnabled: true,
       imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
+      imageSliceMaxWidth: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx,
       imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
       preprocessingConcurrency: AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency,
     });
@@ -689,6 +691,7 @@ class ViewportImageProvider {
     this.blacklist = new Set(stored.blacklistRules || []);
     this.imageProvider.updateLimits(stored);
     this.imageSlicingEnabled = stored.imageSlicingEnabled !== false;
+    this.imageSliceMaxWidth = Number(stored.imageSliceMaxWidth) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = Number(stored.imageSliceMaxHeight) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.preprocessingConcurrency = Number(stored.preprocessingConcurrency) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
     this.observeExistingImages();
@@ -2512,12 +2515,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.preprocessingConcurrency) {
     viewportProvider.preprocessingConcurrency = Number(changes.preprocessingConcurrency.newValue) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
   }
-  if (areaName === "local" && (changes.imageSlicingEnabled || changes.imageSliceMaxHeight)) {
+  if (areaName === "local" && (changes.imageSlicingEnabled || changes.imageSliceMaxWidth || changes.imageSliceMaxHeight)) {
     chrome.storage.local.get({
       imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
+      imageSliceMaxWidth: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx,
       imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
     }).then((settings) => {
       viewportProvider.imageSlicingEnabled = settings.imageSlicingEnabled !== false;
+      viewportProvider.imageSliceMaxWidth = Number(settings.imageSliceMaxWidth) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
       viewportProvider.imageSliceMaxHeight = Number(settings.imageSliceMaxHeight) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
       viewportProvider.reprocessVisibleImages();
     });

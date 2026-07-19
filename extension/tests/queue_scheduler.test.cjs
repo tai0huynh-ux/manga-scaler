@@ -1181,6 +1181,7 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
     maxOutputWidth: 128,
     maxOutputHeight: Number.POSITIVE_INFINITY,
     outputQuality: 101,
+    imageSliceMaxWidth: 99999,
     maxInputWidth: 10,
     minInputWidth: 300,
     textCleanupEnabled: "yes",
@@ -1188,12 +1189,13 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
     unknownSecret: "should-be-dropped",
   };
   const migrated = migratePersistedSettings(raw);
-  assert.equal(migrated.storageSchemaVersion, 1);
+  assert.equal(migrated.storageSchemaVersion, 2);
   assert.equal(migrated.mode, "auto");
   assert.equal(migrated.enhanceLevel, 1);
   assert.equal(migrated.maxOutputWidth, 256);
   assert.equal(migrated.maxOutputHeight, 8192);
   assert.equal(migrated.outputQuality, 100);
+  assert.equal(migrated.imageSliceMaxWidth, 8192);
   assert.equal(migrated.maxInputWidth, 300);
   assert.equal(migrated.textCleanupEnabled, false);
   assert.equal(migrated.textTargetLanguage, "vi");
@@ -2363,8 +2365,10 @@ test("image-limit message fallback reuses the configured 300px minimum", async (
   assert.equal(stored.length, 1);
   assert.equal(stored[0].minInputWidth, 300);
   assert.equal(stored[0].minInputHeight, 300);
+  assert.equal(stored[0].imageSliceMaxWidth, 8192);
   assert.equal(responses[0].minInputWidth, 300);
   assert.equal(responses[0].minInputHeight, 300);
+  assert.equal(responses[0].imageSliceMaxWidth, 8192);
 });
 
 test("extremely tall slicing covers every source row exactly once", async () => {

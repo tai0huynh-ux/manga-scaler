@@ -71,6 +71,8 @@ Compare these files whenever changing shared defaults:
 
 The extension runtime and `shared/config/defaults.json` use a 300 px minimum for both input dimensions. Boundary behavior is: `299x299` rejected, `300x300` accepted, `301x301` accepted, and an image with either dimension below 300 rejected while both minimum toggles are enabled.
 
+Persisted settings schema version 2 adds bounded `imageSliceMaxWidth` ownership. The internal default is `8192`, accepted values are `512` through `8192`, and migration must remain idempotent before the width setting is exposed through slicing behavior or UI.
+
 ## Discovery support boundary
 
 - The current scanner supports light-DOM `<img>` elements, including responsive `<picture>` sources after they resolve to the owned image element.

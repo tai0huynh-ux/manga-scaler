@@ -11,6 +11,8 @@
   },
   "extension": {
     "minimumImageDimensionPx": 300,
+    "sliceMaxWidthPx": 8192,
+    "sliceMaxHeightPx": 2200,
     "prefetchMarginPx": 1800,
     "cancelDistancePx": 3600,
     "maxConcurrentRequests": 2,
