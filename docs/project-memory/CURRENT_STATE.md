@@ -4,6 +4,7 @@
 
 - Verified date: 2026-07-19, Asia/Bangkok.
 - Branch: `main`.
+- Green live-reader baseline: `915920450d9d3975fc6db807e530dd9292c9a129`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.

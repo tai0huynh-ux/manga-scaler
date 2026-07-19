@@ -53,6 +53,7 @@ Begin the extreme-image geometry checkpoint from the new green live-reader basel
 - Every live run completed with false positives `0`, duplicate jobs `0`, stale replacements `0`, sanitized failures `0`, residual Referer rules `0`, and queue size/waiting/processing `0`.
 - Deterministic Edge lifecycle acceptance passed worker stop/reactivation, unrelated-rule preservation, navigation invalidation, extension reload recovery, and queue/rule settlement with browser exceptions `0`.
 - Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage.
+- Green implementation/state commit: `915920450d9d3975fc6db807e530dd9292c9a129`; use it as the starting baseline for the extreme-image geometry checkpoint.
 
 ## HTTP 422 and browser-owned request checkpoint
 
