@@ -198,3 +198,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: Monitor state is sanitized and bounded; stale or terminal operations cannot revive; `COMPLETED` requires a confirmed DOM render commit; 422 remains structured and non-retryable; Dashboard actions cross the real MV3 service-worker boundary.
 - Verification: Full main gate passed 52 backend tests, 179 extension tests, JavaScript checks, Ruff, and 72% coverage. Edge Dashboard/lifecycle E2E passed summary/filter/detail, sanitized export, cancel, linked retry, reload recovery, 500-job load, worker termination, navigation, extension reload, queue/rule settlement, and zero browser exceptions. Existing clean live acceptance remains `22/22` Manga, `75/75` Manhwa, `26/26` Manhua, and `16/16` hentaivnx with zero duplicate/stale work or residual rules.
 - Remaining: Add backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.
+
+## 2026-07-19 - Real-browser geometry integrated into main
+
+- Request: Complete the `768x32768` browser checkpoint without losing the current Processing Monitor and HTTP 422 contracts, then integrate the verified branch into `main`.
+- Changes: Merged current `origin/main` into the isolated feature branch with both state histories preserved, pushed merge commit `83e5a175dd39ca4ca64ad2fa84ca98dc208bb317`, and fast-forwarded `main` to that commit.
+- Invariant/decision: The geometry gate counts only a clean run with one source DOM node, vertical slicing rather than direct replacement, all 55 raw slices committed as ready Blob URLs, and backend queue size/waiting/processing settled to zero.
+- Verification: On final `main`, `scripts/verify.ps1` passed 52 backend tests, 180 extension tests, JavaScript checks, Ruff, and 72% coverage. Edge fixture/Dashboard/geometry/lifecycle E2E passed with 55/55 geometry slices, zero browser exceptions, zero duplicate replacements, zero stale navigation entries, and settled queues/rules.
+- Remaining: Expand backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.

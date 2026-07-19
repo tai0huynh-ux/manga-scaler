@@ -49,6 +49,7 @@ Add backend restart/cancellation E2E without reopening the green Processing Moni
 - The real extension Dashboard E2E verifies summary counts, status/stage/site/tab/search filters, structured 422 details, sanitized export, real cancel, linked retry attempts, clear-history behavior, reload recovery, and 500 synthetic jobs.
 - Final main gate passed 52 backend tests, 179 extension tests, JavaScript checks, Ruff, and 72% backend coverage.
 - Final Edge fixture/lifecycle/Monitor E2E passed with queue size/waiting/processing `0`, duplicate replacements `0`, stale Chapter A entries `0`, residual Referer rules `0`, browser exceptions `0`, and a 500-job Dashboard render in 49 ms with 5 ms filtering and 4 ms detail opening.
+- Real-browser geometry acceptance was synchronized with current main by merge commit `83e5a175dd39ca4ca64ad2fa84ca98dc208bb317`, then fast-forwarded into `main`.
 
 ## Extreme-image geometry contract checkpoint
 
@@ -57,9 +58,9 @@ Add backend restart/cancellation E2E without reopening the green Processing Moni
 - Expanded safe extreme-wide rejection to `16384x512` and `32768x768`; neither input may enter vertical slicing.
 - Real Edge rendered `768x32768` through vertical slicing with 55 raw slices and 55/55 ready Blob replacements; interrupted repeated runs can leave heavy backend work queued and are not acceptance evidence.
 - Verified synthetic fixture PNG dimensions from IHDR metadata for every small/boundary case; no binary reader asset was committed.
-- Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage. Real Edge fixture/lifecycle E2E passed with queue/rules settled and zero duplicate replacements, stale Chapter A entries, or browser exceptions.
+- Final main verification passed 52 backend tests, 180 extension tests, JavaScript checks, Ruff, and 72% backend coverage. Real Edge fixture/lifecycle/geometry E2E passed with queue/rules settled and zero duplicate replacements, stale Chapter A entries, or browser exceptions.
 - Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans returned zero findings. `git fsck --full` returned success with dangling objects only.
-- This checkpoint changes tests and verified state only; it does not claim a real-browser render of the `32768`-pixel synthetic case.
+- This checkpoint adds test/fixture coverage and verified state; the real browser rendered the `32768`-pixel synthetic case through 55/55 committed slices.
 
 ## Clean live-reader acceptance checkpoint
 
@@ -85,7 +86,7 @@ Add backend restart/cancellation E2E without reopening the green Processing Moni
 - Commit/push: `f0da83c7c94d796b0e240d02d4945ef7d190133d` reached `origin/main` with zero divergence.
 - Live-site URL acceptance was not rerun because `AI_MANGA_LIVE_URL` was not supplied; the deterministic contract-equivalent fixture is the current runtime proof.
 
-Processing Monitor synchronization is now in progress on `codex/live-reader-acceptance-c518`; direct Dashboard browser interaction/load acceptance passed after the normal merge from current `origin/main`. Main integration remains pending the live-site decision.
+Processing Monitor and real-browser extreme-geometry acceptance are integrated on `main`; direct Dashboard browser interaction/load acceptance and the clean four-site live checkpoint remain green.
 
 ## Protected-read lifecycle acceptance checkpoint
 

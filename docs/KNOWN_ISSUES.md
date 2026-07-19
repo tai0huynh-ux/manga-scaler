@@ -27,4 +27,4 @@
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - The four-site live gate is point-in-time and may drift with public markup, advertisements, CDN policy, or anti-bot changes.
-- A real-browser render of the new `768x32768` deterministic geometry case is not yet covered; its row-complete slicing contract is currently proven at the focused test boundary.
+- Repeated interrupted `768x32768` browser runs can leave expensive backend work queued; acceptance evidence must come from a clean run that settles queue size, waiting, and processing to zero.

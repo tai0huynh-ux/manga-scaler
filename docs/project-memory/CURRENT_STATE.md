@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-19, Asia/Bangkok.
-- Branch: `main`; Processing Monitor feature integration commit: `0e4f3f91bf15463ba5454e6b455438f32aa80d0e`.
+- Branch: `main`; Processing Monitor and real-browser geometry integration commit: `83e5a175dd39ca4ca64ad2fa84ca98dc208bb317`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
@@ -12,10 +12,10 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result after the HTTP 422/browser-owned request checkpoint:
+Full `scripts/verify.ps1` result on integrated `main` after the real-browser geometry checkpoint:
 
 - Backend: 52 tests passed.
-- Extension: 179 tests passed, including real Dashboard browser interaction and 500-job load acceptance.
+- Extension: 180 tests passed, including real Dashboard browser interaction, 500-job load acceptance, and the geometry fixture regression.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 72%, above the 45% gate.
@@ -82,8 +82,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
-1. Add real-browser rendering coverage for the `768x32768` geometry case.
-2. Expand backend restart/cancellation E2E and improve focused model-manager/downloader/upscaler coverage.
-3. Run longer reliability soak and production-quality benchmarks before release claims.
+1. Expand backend restart/cancellation E2E and improve focused model-manager/downloader/upscaler coverage.
+2. Run longer reliability soak and production-quality benchmarks before release claims.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.
