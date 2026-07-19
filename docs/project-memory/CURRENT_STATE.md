@@ -14,11 +14,11 @@
 
 Full `scripts/verify.ps1` result on integrated `main` after the real-browser geometry checkpoint:
 
-- Backend: 52 tests passed.
+- Backend: 57 tests passed, including HTTP cancellation/lifespan restart and queue-capacity shutdown races.
 - Extension: 180 tests passed, including real Dashboard browser interaction, 500-job load acceptance, and the geometry fixture regression.
 - JavaScript syntax checks passed.
 - Ruff passed.
-- Total backend coverage: 72%, above the 45% gate.
+- Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
 
 Git integrity recovery also passed `git fsck --full` after injected `desktop.ini` files were moved to a recoverable external backup. Git reported one dangling blob but no corruption.
 
@@ -62,6 +62,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
 - Dashboard browser acceptance now proves summary counts, status/stage/site/tab/search filters, sanitized 422 details/export, linked retry attempts, real queue/backend cancellation, terminal clearing, reload recovery, and 500 synthetic-job render/filter/detail latency.
+- Backend queue shutdown cancels active, queued, and queue-capacity-blocked submitters, clears tracked jobs/futures before restart, and uses exact object ownership so stale same-ID completion cannot remove a newer job.
+- FastAPI lifecycle acceptance proves an active HTTP upscale can be cancelled through `DELETE /jobs/{job_id}`, the queue settles, and the next application lifespan starts workers with no stale job.
 
 ## Known limitations
 
@@ -82,7 +84,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
-1. Expand backend restart/cancellation E2E and improve focused model-manager/downloader/upscaler coverage.
+1. Improve focused model-manager/downloader/upscaler coverage.
 2. Run longer reliability soak and production-quality benchmarks before release claims.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.

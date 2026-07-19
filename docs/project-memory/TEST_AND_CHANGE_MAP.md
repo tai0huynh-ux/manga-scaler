@@ -51,7 +51,8 @@ Full verification runs:
 - API health, error shape, trace ID, browser aliases.
 - Deterministic image classification and quality metrics.
 - Tiled merge correctness, cancellation, and trace summaries.
-- Queue concurrency, active cancellation, stop settlement, counters, and trace propagation.
+- Queue concurrency, active/queued/capacity-blocked cancellation, clean stop/restart settlement, same-ID stale completion safety, counters, and trace propagation.
+- FastAPI HTTP cancellation followed by application lifespan restart with no stale backend job.
 - DirectML fallback specificity and failed-provider session eviction.
 - Text cleanup, truthful capability reporting, rendering, and translation memory.
 - Content source replacement races and stale completion rejection.

@@ -206,3 +206,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: The geometry gate counts only a clean run with one source DOM node, vertical slicing rather than direct replacement, all 55 raw slices committed as ready Blob URLs, and backend queue size/waiting/processing settled to zero.
 - Verification: On final `main`, `scripts/verify.ps1` passed 52 backend tests, 180 extension tests, JavaScript checks, Ruff, and 72% coverage. Edge fixture/Dashboard/geometry/lifecycle E2E passed with 55/55 geometry slices, zero browser exceptions, zero duplicate replacements, zero stale navigation entries, and settled queues/rules.
 - Remaining: Expand backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.
+
+## 2026-07-19 - Backend restart and cancellation hardening
+
+- Request: Continue with backend restart/cancellation E2E while preserving the integrated Monitor, HTTP 422, live-reader, worker/DNR, and geometry contracts.
+- Changes: Added tracked job/enqueue ownership, shutdown signalling for all jobs, cancellation of queue-capacity-blocked submissions, exact-object registry cleanup, and a FastAPI HTTP cancel plus lifespan restart acceptance test.
+- Invariant/decision: Shutdown must settle active, queued, and blocked submitters before restart; an old completion may remove only its own registry entry and can never erase a newer job using the same client ID.
+- Verification: Three focused regressions failed before the fix. Final verification passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% coverage with `inference_queue.py` at 92%. Edge fixture/Dashboard/geometry/lifecycle E2E passed with 55/55 geometry slices, zero browser exceptions, zero duplicate/stale work, and settled queues/rules.
+- Git: Pending isolated feature-branch automatic sync; main remains unchanged by this change set.
+- Remaining: Improve focused model-manager/downloader/upscaler coverage, then run reliability soak and production-quality benchmarks.

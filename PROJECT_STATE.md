@@ -12,7 +12,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Protected-read lifecycle checkpoint committed and pushed as `f21a208b31b228e4f6043dae211cbb93f3bded12`.
 - Integrated live-reader/error-contract checkpoint committed and pushed as `c7b687e3be6acbbf9dc944fb3be959cf6edf3106` with 49 backend tests, 139 extension tests, Ruff, JavaScript checks, and 71% coverage green.
 - HTTP 422/browser-owned request contract checkpoint committed and pushed as `f0da83c7c94d796b0e240d02d4945ef7d190133d`: `maxOutputWidth=128` is normalized to `256`, structured validation details remain visible, 422 is non-retryable, and browser-owned bytes no longer require an HTTP download URL.
-- Current integrated gate: 52 backend tests, 180 extension tests, JavaScript checks, Ruff, 72% backend coverage, deterministic Edge fixture/lifecycle/geometry E2E, and real Dashboard browser/load E2E green with zero browser exceptions.
+- Current integrated gate: 57 backend tests, 180 extension tests, JavaScript checks, Ruff, 73% backend coverage, deterministic Edge fixture/lifecycle/geometry E2E, and real Dashboard browser/load E2E green with zero browser exceptions.
 - Clean live-reader acceptance is green on TruyenQQ Manga (`22/22`), Manhwa (`75/75`), Manhua (`26/26`), and hentaivnx (`16/16`); deterministic geometry tests cover the 300 px boundary, `512x16384`/`768x32768` tall slicing, and safe `16384x512`/`32768x768` wide rejection.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
 - Not yet proven: production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
@@ -21,7 +21,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-Processing Monitor is integrated on `main`. Schema v1, bounded recovery storage, DOM-commit terminal authority, sanitized diagnostics/export, cancel/retry, filters, reload recovery, and the 500-job browser load gate are green while preserving the HTTP 422, live-reader, worker/DNR lifecycle, and geometry contracts.
+Backend restart/cancellation hardening is green on the isolated feature branch: shutdown cancels active, queued, and queue-capacity-blocked submitters; restart begins with empty registries/futures; and a stale completion cannot remove a newer same-ID job. Processing Monitor, HTTP 422, live-reader, worker/DNR lifecycle, and geometry contracts remain green.
 
 ## Required reading
 

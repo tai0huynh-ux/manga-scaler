@@ -1,5 +1,12 @@
 """Application lifecycle and health API tests."""
 
+import asyncio
+import base64
+import threading
+import time
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import ThreadPoolExecutor
+
 from app.main import app
 from app.models.schemas import UpscaleResponse
 from fastapi.testclient import TestClient
@@ -94,6 +101,62 @@ def test_cancel_unknown_job_is_idempotent() -> None:
         response = client.delete("/jobs/not-running")
     assert response.status_code == 200
     assert response.json()["cancelled"] is False
+
+
+def test_http_cancel_settles_active_job_and_next_lifespan_starts_clean() -> None:
+    started = threading.Event()
+
+    async def cancellable_processor(job):
+        started.set()
+        while not job.cancel_event.is_set():
+            await asyncio.sleep(0.001)
+        raise InterruptedError("cancelled")
+
+    with TestClient(app) as client:
+        service = client.app.state.upscaler_service
+        original_processor = service.queue.processor
+        service.queue.processor = cancellable_processor
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                request = executor.submit(
+                    client.post,
+                    "/upscale",
+                    json={
+                        "imageData": base64.b64encode(b"browser-owned-test-bytes").decode(),
+                        "schemaVersion": 1,
+                        "jobId": "restart-cancel-job",
+                        "traceId": "trace-restart-cancel",
+                    },
+                )
+                assert started.wait(timeout=2)
+                response = client.delete("/jobs/restart-cancel-job")
+                assert response.status_code == 200
+                assert response.json()["cancelled"] is True
+                try:
+                    completed_response = request.result(timeout=2)
+                except BaseException as exc:  # The test transport may use either cancellation type.
+                    assert isinstance(exc, (asyncio.CancelledError, FutureCancelledError))
+                    completed_response = None
+                assert completed_response is None or completed_response.status_code != 200
+        finally:
+            service.queue.processor = original_processor
+
+        deadline = time.monotonic() + 2
+        while client.get("/health").json()["queue"]["size"] != 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        health = client.get("/health").json()
+        assert health["queue"]["size"] == 0
+        assert health["queue"]["waiting"] == 0
+        assert health["queue"]["processing"] == 0
+        assert health["queue"]["cancelled"] == 1
+
+    with TestClient(app) as restarted_client:
+        restarted_health = restarted_client.get("/health").json()
+        assert restarted_health["queue"]["size"] == 0
+        assert restarted_health["queue"]["waiting"] == 0
+        assert restarted_health["queue"]["processing"] == 0
+        assert restarted_health["queue"]["workers"] > 0
+        assert restarted_client.delete("/jobs/restart-cancel-job").json()["cancelled"] is False
 
 
 def test_upscale_success_returns_trace_id_from_request() -> None:

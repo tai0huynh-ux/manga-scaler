@@ -15,6 +15,8 @@
 10. DirectML device loss may retry once on a fallback provider; unrelated failures must propagate.
 11. Protected browser reads must await one startup cleanup barrier; cleanup may remove only exact-URL Referer rules matching the subsystem signature and must preserve every unrelated active rule ID.
 12. Only the newest content-script instance for a document may discover, mutate, or render images after extension reload; older instances must become stale before async work can commit.
+13. Backend queue shutdown must cancel active, queued, and capacity-blocked submissions, signal every tracked job, and clear queue/job/future ownership before a restart accepts new work.
+14. Backend job cleanup may remove a client-job registry entry only when that entry still points to the exact job being settled; stale completion must preserve a newer same-ID job.
 
 ## Browser/backend JSON contract
 

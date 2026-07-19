@@ -40,7 +40,15 @@
 
 ## Next exact action
 
-Add backend restart/cancellation E2E without reopening the green Processing Monitor, HTTP 422, live-reader, worker/DNR, or extreme-geometry contracts.
+Improve focused model-manager/downloader/upscaler coverage, then run longer reliability soak and production-quality benchmarks without reopening the green lifecycle contracts.
+
+## Backend restart/cancellation checkpoint
+
+- Queue shutdown now signals every tracked job, cancels enqueue operations blocked by queue capacity, settles submitter futures, drains queued work, and clears job/future registries before restart.
+- Job cleanup is identity-conditional: an older completion can no longer remove the current registry entry for a newer job that reused the same client job ID.
+- A real FastAPI `TestClient` lifecycle test starts an HTTP upscale request, cancels it through `DELETE /jobs/{job_id}`, proves queue settlement, closes the application lifespan, restarts it, and verifies that the old job is absent while workers are healthy.
+- Full verification passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% backend coverage; `inference_queue.py` reached 92% coverage.
+- Edge fixture/Dashboard/geometry/lifecycle E2E remained green with 55/55 geometry slices, zero browser exceptions, zero duplicate replacements, zero stale navigation entries, and settled browser/backend queues.
 
 ## Processing Monitor integration checkpoint
 

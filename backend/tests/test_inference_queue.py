@@ -79,6 +79,142 @@ async def test_stop_settles_active_submitters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_clears_queued_jobs_before_restart() -> None:
+    active_started = asyncio.Event()
+
+    async def processor(job):
+        if job.image_url == "active":
+            active_started.set()
+            await asyncio.Event().wait()
+        return job.image_url
+
+    queue = InferenceQueue(8, 1, 1, 0, processor)
+    await queue.start()
+    active = asyncio.create_task(queue.submit("active", None, None, client_job_id="active-job"))
+    await active_started.wait()
+    queued = asyncio.create_task(queue.submit("queued", None, None, client_job_id="queued-job"))
+    while queue.snapshot()["waiting"] != 1:
+        await asyncio.sleep(0)
+
+    await queue.stop()
+
+    settled = await asyncio.gather(active, queued, return_exceptions=True)
+    assert all(isinstance(result, asyncio.CancelledError) for result in settled)
+    assert queue.snapshot()["size"] == 0
+    assert queue.snapshot()["processing"] == 0
+    assert queue.jobs == {}
+    assert queue.tracked_jobs == {}
+    assert queue.futures == set()
+    assert queue.cancel("queued-job") is False
+
+    await queue.start()
+    try:
+        assert await queue.submit("fresh", None, None, client_job_id="fresh-job") == "fresh"
+    finally:
+        await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_submitter_blocked_by_full_queue() -> None:
+    active_started = asyncio.Event()
+
+    async def processor(job):
+        if job.image_url == "active":
+            active_started.set()
+            await asyncio.Event().wait()
+        return job.image_url
+
+    queue = InferenceQueue(1, 1, 1, 0, processor)
+    await queue.start()
+    active = asyncio.create_task(queue.submit("active", None, None, client_job_id="active-job"))
+    await active_started.wait()
+    queued = asyncio.create_task(queue.submit("queued", None, None, client_job_id="queued-job"))
+    while queue.snapshot()["waiting"] != 1:
+        await asyncio.sleep(0)
+    blocked = asyncio.create_task(queue.submit("blocked", None, None, client_job_id="blocked-job"))
+    await asyncio.sleep(0)
+    assert blocked.done() is False
+
+    await queue.stop()
+
+    settled = await asyncio.gather(active, queued, blocked, return_exceptions=True)
+    assert all(isinstance(result, asyncio.CancelledError) for result in settled)
+    assert queue.snapshot()["size"] == 0
+    assert queue.jobs == {}
+    assert queue.tracked_jobs == {}
+    assert queue.futures == set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_submitter_blocked_by_full_queue_never_enqueues_it() -> None:
+    active_started = asyncio.Event()
+    release_active = asyncio.Event()
+    processed: list[str] = []
+
+    async def processor(job):
+        processed.append(job.image_url)
+        if job.image_url == "active":
+            active_started.set()
+            await release_active.wait()
+        return job.image_url
+
+    queue = InferenceQueue(1, 1, 1, 0, processor)
+    await queue.start()
+    active = asyncio.create_task(queue.submit("active", None, None, client_job_id="active-job"))
+    await active_started.wait()
+    queued = asyncio.create_task(queue.submit("queued", None, None, client_job_id="queued-job"))
+    while queue.snapshot()["waiting"] != 1:
+        await asyncio.sleep(0)
+    blocked = asyncio.create_task(queue.submit("blocked", None, None, client_job_id="blocked-job"))
+    await asyncio.sleep(0)
+
+    assert queue.cancel("blocked-job") is True
+    with pytest.raises(asyncio.CancelledError):
+        await blocked
+    assert queue.snapshot()["waiting"] == 1
+
+    release_active.set()
+    assert await active == "active"
+    assert await queued == "queued"
+    await queue.stop()
+    assert processed == ["active", "queued"]
+    assert "blocked-job" not in queue.jobs
+
+
+@pytest.mark.asyncio
+async def test_stale_completion_cannot_remove_newer_same_id_job() -> None:
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def processor(job):
+        if job.image_url == "first":
+            first_started.set()
+            await release_first.wait()
+            return "first-result"
+        second_started.set()
+        while not job.cancel_event.is_set():
+            await asyncio.sleep(0)
+        raise InterruptedError("cancelled")
+
+    queue = InferenceQueue(8, 2, 2, 0, processor)
+    await queue.start()
+    first = asyncio.create_task(queue.submit("first", None, None, client_job_id="shared-job"))
+    await first_started.wait()
+    second = asyncio.create_task(queue.submit("second", None, None, client_job_id="shared-job"))
+    await second_started.wait()
+
+    release_first.set()
+    assert await first == "first-result"
+    assert queue.cancel("shared-job") is True
+    with pytest.raises(asyncio.CancelledError):
+        await second
+    await asyncio.sleep(0)
+    assert queue.snapshot()["cancelled"] == 1
+    await queue.stop()
+
+
+@pytest.mark.asyncio
 async def test_queue_propagates_trace_id_to_job_and_events(tmp_path) -> None:
     configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
 

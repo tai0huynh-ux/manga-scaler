@@ -15,6 +15,7 @@
 - **Dashboard reported only `Backend returned 422`:** resolved by preserving sanitized FastAPI validation details/trace IDs, marking 422 non-retryable, normalizing request fields before dispatch, and accepting browser-owned bytes without forcing an HTTP source URL.
 - **Live advertisement overlays prevented bottom-page scheduling:** resolved in acceptance by locating and clicking the real visible close control; production occlusion rejection remains conservative.
 - **Duplicate live jobs were over-counted across replacement operations:** resolved by preserving pending trace identity, distinguishing reprioritization from enqueue, and including operation identity in duplicate evidence.
+- **Backend shutdown could retain queued job registry entries:** resolved by tracking every job/enqueue operation, cancelling capacity-blocked submitters, identity-safe cleanup, and verified clean lifespan restart.
 
 ## Remaining limitations
 

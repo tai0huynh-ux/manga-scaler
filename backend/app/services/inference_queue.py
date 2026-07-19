@@ -60,19 +60,30 @@ class InferenceQueue:
         self.failed = 0
         self.cancelled = 0
         self.jobs: dict[str, InferenceJob] = {}
+        self.tracked_jobs: dict[int, InferenceJob] = {}
         self.futures: set[asyncio.Future] = set()
+        self.enqueue_tasks: set[asyncio.Task] = set()
+        self.stopping = asyncio.Event()
         self.running = False
 
     async def start(self) -> None:
         """Start queue workers."""
         if self.running:
             return
+        self.stopping.clear()
         self.running = True
         self.workers = [asyncio.create_task(self._worker(index)) for index in range(self.worker_count)]
 
     async def stop(self) -> None:
         """Cancel queue workers."""
         self.running = False
+        self.stopping.set()
+        for job in tuple(self.tracked_jobs.values()):
+            job.cancel_event.set()
+        for enqueue_task in tuple(self.enqueue_tasks):
+            enqueue_task.cancel()
+        if self.enqueue_tasks:
+            await asyncio.gather(*tuple(self.enqueue_tasks), return_exceptions=True)
         for future in tuple(self.futures):
             if not future.done():
                 future.cancel()
@@ -82,11 +93,16 @@ class InferenceQueue:
         self.workers.clear()
         while not self.queue.empty():
             try:
-                self.queue.get_nowait()
+                job = self.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
             else:
+                self._forget_job(job)
                 self.queue.task_done()
+        self.jobs.clear()
+        self.tracked_jobs.clear()
+        await asyncio.sleep(0)
+        self.futures = {future for future in self.futures if not future.done()}
 
     async def submit(
         self,
@@ -108,6 +124,8 @@ class InferenceQueue:
         source_fingerprint: str | None = None,
     ) -> object:
         """Submit a job and wait for its result."""
+        if not self.running:
+            raise RuntimeError("Inference queue is not running.")
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self.futures.add(future)
@@ -133,6 +151,7 @@ class InferenceQueue:
         )
         if client_job_id:
             self.jobs[client_job_id] = job
+        self.tracked_jobs[id(job)] = job
         emit_trace_event(
             event="backend.queue.job.queued",
             trace_id=job.trace_id,
@@ -145,9 +164,31 @@ class InferenceQueue:
             backend_job_id=job.client_job_id,
             source_fingerprint=job.source_fingerprint,
         )
-        await self.queue.put(job)
-        self.accepted += 1
-        return await future
+        enqueue_task = asyncio.create_task(self.queue.put(job))
+        stop_task = asyncio.create_task(self.stopping.wait())
+        self.enqueue_tasks.add(enqueue_task)
+        try:
+            done, _ = await asyncio.wait({enqueue_task, stop_task, future}, return_when=asyncio.FIRST_COMPLETED)
+            if stop_task in done:
+                future.cancel()
+                raise asyncio.CancelledError
+            if future in done:
+                raise asyncio.CancelledError
+            await enqueue_task
+            self.accepted += 1
+            return await future
+        except asyncio.CancelledError:
+            job.cancel_event.set()
+            future.cancel()
+            raise
+        finally:
+            for task in (enqueue_task, stop_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(enqueue_task, stop_task, return_exceptions=True)
+            self.enqueue_tasks.discard(enqueue_task)
+            if not enqueue_task.done() or enqueue_task.cancelled():
+                self._forget_job(job)
 
     def snapshot(self) -> dict[str, int]:
         """Return queue diagnostics."""
@@ -210,8 +251,7 @@ class InferenceQueue:
                 backend_job_id=job.client_job_id,
                 source_fingerprint=job.source_fingerprint,
             )
-            if job.client_job_id:
-                self.jobs.pop(job.client_job_id, None)
+            self._forget_job(job)
             return
         self.processing += 1
         started = time.perf_counter()
@@ -307,5 +347,10 @@ class InferenceQueue:
             )
         finally:
             self.processing -= 1
-            if job.client_job_id:
-                self.jobs.pop(job.client_job_id, None)
+            self._forget_job(job)
+
+    def _forget_job(self, job: InferenceJob) -> None:
+        """Remove only the registry entry still owned by this exact job."""
+        self.tracked_jobs.pop(id(job), None)
+        if job.client_job_id and self.jobs.get(job.client_job_id) is job:
+            self.jobs.pop(job.client_job_id, None)
