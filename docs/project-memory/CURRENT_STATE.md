@@ -4,6 +4,7 @@
 
 - Verified date: 2026-07-19, Asia/Bangkok.
 - Branch under verification: `codex/live-reader-acceptance-c518` in the isolated `c518` worktree, synchronized by a normal merge from current `origin/main`; main integration has not occurred.
+- Green live-reader/geometry baseline: `9ada89648003c3d5aa1bbeacc6948290aa49fac0` before this feature-branch merge; main integration has not occurred.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
 - Repository was clean before the mandatory-state documentation checkpoint.
@@ -55,6 +56,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Processing Monitor schema version 1 is wired through content/background lifecycle events and a bounded sanitized session/local snapshot. `COMPLETED` is emitted only after content confirms the Blob DOM commit; backend receipt remains `RECEIVING_RESULT`.
 - Deterministic Edge monitor acceptance now reads the live service-worker snapshot after two Blob replacements, proves renderer-confirmed `COMPLETED` rows, and verifies that image bytes are absent from the snapshot.
 - FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
+- Clean Edge live acceptance passed TruyenQQ Manga, Manhwa, Manhua, and hentaivnx with 100% eligible-image replacement and zero duplicate/stale work, false positives, failures, residual Referer rules, or unsettled queues.
+- The deterministic geometry matrix covers eight minimum/boundary inputs, row-complete vertical slicing for `512x16384` and `768x32768`, and safe non-slicing rejection for `16384x512` and `32768x768`; fixture PNG dimensions are verified without tracked binary assets.
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
@@ -69,6 +72,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Current public TruyenQQ URLs are verified for One Piece 1188 (Manga), Hive 293 (Manhwa), and Người Trên Vạn Người 320 (Manhua), but live acceptance is not green.
 - Hive 293 reached 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images. Manhua 320 reached 26/26 replacements but earlier runs exposed reader-chrome tracking/avatar false positives.
 - The local backend became unresponsive after repeated live runs; hentaivnx and a clean Manga rerun remain unverified.
+- Live-site acceptance is point-in-time and may drift with external markup, advertisements, CDN policy, or anti-bot changes.
+- A real-browser render of the new `768x32768` geometry case is not yet covered; its row-complete slicing contract is proven at the focused test boundary.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
@@ -82,7 +87,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 ## Next likely work
 
-Live-reader checkpoint (2026-07-19): clean Manga 1188 reached 64/64 stable Blob replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and settled queue/DNR state. Hive 293 remained 66/75 (88%) with nine bottom reader images left in `seen` after controlled viewport passes; Manhua and hentaivnx remain unverified. Extreme-image work is intentionally blocked until this live gate is green.
+Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/75`, Manhua `26/26`, and hentaivnx `16/16`. All four runs had zero false positives, duplicate jobs, stale replacements, sanitized failures, residual Referer rules, and unsettled queue state. The deterministic Edge worker/navigation/reload lifecycle remained green.
 
 1. Repair the nine detected-but-unreplaced Hive images and rerun Manhwa throughput with a clean backend.
 2. Re-run `www.hentaivnx.live` acceptance or preserve the exact external fetch/challenge blocker.

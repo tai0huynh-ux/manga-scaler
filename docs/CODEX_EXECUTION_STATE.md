@@ -25,7 +25,7 @@
 - Architecture ownership and runtime flows are mapped under `docs/project-memory/`.
 - Unit and VM-based extension regressions cover core queue, stale-operation, renderer, slicing, API, provider, and tracing invariants.
 - Deterministic Edge unpacked-extension E2E is automated and green against the real loopback backend/model.
-- Representative manga/webtoon live-site acceptance remains manual and unproven for the current baseline.
+- Representative Manga/Manhwa/Manhua and hentaivnx live-site acceptance is green for the current point-in-time public pages.
 - Production ONNX quality, DirectML/CUDA execution, OCR quality, text removal/reinsertion, soak, packaging, clean install, upgrade, and uninstall are not release-proven.
 
 ## Completed checkpoint
@@ -40,7 +40,30 @@
 
 ## Next exact action
 
-Repair and re-run the live reader gate with a clean isolated backend. Hive still has 66/75 stable original-image replacements (88%) and nine detected-but-unreplaced images. Manhua reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix. The local backend became unresponsive after repeated live runs, so hentaivnx and a clean Manga rerun remain blocked.
+Start a fresh Processing Monitor preflight and reconcile any isolated Monitor branch with current `main` through a normal non-destructive merge. Preserve the green live-reader, HTTP 422, worker/DNR lifecycle, and geometry contracts, and require direct Dashboard browser E2E before acceptance.
+
+## Extreme-image geometry contract checkpoint
+
+- Added the exact eight-case minimum-dimension matrix from `16x16` through the `299/300/301` boundary and asymmetric `300x100` / `100x300` cases.
+- Expanded deterministic vertical slicing coverage to `512x16384` and `768x32768`, asserting every source row is covered exactly once with no gaps or overlap.
+- Expanded safe extreme-wide rejection to `16384x512` and `32768x768`; neither input may enter vertical slicing.
+- Verified synthetic fixture PNG dimensions from IHDR metadata for every small/boundary case; no binary reader asset was committed.
+- Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage. Real Edge fixture/lifecycle E2E passed with queue/rules settled and zero duplicate replacements, stale Chapter A entries, or browser exceptions.
+- Secret filename, tracked runtime-artifact, and fixture copyright-artifact scans returned zero findings. `git fsck --full` returned success with dangling objects only.
+- This checkpoint changes tests and verified state only; it does not claim a real-browser render of the `32768`-pixel synthetic case.
+
+## Clean live-reader acceptance checkpoint
+
+- The live harness scrolls by stable image markers, waits until each image owns preprocessing work, and clicks a real semantic close control when an advertisement overlay blocks the candidate probes. It never removes or hides site nodes directly.
+- Pending queue updates retain the original trace and emit `background.job.reprioritized` instead of a second enqueue event. Duplicate evidence includes operation identity, so replacement operations sharing one correlation trace are not conflated.
+- TruyenQQ Manga: `22/22` detected and replaced, `42/42` backend completions.
+- TruyenQQ Manhwa: `75/75` detected and replaced, `56/56` backend completions, `210/210` raw slices ready.
+- TruyenQQ Manhua: `26/26` detected and replaced, `109/109` backend completions, `108/108` raw slices ready.
+- hentaivnx: `16/16` detected and replaced, `33/33` backend completions, `32/32` raw slices ready.
+- Every live run completed with false positives `0`, duplicate jobs `0`, stale replacements `0`, sanitized failures `0`, residual Referer rules `0`, and queue size/waiting/processing `0`.
+- Deterministic Edge lifecycle acceptance passed worker stop/reactivation, unrelated-rule preservation, navigation invalidation, extension reload recovery, and queue/rule settlement with browser exceptions `0`.
+- Full verification passed 52 backend tests, 155 extension tests, JavaScript checks, Ruff, and 72% backend coverage.
+- Green implementation/state commit: `915920450d9d3975fc6db807e530dd9292c9a129`; use it as the starting baseline for the extreme-image geometry checkpoint.
 
 ## HTTP 422 and browser-owned request checkpoint
 

@@ -27,4 +27,4 @@
 - [ ] Validate slice counts and viewport behavior in Chrome against representative manga and webtoon sites.
 - [ ] Record any site-specific anti-hotlink failures with Network and structured extension logs.
 - [ ] Provide one current public TruyenQQ reader/chapter URL without a session token.
-- [ ] Re-run hentaivnx acceptance with worker-restart-safe status capture and prove a chapter Blob replacement or a stable terminal failure.
+- [x] Re-run hentaivnx acceptance with worker-restart-safe status capture and prove chapter Blob replacement.

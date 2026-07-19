@@ -1212,6 +1212,7 @@ class QueueScheduler {
     this.pending.set(job.queueKey, {
       ...existing,
       ...job,
+      traceId: existing?.traceId ?? job.traceId,
       attempt: existing?.attempt ?? job.attempt ?? 1,
       queuedAt: existing?.queuedAt ?? performance.now(),
       pageOrder: Number.isFinite(job.pageOrder) ? job.pageOrder : existing?.pageOrder ?? Number.MAX_SAFE_INTEGER,
@@ -1224,12 +1225,13 @@ class QueueScheduler {
       cache: "UNKNOWN",
     });
     emitTrace({
-      event: "background.job.enqueued",
-      traceId: job.traceId,
+      event: existing ? "background.job.reprioritized" : "background.job.enqueued",
+      traceId: existing?.traceId ?? job.traceId,
       status: "queued",
       attempt: existing?.attempt ?? job.attempt ?? 1,
       metadata: {
         queue_key_prefix: safeTracePrefix(job.queueKey),
+        operation_id_prefix: safeTracePrefix(job.operationId, 48),
         source_fingerprint_prefix: safeTracePrefix(job.sourceFingerprint),
         cache_variant: job.cacheVariant || "full",
       },

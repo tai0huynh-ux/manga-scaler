@@ -145,6 +145,8 @@ async function readWorkerState(client, pageUrl) {
       registry: tab?.id ? pageImageRegistry.list(tab.id) : [],
       activeJobs: scheduler.active.size,
       pendingJobs: scheduler.pending.size,
+      activeKeys: [...scheduler.active.keys()],
+      pendingKeys: [...scheduler.pending.keys()],
       retryTimers: scheduler.retryTimers.size,
       imageReadLocks: upscaleProvider.imageReadLocks.size,
     };
@@ -697,7 +699,11 @@ async function main() {
       const state = await readWorkerState(workerClient, reloadUrl);
       return refererRules(state.rules).length === 1 ? state : null;
     });
-    assert.equal(preReloadState.queue.processing, 0);
+    assert.equal(preReloadState.queue.processing, 0, JSON.stringify({
+      activeKeys: preReloadState.activeKeys,
+      pendingKeys: preReloadState.pendingKeys,
+      registry: preReloadState.registry,
+    }));
     assert.equal(preReloadState.registry.length, 1);
     const preReloadTargetId = workerTarget.id;
     workerClient.send("Runtime.evaluate", { expression: "chrome.runtime.reload()" }).catch(() => {});

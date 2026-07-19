@@ -13,6 +13,8 @@
 - **Worker startup cleanup could delete unrelated Referer rules or reuse active IDs:** resolved with exact ownership signatures, active-ID reservation, and an idempotent initialization barrier.
 - **Unpacked-extension reload could leave stale/duplicate content contexts:** resolved with reinjectable block scope, a newest-instance DOM lease, stale-marker cleanup, and verified automatic rediscovery.
 - **Dashboard reported only `Backend returned 422`:** resolved by preserving sanitized FastAPI validation details/trace IDs, marking 422 non-retryable, normalizing request fields before dispatch, and accepting browser-owned bytes without forcing an HTTP source URL.
+- **Live advertisement overlays prevented bottom-page scheduling:** resolved in acceptance by locating and clicking the real visible close control; production occlusion rejection remains conservative.
+- **Duplicate live jobs were over-counted across replacement operations:** resolved by preserving pending trace identity, distinguishing reprioritization from enqueue, and including operation identity in duplicate evidence.
 
 ## Remaining limitations
 
@@ -30,3 +32,4 @@
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - Browser-level extension behavior still requires manual verification on representative manga sites.
 - Hentaivnx and a clean post-fix Manga run remain unverified; an exact root probe of `https://hentaivnx.live` failed with an external `fetch failed` before reader discovery, so do not promote this checkpoint to live-site PASS.
+- A real-browser render of the new `768x32768` deterministic geometry case is not yet covered; its row-complete slicing contract is currently proven at the focused test boundary.

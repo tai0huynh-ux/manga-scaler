@@ -6,8 +6,12 @@ const path = require("node:path");
 const {
   classifyUnreplaced,
   duplicateEnqueueCount,
+  duplicateIdentities,
   duplicateOperationCount,
+  isPromotedState,
+  isOverlayProbe,
   operationIdentity,
+  selectOverlayDismissal,
   sanitizeUrl,
   stableIdentity,
 } = require("./live_reader_helpers.cjs");
@@ -220,6 +224,123 @@ async function main() {
     })()`);
     assert.ok(reader.count > 0, "Reader has no chapter images.");
 
+    const promotionSnapshots = new Map();
+    const dismissOccludingOverlay = async (pageState) => {
+      const blockers = (pageState?.probes || []).filter((probe) => probe && isOverlayProbe(probe));
+      if (!blockers.length) return null;
+      const candidates = await pageClient.evaluate(`(() => {
+        const blockerIds = ${JSON.stringify(blockers.map((probe) => probe.id).filter(Boolean))};
+        const output = [];
+        const seen = new Set();
+        for (const blockerId of blockerIds) {
+          const blocker = document.getElementById(blockerId);
+          if (!blocker) continue;
+          let scope = blocker;
+          for (let depth = 0; scope && depth < 6; depth += 1, scope = scope.parentElement) {
+            const style = getComputedStyle(scope);
+            const rect = scope.getBoundingClientRect();
+            const overlayLike = style.position === "fixed" || style.position === "absolute"
+              || rect.width >= window.innerWidth * 0.6 || rect.height >= window.innerHeight * 0.6;
+            if (!overlayLike) continue;
+            for (const candidate of scope.querySelectorAll('button, [role="button"], a, [class*="close" i], [id*="close" i]')) {
+              const candidateRect = candidate.getBoundingClientRect();
+              const candidateStyle = getComputedStyle(candidate);
+              if (!candidateRect.width || !candidateRect.height || candidateStyle.visibility === "hidden"
+                || candidateStyle.display === "none" || candidateStyle.pointerEvents === "none") continue;
+              const id = candidate.id || null;
+              if (!id || seen.has(id)) continue;
+              seen.add(id);
+              output.push({
+                id,
+                tag: candidate.tagName,
+                role: candidate.getAttribute("role"),
+                className: String(candidate.className || "").slice(0, 160),
+                text: String(candidate.textContent || "").trim().slice(0, 80),
+                ariaLabel: candidate.getAttribute("aria-label"),
+                title: candidate.getAttribute("title"),
+                visible: true,
+                disabled: Boolean(candidate.disabled),
+              });
+            }
+          }
+        }
+        return output;
+      })()`);
+      const selected = selectOverlayDismissal(candidates);
+      if (!selected) return null;
+      const result = await pageClient.evaluate(`(() => {
+        const control = document.getElementById(${JSON.stringify(selected.id)});
+        if (!control) return { clicked: false, id: ${JSON.stringify(selected.id)} };
+        control.click();
+        const overlay = control.closest('[id^="_pop-qqgo-"]') || control.parentElement?.parentElement;
+        return {
+          clicked: true,
+          id: control.id,
+          overlayId: overlay?.id || null,
+          overlayVisible: Boolean(overlay?.getClientRects().length),
+        };
+      })()`);
+      return result?.clicked ? result : null;
+    };
+    const waitForMarkerPromotion = async (marker) => {
+      try {
+        return await waitFor(`live marker ${marker} promotion`, async () => {
+      const pageState = await pageClient.evaluate(`(() => {
+        const image = [...document.querySelectorAll(${JSON.stringify(READER_SELECTOR)})]
+          .find((candidate) => candidate.dataset.aiLiveMarker === ${JSON.stringify(marker)});
+        if (!image) return null;
+        const rect = image.getBoundingClientRect();
+        const wrapper = image.previousElementSibling?.classList.contains('ai-enhancer-slice-wrapper')
+          ? image.previousElementSibling
+          : null;
+        const rendered = (image.classList.contains('ai-manga-upscaler-ready') && image.src.startsWith('blob:'))
+          || (image.dataset.aiEnhancerSliced === 'true' && Boolean(wrapper));
+        const probes = [[0.5, 0.2], [0.5, 0.5], [0.5, 0.8]].map(([x, y]) => {
+          const px = Math.min(window.innerWidth - 1, Math.max(0, rect.left + rect.width * x));
+          const py = Math.min(window.innerHeight - 1, Math.max(0, rect.top + rect.height * y));
+          const top = document.elementFromPoint(px, py);
+          return top ? { tag: top.tagName, id: top.id || null, className: String(top.className || '').slice(0, 100) } : null;
+        });
+        const style = getComputedStyle(image);
+        return {
+          imageId: image.dataset.aiEnhancerImageId || null,
+          rendered,
+          rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, width: rect.width, height: rect.height },
+          scrollY: window.scrollY,
+          viewportHeight: window.innerHeight,
+          documentHeight: document.scrollingElement?.scrollHeight || 0,
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+          probes,
+        };
+      })()`);
+      if (!pageState) return false;
+      if (pageState.rendered) {
+        promotionSnapshots.set(marker, { pageState, status: "rendered" });
+        return true;
+      }
+      if (!pageState.imageId) {
+        promotionSnapshots.set(marker, { pageState, status: null });
+        return false;
+      }
+      await dismissOccludingOverlay(pageState);
+      const status = await workerClient.evaluate(`(() => {
+        for (const entries of pageImageRegistry.pages.values()) {
+          const entry = entries.get(${JSON.stringify(pageState.imageId)});
+          if (entry) return entry.status || null;
+        }
+        return null;
+      })()`);
+      promotionSnapshots.set(marker, { pageState, status });
+      return isPromotedState({ status });
+        }, 30000);
+      } catch (error) {
+        console.error("LIVE_PROMOTION_TIMEOUT", JSON.stringify({ marker, ...promotionSnapshots.get(marker) }));
+        throw error;
+      }
+    };
+
     await pageClient.evaluate("window.scrollTo(0, 0)");
     for (const marker of reader.markers) {
       await pageClient.evaluate(`(() => {
@@ -229,7 +350,7 @@ async function main() {
         window.dispatchEvent(new Event('scroll'));
         return Boolean(image);
       })()`);
-      await delay(250);
+      await waitForMarkerPromotion(marker);
     }
     await pageClient.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)");
     await delay(1000);
@@ -244,7 +365,7 @@ async function main() {
         window.dispatchEvent(new Event('scroll'));
         return Boolean(image);
       })()`);
-      await delay(250);
+      await waitForMarkerPromotion(marker);
     }
     await pageClient.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)");
     await delay(1000);
@@ -390,6 +511,13 @@ async function main() {
     const extensionExceptions = browserExceptionDetails.filter((error) => error.url?.startsWith("chrome-extension://"));
     const enqueuedTraces = final.worker.traces.filter((event) => event.event === "background.job.enqueued");
     const duplicateJobs = Math.max(duplicateEnqueueCount(enqueuedTraces), duplicateOperationCount(ledgerEntries));
+    const duplicateJobEvidence = {
+      enqueues: duplicateIdentities(enqueuedTraces, (event) => [
+        event?.traceId || "", event?.metadata?.operation_id_prefix || "",
+        event?.attempt || 1, event?.metadata?.cache_variant || "full",
+      ].join("|")),
+      operations: duplicateIdentities(ledgerEntries, operationIdentity),
+    };
     const requestEvidence = new Map(final.worker.traces
       .filter((event) => event.event === "background.backend.request.started")
       .map((event) => [event.traceId, event.metadata?.request_metadata || {}]));
@@ -452,6 +580,7 @@ async function main() {
         currentSource: sanitizeUrl(entry.currentSource),
       })),
       duplicateJobs,
+      duplicateJobEvidence,
       staleReplacements: 0,
       queueFinalState: final.worker.queue,
       remainingSessionRules: final.worker.rules.filter(isRefererRule).length,

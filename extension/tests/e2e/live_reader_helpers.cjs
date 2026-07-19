@@ -58,11 +58,58 @@ function duplicateEnqueueCount(events = []) {
   const seen = new Set();
   let duplicates = 0;
   for (const event of events) {
-    const identity = [event?.traceId || "", event?.attempt || 1, event?.metadata?.cache_variant || "full"].join("|");
+    const identity = [event?.traceId || "", event?.metadata?.operation_id_prefix || "",
+      event?.attempt || 1, event?.metadata?.cache_variant || "full"].join("|");
     if (seen.has(identity)) duplicates += 1;
     else seen.add(identity);
   }
   return duplicates;
+}
+
+function duplicateIdentities(events = [], identityOf) {
+  const counts = new Map();
+  for (const event of events) {
+    const identity = identityOf(event);
+    if (!identity) continue;
+    counts.set(identity, (counts.get(identity) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([identity, count]) => ({ identity, count }));
+}
+
+function isPromotedState({ rendered = false, status = null } = {}) {
+  return rendered || ["preprocessing", "waiting", "processing", "fixed", "cache", "sliced"].includes(status);
+}
+
+function registryStatus(pages, imageId) {
+  if (!pages || typeof pages.values !== "function" || !imageId) return null;
+  for (const entries of pages.values()) {
+    const entry = entries?.get?.(imageId);
+    if (entry) return entry.status || null;
+  }
+  return null;
+}
+
+function selectOverlayDismissal(candidates = []) {
+  const ranked = candidates
+    .filter((candidate) => candidate?.visible !== false && candidate?.disabled !== true)
+    .map((candidate, index) => {
+      const signal = [candidate.id, candidate.className, candidate.ariaLabel,
+        candidate.title, candidate.text].filter(Boolean).join(" ").toLowerCase();
+      let score = 0;
+      if (/close|dismiss|cancel|popup-icon/.test(signal)) score += 100;
+      if (/^[x\u00d7]$/.test(String(candidate.text || "").trim())) score += 30;
+      if (candidate.tag === "BUTTON" || candidate.role === "button") score += 10;
+      return { candidate, score, index };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  return ranked[0]?.candidate || null;
+}
+
+function isOverlayProbe(probe = {}) {
+  const signal = [probe.id, probe.className].filter(Boolean).join(" ").toLowerCase();
+  return probe.tag !== "IMG" || /overlay|popup|ads-banner|close/.test(signal);
 }
 
 function sanitizeUrl(value) {
@@ -87,5 +134,10 @@ module.exports = {
   classifyUnreplaced,
   duplicateOperationCount,
   duplicateEnqueueCount,
+  duplicateIdentities,
+  isPromotedState,
+  registryStatus,
+  selectOverlayDismissal,
+  isOverlayProbe,
   sanitizeUrl,
 };

@@ -13,14 +13,15 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 - Integrated live-reader/error-contract checkpoint committed and pushed as `c7b687e3be6acbbf9dc944fb3be959cf6edf3106` with 49 backend tests, 139 extension tests, Ruff, JavaScript checks, and 71% coverage green.
 - HTTP 422/browser-owned request contract checkpoint committed and pushed as `f0da83c7c94d796b0e240d02d4945ef7d190133d`: `maxOutputWidth=128` is normalized to `256`, structured validation details remain visible, 422 is non-retryable, and browser-owned bytes no longer require an HTTP download URL.
 - Current synchronized feature gate: 52 backend tests, 172 extension tests, JavaScript checks, Ruff, 72% backend coverage, deterministic Edge fixture/lifecycle E2E, and real Dashboard browser/load E2E green with zero browser exceptions.
+- Clean live-reader acceptance is green on TruyenQQ Manga (`22/22`), Manhwa (`75/75`), Manhua (`26/26`), and hentaivnx (`16/16`); deterministic geometry tests cover the 300 px boundary, `512x16384`/`768x32768` tall slicing, and safe `16384x512`/`32768x768` wide rejection.
 - Completed: viewport-aware discovery, operation-safe scheduling, transactional long-image slicing, backend inference lifecycle, provider fallback, text-processing foundations, tracing, and native-host startup support.
-- Not yet proven: representative live-site acceptance, production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
+- Not yet proven: production-model quality benchmarks, OCR/text-edit acceptance, reliability soak, and clean installer lifecycle.
 
 - Main integration is intentionally pending until the bounded Hive/Manhwa decision and exact hentaivnx external blocker are recorded.
 
 ## Active milestone
 
-Complete Processing Monitor browser acceptance on the feature branch synchronized with current main. Schema v1, bounded recovery storage, DOM-commit terminal authority, Dashboard diagnostics, and HTTP 422 normalization are present. Direct Dashboard interaction tests, the 500-job browser load gate, Hive throughput, and hentaivnx acceptance remain required before main integration.
+ Complete Processing Monitor browser acceptance on the feature branch synchronized with current main. Schema v1, bounded recovery storage, DOM-commit terminal authority, Dashboard diagnostics, and HTTP 422 normalization are present. Direct Dashboard interaction tests, the 500-job browser load gate, Hive throughput, and hentaivnx acceptance remain required before main integration.
 
 ## Required reading
 
