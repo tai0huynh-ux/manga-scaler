@@ -190,3 +190,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Focused reader fixture tests passed 9/9; full extension suite passed 180 tests; backend passed 52 tests; Ruff and 72% coverage passed. A clean Edge run passed `768x32768` with 55 raw slices, 55/55 ready Blob replacements, one source node, zero browser exceptions, and settled queue state.
 - Git: Pending feature checkpoint commit and fast-forward integration into `main`; no main files changed in this change set yet.
 - Remaining: Expand backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.
+
+## 2026-07-19 - Processing Monitor integrated into main
+
+- Request: Validate the isolated Processing Monitor against current `main`, preserve every HTTP 422/live-reader/lifecycle/geometry contract, prove the real Dashboard, and integrate the green result into `main`.
+- Changes: Merged current main into `codex/live-reader-acceptance-c518` with hunk-level state resolution, retained all current tests, added active/pending operation diagnostics to the lifecycle harness, then fast-forwarded `main` to integration commit `0e4f3f91bf15463ba5454e6b455438f32aa80d0e`.
+- Invariant/decision: Monitor state is sanitized and bounded; stale or terminal operations cannot revive; `COMPLETED` requires a confirmed DOM render commit; 422 remains structured and non-retryable; Dashboard actions cross the real MV3 service-worker boundary.
+- Verification: Full main gate passed 52 backend tests, 179 extension tests, JavaScript checks, Ruff, and 72% coverage. Edge Dashboard/lifecycle E2E passed summary/filter/detail, sanitized export, cancel, linked retry, reload recovery, 500-job load, worker termination, navigation, extension reload, queue/rule settlement, and zero browser exceptions. Existing clean live acceptance remains `22/22` Manga, `75/75` Manhwa, `26/26` Manhua, and `16/16` hentaivnx with zero duplicate/stale work or residual rules.
+- Remaining: Add backend restart/cancellation E2E, reliability soak, and production-quality benchmarks.

@@ -24,12 +24,7 @@
 - Per-tile trace events are intentionally not emitted in default mode.
 - GPU/VRAM trace sampling is not implemented.
 - Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
-- Hentaivnx live chapter replacement remains unproven. Its sampled CDN requires Referer, and the final worker diagnostic was not stable enough to claim a completed replacement after the timeout fix.
-- Current TruyenQQ URLs are now verified, but the live gate is not green: Hive 293 measured 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images.
-- Manhua 320 reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix; a clean post-fix rerun was blocked by backend instability.
-- Processing Monitor core is implemented, but real Dashboard cancel/retry/filter/export/reload interaction and the 500-job browser-render load gate remain unproven.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
-- Browser-level extension behavior still requires manual verification on representative manga sites.
-- Hentaivnx and a clean post-fix Manga run remain unverified; an exact root probe of `https://hentaivnx.live` failed with an external `fetch failed` before reader discovery, so do not promote this checkpoint to live-site PASS.
+- The four-site live gate is point-in-time and may drift with public markup, advertisements, CDN policy, or anti-bot changes.
 - A real-browser render of the new `768x32768` deterministic geometry case is not yet covered; its row-complete slicing contract is currently proven at the focused test boundary.
