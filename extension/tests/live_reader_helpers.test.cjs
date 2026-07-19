@@ -4,6 +4,9 @@ const {
   classifyUnreplaced,
   duplicateEnqueueCount,
   duplicateOperationCount,
+  isPromotedState,
+  registryStatus,
+  selectOverlayDismissal,
   isRendererOwnedImage,
   operationIdentity,
   sanitizeUrl,
@@ -54,4 +57,27 @@ test("URL evidence strips values while preserving shape", () => {
   assert.deepEqual(sanitizeUrl("https://cdn.example.test/a.jpg?token=secret&x=1#frag"), {
     protocol: "https:", hostname: "cdn.example.test", queryKeys: ["token", "x"], hasFragment: true,
   });
+});
+
+test("live scrolling waits until a seen image owns preprocessing work", () => {
+  assert.equal(isPromotedState({ status: "seen" }), false);
+  assert.equal(isPromotedState({ status: "preprocessing_queued" }), false);
+  assert.equal(isPromotedState({ status: "preprocessing" }), true);
+  assert.equal(isPromotedState({ status: "waiting" }), true);
+  assert.equal(isPromotedState({ rendered: true, status: "seen" }), true);
+});
+
+test("promotion lookup reads the PageImageRegistry pages map", () => {
+  const pages = new Map([[7, new Map([["image-1", { status: "preprocessing" }]])]]);
+  assert.equal(registryStatus(pages, "image-1"), "preprocessing");
+  assert.equal(registryStatus(pages, "missing"), null);
+});
+
+test("overlay dismissal prefers a visible close control over ad content", () => {
+  const selected = selectOverlayDismissal([
+    { id: "url-overlay", tag: "A", className: "ads-banner", text: "", visible: true },
+    { id: "close-overlay", tag: "DIV", className: "", text: "\u00d7", visible: true },
+    { id: "hidden-close", className: "popup-icon-close", text: "\u00d7", visible: false },
+  ]);
+  assert.equal(selected.id, "close-overlay");
 });
