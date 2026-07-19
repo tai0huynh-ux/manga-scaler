@@ -27,6 +27,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Viewport-aware `<img>` discovery and preprocessing.
 - Operation-aware stale-result protection across content, background, and backend.
 - Transactional long-image slicing with full-image fallback.
+- User-configurable two-dimensional slicing with exact source X/Y/width/height identity and positioned DOM tile reconstruction; the default `8192` width preserves normal vertical manga slicing.
 - Browser byte reads using cache, credentials, host permissions, and temporary Referer rules.
 - Background memory plus IndexedDB caching and deterministic cache variants.
 - Bounded retries, deferred work, cancellation, tab-generation cleanup, and statistics.
@@ -69,6 +70,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 - Live-site acceptance is point-in-time and may drift with external markup, advertisements, CDN policy, or anti-bot changes.
 - Real Edge rendered the `768x32768` geometry case through vertical slicing with 55 raw slices and 55/55 ready Blob replacements; repeated interrupted runs can leave heavy backend work queued and are not acceptance evidence.
+- Real Edge rendered a `2048x1200` source as two positioned horizontal tiles at a configured `1024px` source-slice width, with both Blob replacements ready and the queue settled.
 - Canvas, CSS backgrounds, and WebGL image sources are outside discovery.
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.

@@ -73,6 +73,8 @@ The extension runtime and `shared/config/defaults.json` use a 300 px minimum for
 
 Persisted settings schema version 2 adds bounded `imageSliceMaxWidth` ownership. The internal default is `8192`, accepted values are `512` through `8192`, and migration must remain idempotent before the width setting is exposed through slicing behavior or UI.
 
+Two-dimensional segment identity includes source X, Y, width, and height in operation IDs, source revisions, cache variants, DOM datasets, and display metrics. The renderer positions tiles by exact rendered left/top/width/height inside one fixed-size relative wrapper; rollback remains group-atomic and idempotent.
+
 ## Discovery support boundary
 
 - The current scanner supports light-DOM `<img>` elements, including responsive `<picture>` sources after they resolve to the owned image element.

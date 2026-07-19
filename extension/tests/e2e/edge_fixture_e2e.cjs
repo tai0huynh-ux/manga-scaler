@@ -651,7 +651,6 @@ async function main() {
     geometryClient.close();
     geometryClient = null;
     await browserClient.send("Target.closeTarget", { targetId: geometryTargetCreated.targetId });
-    await initialWorkerClient.evaluate("chrome.storage.local.set({ imageSliceMaxWidth: 8192, imageSliceMaxHeight: 2200, maxInputWidthEnabled: true })");
     initialWorkerClient.close();
 
     const lifecycleEvidence = {};

@@ -230,3 +230,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: A user-visible control is not published until the two-dimensional crop/render path is green. Existing vertical slicing remains unchanged, and migration is bounded and idempotent.
 - Verification: The new migration and message-contract assertions failed before implementation, then passed. Fast verification passed 57 backend tests, 180 extension tests, JavaScript checks, and all existing lifecycle regressions.
 - Remaining: Implement two-dimensional segmentation and exact DOM layout, then expose the width/height controls.
+
+## 2026-07-19 - Two-dimensional slice rendering
+
+- Request: Let users control both slice width and height while preserving exact reconstruction and all stale-operation guarantees.
+- Changes: Added width/height controls to Popup and Dashboard, row-major X/Y crop planning, full coordinate cache/operation identity, and absolute tile positioning inside a relative wrapper. The deterministic geometry fixture now includes `2048x1200` grid slicing alongside the existing `768x32768` vertical case.
+- Invariant/decision: Input maximums remain an independent safety gate; extreme-wide processing requires explicit user permission. Every source pixel belongs to exactly one tile, and any segment registration/render failure rolls back the entire group.
+- Verification: New grid crop/layout regressions failed before implementation, then passed. Fast verification passed 57 backend tests and 182 extension tests. Real Edge passed two `1024x1200` source tiles rendered at exact `0px`/`512px` positions, retained 55/55 tall slices, reported zero browser exceptions/duplicates/stale work, and settled queues/rules.
+- Remaining: Add bounded processing of images ahead of the viewport with user controls and navigation/reload settlement coverage.
