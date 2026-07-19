@@ -126,6 +126,41 @@ async function loadMigratedSettings(storage = chrome.storage.local) {
   return migrated;
 }
 
+let runtimeSettingsCache = null;
+let runtimeSettingsLoad = null;
+let runtimeSettingsPendingChanges = {};
+
+function updateRuntimeSettingsCache(changes) {
+  const normalized = {};
+  for (const [key, change] of Object.entries(changes || {})) {
+    normalized[key] = change?.newValue === undefined ? DEFAULT_STATE[key] : change.newValue;
+  }
+  if (!runtimeSettingsCache) {
+    runtimeSettingsPendingChanges = { ...runtimeSettingsPendingChanges, ...normalized };
+    return;
+  }
+  runtimeSettingsCache = { ...runtimeSettingsCache, ...normalized };
+}
+
+function getRuntimeSettings({ refresh = false } = {}) {
+  if (refresh) {
+    runtimeSettingsCache = null;
+    runtimeSettingsLoad = null;
+    runtimeSettingsPendingChanges = {};
+  }
+  if (runtimeSettingsCache) return Promise.resolve(runtimeSettingsCache);
+  if (!runtimeSettingsLoad) {
+    runtimeSettingsLoad = loadMigratedSettings().then((settings) => {
+      runtimeSettingsCache = { ...DEFAULT_STATE, ...settings, ...runtimeSettingsPendingChanges };
+      runtimeSettingsPendingChanges = {};
+      return runtimeSettingsCache;
+    }).finally(() => {
+      runtimeSettingsLoad = null;
+    });
+  }
+  return runtimeSettingsLoad;
+}
+
 function newTraceId() {
   try {
     if (crypto?.randomUUID) return crypto.randomUUID();
@@ -353,6 +388,9 @@ class StatisticsTracker {
   constructor(storageArea) {
     this.storageArea = storageArea;
     this.tabStats = new Map();
+    this.pendingSeen = 0;
+    this.seenFlushTimer = null;
+    this.seenWrite = Promise.resolve();
   }
 
   tab(tabId) {
@@ -362,13 +400,35 @@ class StatisticsTracker {
     return this.tabStats.get(tabId);
   }
 
-  async recordSeen(tabId) {
+  recordSeen(tabId) {
     this.tab(tabId).seen += 1;
-    const current = await this.storageArea.get({ seen: 0 });
-    await this.storageArea.set({ seen: Number(current.seen ?? 0) + 1 });
+    this.pendingSeen += 1;
+    if (!this.seenFlushTimer) {
+      this.seenFlushTimer = setTimeout(() => {
+        this.seenFlushTimer = null;
+        this.flushSeen();
+      }, 100);
+    }
+    return Promise.resolve();
+  }
+
+  flushSeen() {
+    if (this.seenFlushTimer) {
+      clearTimeout(this.seenFlushTimer);
+      this.seenFlushTimer = null;
+    }
+    const increment = this.pendingSeen;
+    this.pendingSeen = 0;
+    if (!increment) return this.seenWrite;
+    this.seenWrite = this.seenWrite.catch(() => {}).then(async () => {
+      const current = await this.storageArea.get({ seen: 0 });
+      await this.storageArea.set({ seen: Number(current.seen ?? 0) + increment });
+    });
+    return this.seenWrite;
   }
 
   async ensureDefaults() {
+    await this.flushSeen();
     const current = await this.storageArea.get(DEFAULT_STATE);
     await this.storageArea.set({ ...DEFAULT_STATE, ...current });
   }
@@ -400,6 +460,7 @@ class StatisticsTracker {
   }
 
   async snapshot(queueSnapshot, activeTabId) {
+    await this.flushSeen();
     const current = await this.storageArea.get(DEFAULT_STATE);
     const processed = Number(current.processed ?? 0);
     const cacheHits = Number(current.cacheHits ?? 0);
@@ -1774,8 +1835,19 @@ const pageImageRegistry = new PageImageRegistry();
 const processingMonitor = new AI_PROCESSING_MONITOR.ProcessingMonitorStore();
 const PROCESSING_MONITOR_SESSION_KEY = "processingMonitorSessionV1";
 const PROCESSING_MONITOR_HISTORY_KEY = "processingMonitorHistoryV1";
+const PROCESSING_MONITOR_SESSION_DEBOUNCE_MS = 100;
+const PROCESSING_MONITOR_LOCAL_CHECKPOINT_MS = 5000;
+const PROCESSING_MONITOR_TERMINAL_DEBOUNCE_MS = 250;
 let processingMonitorWrite = Promise.resolve();
 let processingMonitorEventQueue = Promise.resolve();
+let processingMonitorSessionTimer = null;
+let processingMonitorLocalTimer = null;
+let processingMonitorSessionDirty = false;
+let processingMonitorLocalDirty = false;
+
+chrome.storage?.onChanged?.addListener?.((changes, areaName) => {
+  if (areaName === "local") updateRuntimeSettingsCache(changes);
+});
 
 async function restoreProcessingMonitor() {
   const sessionArea = chrome.storage.session || chrome.storage.local;
@@ -1787,16 +1859,60 @@ async function restoreProcessingMonitor() {
   if (snapshot) processingMonitor.restore(snapshot);
   const recovered = processingMonitor.recoverInterrupted("worker_restart");
   processingMonitor.prune();
-  if (snapshot || recovered.length) await persistProcessingMonitor();
+  if (snapshot || recovered.length) await persistProcessingMonitor({ immediate: true });
 }
 
-function persistProcessingMonitor() {
+function queueProcessingMonitorWrite({ session, durable }) {
   const snapshot = processingMonitor.snapshot();
   const sessionArea = chrome.storage.session || chrome.storage.local;
-  processingMonitorWrite = processingMonitorWrite.catch(() => {}).then(() => Promise.all([
-    sessionArea.set({ [PROCESSING_MONITOR_SESSION_KEY]: snapshot }),
-    chrome.storage.local.set({ [PROCESSING_MONITOR_HISTORY_KEY]: snapshot }),
-  ]));
+  processingMonitorWrite = processingMonitorWrite.catch(() => {}).then(() => {
+    const writes = [];
+    if (session) writes.push(sessionArea.set({ [PROCESSING_MONITOR_SESSION_KEY]: snapshot }));
+    if (durable) writes.push(chrome.storage.local.set({ [PROCESSING_MONITOR_HISTORY_KEY]: snapshot }));
+    return Promise.all(writes);
+  });
+  return processingMonitorWrite;
+}
+
+function flushProcessingMonitor({ durable = false } = {}) {
+  if (processingMonitorSessionTimer) {
+    clearTimeout(processingMonitorSessionTimer);
+    processingMonitorSessionTimer = null;
+  }
+  if (durable && processingMonitorLocalTimer) {
+    clearTimeout(processingMonitorLocalTimer);
+    processingMonitorLocalTimer = null;
+  }
+  const writeSession = processingMonitorSessionDirty;
+  const writeLocal = durable && processingMonitorLocalDirty;
+  processingMonitorSessionDirty = false;
+  if (durable) processingMonitorLocalDirty = false;
+  if (!writeSession && !writeLocal) return processingMonitorWrite;
+  return queueProcessingMonitorWrite({ session: writeSession, durable: writeLocal });
+}
+
+function persistProcessingMonitor({ durable = false, immediate = false } = {}) {
+  processingMonitorSessionDirty = true;
+  processingMonitorLocalDirty = true;
+  if (immediate) return flushProcessingMonitor({ durable: true });
+
+  if (!processingMonitorSessionTimer) {
+    processingMonitorSessionTimer = setTimeout(() => {
+      processingMonitorSessionTimer = null;
+      flushProcessingMonitor();
+    }, PROCESSING_MONITOR_SESSION_DEBOUNCE_MS);
+  }
+
+  if (durable && processingMonitorLocalTimer) {
+    clearTimeout(processingMonitorLocalTimer);
+    processingMonitorLocalTimer = null;
+  }
+  if (!processingMonitorLocalTimer) {
+    processingMonitorLocalTimer = setTimeout(() => {
+      processingMonitorLocalTimer = null;
+      flushProcessingMonitor({ durable: true });
+    }, durable ? PROCESSING_MONITOR_TERMINAL_DEBOUNCE_MS : PROCESSING_MONITOR_LOCAL_CHECKPOINT_MS);
+  }
   return processingMonitorWrite;
 }
 
@@ -1826,7 +1942,7 @@ function applyProcessingEvent(input) {
     }
     if (result.accepted) {
       processingMonitor.prune();
-      persistProcessingMonitor();
+      persistProcessingMonitor({ durable: AI_PROCESSING_MONITOR.isTerminal(event.stage) });
     }
     return result;
 }
@@ -1963,10 +2079,11 @@ async function ensureContentScripts() {
 }
 
 async function maintainRuntime({ ensureContent = true } = {}) {
-  const settings = await chrome.storage.local.get({ enabled: true });
-  if (!settings.enabled) return;
-  await ensureBackendStarted();
+  const settings = await getRuntimeSettings();
+  if (!settings.enabled) return { ok: false, status: "disabled" };
+  const launch = await ensureBackendStarted();
   if (ensureContent) await ensureContentScripts();
+  return launch;
 }
 
 async function notifyContentEnabled(enabled) {
@@ -2021,18 +2138,18 @@ function resolveOutputLimits(settings, metrics = {}) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await loadMigratedSettings();
+  const settings = await getRuntimeSettings({ refresh: true });
   if (settings.enabled) await maintainRuntime();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await loadMigratedSettings();
+  const settings = await getRuntimeSettings({ refresh: true });
   if (settings.enabled) await maintainRuntime();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "ai-enhancer-watchdog") maintainRuntime();
+  if (alarm.name === "ai-enhancer-watchdog") maintainRuntime({ ensureContent: false });
 });
 chrome.alarms.create("ai-enhancer-watchdog", { periodInMinutes: 0.5 });
 
@@ -2200,7 +2317,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     const tabId = sender.tab.id;
     const generation = scheduler.tabGenerations.get(tabId) || 0;
-    chrome.storage.local.get({ enabled: true }).then((settings) => {
+    getRuntimeSettings().then((settings) => {
       if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
         sendResponse({ recorded: false, stale: true, reason: "Stale tab generation." });
         return;
@@ -2253,7 +2370,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const tabId = sender.tab.id;
     const generation = scheduler.tabGenerations.get(tabId) || 0;
-    chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+    getRuntimeSettings().then((settings) => {
       if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
         emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "stale_generation" } });
         sendResponse({ accepted: false, stale: true, reason: "Stale tab generation." });
@@ -2412,7 +2529,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.operationId,
           response.operationId,
         );
-        await persistProcessingMonitor();
+        await persistProcessingMonitor({ immediate: true });
         sendResponse({
           retried: retry.accepted,
           operationId: response.operationId,
@@ -2552,17 +2669,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CLEAR_PROCESSING_HISTORY") {
     processingMonitorReady.then(() => {
       const removed = processingMonitor.clearTerminal(message.stage || null);
-      persistProcessingMonitor().then(() => sendResponse({ removed }));
+      persistProcessingMonitor({ immediate: true }).then(() => sendResponse({ removed }));
     });
     return true;
   }
 
   if (message.type === "SET_ENABLED") {
     chrome.storage.local.set({ enabled: Boolean(message.enabled) }).then(() => {
+      updateRuntimeSettingsCache({ enabled: { newValue: Boolean(message.enabled) } });
       if (message.enabled) {
         scheduler.setPaused(false);
-        maintainRuntime().then(() => ensureBackendStarted()).then((launch) => {
-          notifyContentEnabled(true);
+        maintainRuntime().then(async (launch) => {
+          await notifyContentEnabled(true);
           sendResponse({ enabled: true, launch });
         });
       } else {
@@ -2671,7 +2789,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 statisticsTracker.ensureDefaults();
-loadMigratedSettings().then((settings) => {
+getRuntimeSettings().then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
   scheduler.setPaused(!settings.enabled);
   if (settings.enabled) maintainRuntime({ ensureContent: false });

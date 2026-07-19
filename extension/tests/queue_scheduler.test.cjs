@@ -708,6 +708,97 @@ test("seen statistics batch burst increments into one storage update", async () 
   assert.equal(storedSeen, 20);
 });
 
+test("enabling the extension performs only one backend health check", async () => {
+  let healthChecks = 0;
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    fetch: async (url) => {
+      if (String(url).endsWith("/health")) healthChecks += 1;
+      return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+  });
+
+  assert.equal(dispatch(
+    { type: "SET_ENABLED", enabled: true },
+    {},
+    (response) => responses.push(response),
+  ), true);
+  for (let index = 0; index < 6 && responses.length === 0; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(responses.at(-1)?.enabled, true);
+  assert.equal(healthChecks, 1);
+});
+
+test("IMAGE_SEEN burst reuses the cached enabled setting", async () => {
+  const fakeTimers = makeFakeTimers();
+  let settingsReads = 0;
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    timers: fakeTimers.api,
+    storageGet: async (defaults) => {
+      settingsReads += 1;
+      return defaults === null ? { enabled: true } : { ...defaults, enabled: true };
+    },
+  });
+  const sender = { tab: { id: 22, url: "https://example.com/chapter" } };
+
+  for (let index = 0; index < 20; index += 1) {
+    dispatch({
+      type: "IMAGE_SEEN",
+      imageId: `cached-seen-${index}`,
+      operationId: `cached-operation-${index}`,
+      sourceRevision: `cached-revision-${index}`,
+      imageUrl: `https://example.com/image-${index}.png`,
+      width: 900,
+      height: 1200,
+      pageOrder: index,
+    }, sender, (response) => responses.push(response));
+  }
+  for (let index = 0; index < 10 && responses.length < 20; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(responses.length, 20);
+  assert.equal(settingsReads, 1);
+});
+
+test("an enable change wins over an older in-flight settings read", async () => {
+  const fakeTimers = makeFakeTimers();
+  const initialSettings = deferred();
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    timers: fakeTimers.api,
+    storageGet: async (defaults) => defaults === null ? initialSettings.promise : defaults,
+  });
+  const sender = { tab: { id: 23, url: "https://example.com/chapter" } };
+  const seenMessage = {
+    type: "IMAGE_SEEN",
+    imageId: "settings-race-image",
+    operationId: "settings-race-operation",
+    sourceRevision: "settings-race-revision",
+    imageUrl: "https://example.com/race.png",
+    width: 900,
+    height: 1200,
+    pageOrder: 0,
+  };
+
+  dispatch(seenMessage, sender, (response) => responses.push({ type: "first", response }));
+  dispatch({ type: "SET_ENABLED", enabled: false }, {}, (response) => responses.push({ type: "toggle", response }));
+  initialSettings.resolve({ enabled: true });
+  for (let index = 0; index < 10 && responses.length < 2; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  dispatch({ ...seenMessage, imageId: "settings-race-image-2", operationId: "settings-race-operation-2" }, sender, (response) => responses.push({ type: "second", response }));
+  for (let index = 0; index < 10 && responses.length < 3; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(responses.find((entry) => entry.type === "toggle")?.response.enabled, false);
+  assert.equal(responses.find((entry) => entry.type === "second")?.response.disabled, true);
+});
+
 test("DISCOVERY-003 browser image reads settle when a response body ignores abort", async () => {
   const { BackendUpscaleProvider } = loadBackgroundClasses({
     fetch: async () => ({
@@ -1440,6 +1531,7 @@ test("IMAGE_SEEN and enqueue lifecycle share one exact operation identity", asyn
   image.height = 900;
 
   viewportProvider.observeImage(image);
+  viewportProvider.handleIntersections([{ target: image, isIntersecting: true }]);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1476,6 +1568,7 @@ test("same-URL page reload cancels old bytes and starts a new source revision", 
   image.height = 900;
 
   viewportProvider.observeImage(image);
+  viewportProvider.handleIntersections([{ target: image, isIntersecting: true }]);
   await firstReadStarted.promise;
   image.dispatch("load");
   await new Promise((resolve) => setImmediate(resolve));
@@ -1535,6 +1628,7 @@ test("page-owned source change after render releases saved metadata and replaces
   image.height = 900;
 
   viewportProvider.observeImage(image);
+  viewportProvider.handleIntersections([{ target: image, isIntersecting: true }]);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   ownedObjectUrl = "blob:rendered-owned-source";
@@ -2733,6 +2827,53 @@ test("disabled discovery stays dormant and repeated enable notifications scan on
   assert.equal(imageScans, 1);
   assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1);
   assert.equal(viewportProvider.aheadProcessingCompleted, true);
+});
+
+test("an observed unprocessed image is rediscovered once after disable and re-enable", () => {
+  const images = [];
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    querySelectorAll: (selector) => selector.includes("img") ? images : [],
+  });
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/re-enable-active.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 4000, bottom: 4900, left: 0, right: 900 });
+  images.push(image);
+
+  viewportProvider.observeImage(image);
+  const firstSeen = sentMessages.find((message) => message.type === "IMAGE_SEEN");
+  viewportProvider.setEnabled(false);
+  viewportProvider.setEnabled(true);
+
+  const seen = sentMessages.filter((message) => message.type === "IMAGE_SEEN");
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].operationId, firstSeen.operationId);
+  assert.equal((image.listeners.get("load") || []).length, 1);
+});
+
+test("a completed image remains skipped after disable and re-enable", () => {
+  const images = [];
+  const { viewportProvider, sentMessages, completedImageKeys, HTMLImageElement } = makeContentProvider({
+    querySelectorAll: (selector) => selector.includes("img") ? images : [],
+  });
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/re-enable-completed.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 4000, bottom: 4900, left: 0, right: 900 });
+  images.push(image);
+
+  viewportProvider.observeImage(image);
+  completedImageKeys.add(image.dataset.aiEnhancerKey);
+  viewportProvider.setEnabled(false);
+  viewportProvider.setEnabled(true);
+
+  assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+  assert.equal((image.listeners.get("load") || []).length, 1);
 });
 
 test("initial discovery preprocesses only the bounded number of nearest lookahead images", async () => {

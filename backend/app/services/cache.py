@@ -3,6 +3,7 @@
 import asyncio
 import os
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 from app.utils.hashing import sha256_bytes
@@ -14,6 +15,14 @@ class ImageCache:
     def __init__(self, cache_dir: Path) -> None:
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._count_lock = Lock()
+        self._artifact_names = {path.name for path in self.cache_dir.iterdir() if path.is_file()}
+
+    @property
+    def file_count(self) -> int:
+        """Return the cached artifact count without rescanning the directory."""
+        with self._count_lock:
+            return len(self._artifact_names)
 
     async def save(self, image_bytes: bytes, extension: str) -> tuple[str, Path, bool]:
         """Persist image bytes and return the SHA256 key, path, and hit state."""
@@ -21,23 +30,31 @@ class ImageCache:
         target = self.cache_dir / f"{digest}{extension}"
 
         if target.exists():
+            self._record_artifact(target)
             return digest, target, True
 
         await asyncio.to_thread(self._atomic_write, target, image_bytes)
+        self._record_artifact(target)
         return digest, target, False
 
     async def save_named(self, key: str, image_bytes: bytes, extension: str) -> tuple[Path, bool]:
         """Persist image bytes under a caller-provided deterministic key."""
         target = self.cache_dir / f"{key}{extension}"
         if target.exists():
+            self._record_artifact(target)
             return target, True
 
         await asyncio.to_thread(self._atomic_write, target, image_bytes)
+        self._record_artifact(target)
         return target, False
 
     def public_filename(self, path: Path) -> str:
         """Return a cache filename suitable for the static cache route."""
         return path.name
+
+    def _record_artifact(self, path: Path) -> None:
+        with self._count_lock:
+            self._artifact_names.add(path.name)
 
     def _atomic_write(self, target: Path, content: bytes) -> None:
         """Write and atomically publish a cache artifact."""

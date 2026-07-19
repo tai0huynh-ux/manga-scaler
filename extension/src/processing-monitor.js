@@ -482,10 +482,14 @@ var AI_PROCESSING_MONITOR = (() => {
 
     prune(nowMs = Date.now()) {
       const cutoff = nowMs - (this.retentionHours * 60 * 60 * 1000);
+      const active = [];
       const completed = [];
       const errors = [];
       for (const record of this.records.values()) {
-        if (!isTerminal(record.stage)) continue;
+        if (!isTerminal(record.stage)) {
+          active.push(record);
+          continue;
+        }
         if (record.updatedAtMs < cutoff) {
           this.deleteRecord(record);
           continue;
@@ -493,6 +497,7 @@ var AI_PROCESSING_MONITOR = (() => {
         if (["COMPLETED", "SKIPPED"].includes(record.stage)) completed.push(record);
         else errors.push(record);
       }
+      this.pruneCategory(active, this.maxActiveHistory);
       this.pruneCategory(completed, this.maxCompletedHistory);
       this.pruneCategory(errors, this.maxErrorHistory);
       return this.records.size;

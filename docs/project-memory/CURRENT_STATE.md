@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-20, Asia/Bangkok.
-- Current green feature checkpoint: one-shot initial lookahead scheduling on parent baseline `dc950c3`.
+- Current green feature checkpoint: event-driven extension runtime and bounded persistence on parent baseline `11091a2`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -13,10 +13,10 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the one-shot initial lookahead change set:
+Full `scripts/verify.ps1` result on the extension runtime lag-reduction change set:
 
-- Backend: 57 tests passed, including HTTP cancellation/lifespan restart and queue-capacity shutdown races.
-- Extension: 189 tests passed, including one-shot bounded lookahead scheduling, a 500-image layout-read regression, real Dashboard browser interaction, 500-job load acceptance, and the geometry fixture regression.
+- Backend: 59 tests passed, including O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
+- Extension: 199 tests passed, including coalesced monitor persistence, settings-cache races, idempotent enable/disable discovery, bounded scroll work, one-shot lookahead, 500-job monitor load, and geometry regressions.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -27,6 +27,12 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 
 - Viewport-aware `<img>` discovery and preprocessing.
 - User-configurable one-shot ahead-of-viewport processing: each page performs one bounded nearest-image pass after initial discovery, then newly discovered or unprocessed images wait for normal viewport/prefetch promotion; duplicate suppression skips work already queued or completed.
+- Disabled content scripts stay dormant. Enable notifications are idempotent, detach/re-observe existing images without duplicate load listeners, run the initial ahead pass only if it has not already run for that page, and continue skipping completed image keys.
+- `IntersectionObserver` owns viewport promotion. Scroll/resize refreshes only the bounded preprocessing waiters instead of traversing every discovered image and forcing layout reads.
+- Background settings are loaded once, updated through `storage.onChanged`, and protected against an older in-flight read overwriting a newer enable change. `IMAGE_SEEN` and `ENQUEUE_IMAGE` no longer read extension settings once per image.
+- Processing Monitor active history is capped at 500. Hot session snapshots are coalesced at 100 ms, local checkpoints at 5 seconds, and terminal events request a 250 ms durable checkpoint; explicit retry/clear/recovery operations flush immediately.
+- `IMAGE_SEEN` statistics increments are batched into one storage update per 100 ms burst.
+- Backend `/health` uses an in-memory artifact-name set initialized once by `ImageCache`; request-time file counting is O(1) and new cache writes update the set.
 - Operation-aware stale-result protection across content, background, and backend.
 - Transactional long-image slicing with full-image fallback.
 - User-configurable two-dimensional slicing with exact source X/Y/width/height identity and positioned DOM tile reconstruction; the default `8192` width preserves normal vertical manga slicing.
@@ -85,6 +91,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Backend network exposure is not hardened; keep it loopback-only.
 - Native-host generated manifest/executable are machine-specific artifacts even if present in this checkout.
 - Live reader acceptance for the HTTP 422 checkpoint was not rerun without an `AI_MANGA_LIVE_URL`; current runtime proof is the deterministic Edge fixture with the real loopback backend/model.
+- The lag-reduction checkpoint is verified by automated regression and full repository gates; a new long-duration live-browser performance soak has not yet been recorded.
 
 ## Next likely work
 

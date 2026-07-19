@@ -678,6 +678,7 @@ class ViewportImageProvider {
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.sliceGroups = new Map();
     this.sliceGroupsByParent = new WeakMap();
+    this.imageLoadListeners = new WeakMap();
     this.pageGeneration = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     this.pageOrder = 0;
     this.mutationObserver = new MutationObserver((mutations) => this.handleMutations(mutations));
@@ -728,8 +729,10 @@ class ViewportImageProvider {
     this.prefetchMarginPx = Number.isFinite(Number(stored.prefetchMarginPx))
       ? Number(stored.prefetchMarginPx)
       : AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
-    this.observeExistingImages();
-    this.runInitialAheadProcessing();
+    if (this.enabled) {
+      this.observeExistingImages();
+      this.runInitialAheadProcessing();
+    }
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -740,14 +743,19 @@ class ViewportImageProvider {
   }
 
   setEnabled(enabled) {
-    this.enabled = enabled;
-    if (enabled) {
+    const nextEnabled = Boolean(enabled);
+    if (this.enabled === nextEnabled) return false;
+    this.enabled = nextEnabled;
+    if (nextEnabled) {
       this.observeExistingImages();
-      this.refreshPriorities();
+      this.runInitialAheadProcessing();
     } else {
       [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "disabled"));
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
+      document.querySelectorAll("img[data-ai-manga-upscaler-observed]")
+        .forEach((image) => this.stopObservingImage(image));
     }
+    return true;
   }
 
   reprocessVisibleImages() {
@@ -762,6 +770,15 @@ class ViewportImageProvider {
 
   observeExistingImages() {
     document.querySelectorAll("img").forEach((image) => this.observeImage(image));
+  }
+
+  stopObservingImage(image) {
+    const loadListener = this.imageLoadListeners.get(image);
+    if (loadListener) image.removeEventListener("load", loadListener);
+    this.imageLoadListeners.delete(image);
+    this.intersectionObserver.unobserve?.(image);
+    delete image.dataset.aiMangaUpscalerObserved;
+    delete image.dataset.aiEnhancerSeen;
   }
 
   handleMutations(mutations) {
@@ -791,7 +808,7 @@ class ViewportImageProvider {
   }
 
   observeImage(image) {
-    if (!isActiveContentInstance()) return;
+    if (!this.enabled || !isActiveContentInstance()) return;
     if (image.dataset.aiEnhancerRawSlice === "true" || image.dataset.aiEnhancerSliced === "true") {
       return;
     }
@@ -801,7 +818,7 @@ class ViewportImageProvider {
 
     image.dataset.aiMangaUpscalerObserved = "true";
     const reportSeen = (event = null) => {
-      if (!isActiveContentInstance()) return;
+      if (!this.enabled || !isActiveContentInstance()) return;
       if (image.dataset.aiMangaOriginalSrc) {
         if (this.renderer?.isOwnedSource?.(image)) return;
         this.renderer?.releaseImageOwnership?.(image);
@@ -825,6 +842,11 @@ class ViewportImageProvider {
       if (this.isBlacklisted(metadata.imageUrl)) return;
       const imageKey = this.imageKey(metadata, image);
       if (image.dataset.aiEnhancerSeen === "true" && image.dataset.aiEnhancerKey === imageKey) {
+        return;
+      }
+      if (completedImageKeys.has(imageKey)) {
+        image.dataset.aiEnhancerSeen = "true";
+        image.dataset.aiEnhancerKey = imageKey;
         return;
       }
       if (image.dataset.aiEnhancerImageId && image.dataset.aiEnhancerKey && image.dataset.aiEnhancerKey !== imageKey) {
@@ -879,11 +901,12 @@ class ViewportImageProvider {
         height: metadata.height,
         pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
       });
-      if (this.isWithinPrefetch(image)) {
+      if (event?.type === "load" && this.isWithinPrefetch(image)) {
         this.schedule(image, true, { allowPrefetch: true });
       }
     };
     reportSeen();
+    this.imageLoadListeners.set(image, reportSeen);
     image.addEventListener("load", reportSeen);
     this.intersectionObserver.observe(image);
   }
@@ -2254,33 +2277,23 @@ class ViewportImageProvider {
       return;
     }
 
-    // Include discovered-but-not-yet-scheduled entries so a later viewport
-    // pass can promote them from `seen` into preprocessing.
-    trackedImageKeys.forEach((entry) => {
+    // IntersectionObserver promotes discovered images. Scroll work only
+    // reprioritizes the bounded preprocessing queue that is actually waiting.
+    for (const waiter of [...this.preprocessingWaiters]) {
+      const entry = waiter?.operation;
+      if (!entry || entry.state !== "preprocessing_queued" || !entry.image) continue;
+      const distance = this.viewportDistance(entry.image);
+      waiter.viewportDistance = distance;
+      waiter.priorityTier = this.preprocessingPriorityTier(entry, distance);
       this.updateImagePriority(entry.image, entry.imageId);
-      if (this.isWithinPrefetch(entry.image) && entry.aheadProcessing === true) {
+      if (distance <= this.prefetchMarginPx && entry.aheadProcessing === true) {
         entry.aheadProcessing = false;
         if (entry.baseKey) this.aheadProcessingKeys.delete(entry.baseKey);
       }
-      if (entry.state === "seen" && this.isWithinPrefetch(entry.image)) {
-        entry.aheadProcessing = false;
-        if (entry.baseKey) this.aheadProcessingKeys.delete(entry.baseKey);
-        this.schedule(entry.image, true, { allowPrefetch: true });
-      } else if (entry.state === "preprocessing_queued") {
-        const distance = this.viewportDistance(entry.image);
-        if (this.isWithinPrefetch(entry.image)) {
-          entry.aheadProcessing = false;
-          if (entry.baseKey) this.aheadProcessingKeys.delete(entry.baseKey);
-        }
-        if (entry.preprocessingWaiter) {
-          entry.preprocessingWaiter.viewportDistance = distance;
-          entry.preprocessingWaiter.priorityTier = this.preprocessingPriorityTier(entry, distance);
-        }
-        if (entry.aheadProcessing !== true && distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
-          this.deferPreprocessingOperation(entry, "cancelled-outside-prefetch");
-        }
+      if (entry.aheadProcessing !== true && distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
+        this.deferPreprocessingOperation(entry, "cancelled-outside-prefetch");
       }
-    });
+    }
     this.drainPreprocessingQueue();
   }
 
@@ -2528,6 +2541,7 @@ class ViewportImageProvider {
       removedImages.push(...node.querySelectorAll("img"));
     }
     for (const image of removedImages) {
+      this.stopObservingImage(image);
       if (image.dataset?.aiEnhancerKey) this.aheadProcessingKeys.delete(image.dataset.aiEnhancerKey);
       const parentGroup = this.sliceGroupsByParent.get(image);
       const preserveCommittedSliceParent = Boolean(

@@ -75,7 +75,7 @@ async def health(request: Request) -> HealthResponse:
         queue=upscaler.queue.snapshot(),
         cache={
             "directory": str(cache_dir),
-            "files": len([path for path in cache_dir.iterdir() if path.is_file()]),
+            "files": request.app.state.cache.file_count,
         },
         text=request.app.state.text_processor.capabilities(),
         uptime=request.app.state.runtime.uptime(),

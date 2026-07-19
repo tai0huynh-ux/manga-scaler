@@ -20,6 +20,8 @@ DOM discovery
 
 Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. After initial DOM discovery, each page runs one ahead-processing pass limited by `aheadProcessingImageLimit` and selects the nearest eligible offscreen images. That pass never repeats for later mutations, intersections, scrolls, resizes, or settings refreshes. Any image not selected by the initial pass remains `seen` until it enters the normal prefetch margin; operation and completed-key guards suppress duplicate work.
 
+When disabled, discovery and load callbacks remain dormant. Re-enabling detaches and re-registers existing observers once, preserves completed-key suppression, and runs the initial ahead pass only when the page has not already consumed it. `IntersectionObserver` promotes later images; scroll/resize work only reprioritizes currently queued preprocessing waiters and never scans the full discovered-image registry.
+
 ## Identity model
 
 - `imageId`: logical image record identifier; not sufficient by itself for mutation authority.
@@ -64,6 +66,22 @@ ENQUEUE_IMAGE
 - Deferred retry work can be preempted by normal work.
 - Cancellation invalidates the queue key so timers or late results cannot resurrect it.
 - Tab close/navigation increments generation and clears queue, retries, registry, and tab statistics.
+- Runtime settings are cached after one migrated storage read and patched by `storage.onChanged`; a pending enable change is merged over any older read that completes later.
+
+## Monitor and health persistence
+
+```text
+processing events
+  -> in-memory monitor ingest/prune
+  -> 100 ms coalesced storage.session snapshot
+  -> 5 s storage.local checkpoint
+  -> terminal event shortens durable checkpoint to 250 ms
+```
+
+- Explicit recovery, retry-link creation, and history clearing flush session and local state immediately.
+- Active monitor records are deterministically capped at 500; completed and error histories retain their independent limits.
+- Seen counters batch burst increments before touching local storage.
+- Backend cache artifact names are indexed once at `ImageCache` startup and updated on save/hit, so `/health` reports the file count without a request-time directory traversal.
 
 ## Long-image transaction
 
