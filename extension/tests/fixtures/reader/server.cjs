@@ -141,6 +141,26 @@ function e2eReaderHtml() {
 </html>`;
 }
 
+function lookaheadE2eReaderHtml() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Manga Upscaler Lookahead Fixture</title>
+  <style>
+    body { margin: 0; background: #ece6da; }
+    #lookahead-spacer { height: 3200px; }
+    img { display: block; width: 300px; height: 300px; background: #fff; }
+  </style>
+</head>
+<body data-fixture="lookahead-e2e-v1">
+  <div id="lookahead-spacer"></div>
+  <img id="eligible-lookahead" src="/png/e2e-lookahead.png?w=300&amp;h=300" width="300" height="300">
+</body>
+</html>`;
+}
+
 function geometryE2eReaderHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -273,6 +293,11 @@ async function startReaderFixture() {
     if (url.pathname === "/geometry-e2e") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       response.end(geometryE2eReaderHtml());
+      return;
+    }
+    if (url.pathname === "/lookahead-e2e") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(lookaheadE2eReaderHtml());
       return;
     }
     if (url.pathname === "/lifecycle/worker") {

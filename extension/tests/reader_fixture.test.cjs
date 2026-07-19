@@ -70,6 +70,20 @@ test("deterministic reader fixture exposes the extreme geometry browser page", a
   assert.match(html, /geometry-2048x1200\.png\?w=2048&amp;h=1200/);
 });
 
+test("deterministic reader fixture exposes an image beyond the legacy prefetch margin", async (context) => {
+  const fixture = await startReaderFixture();
+  context.after(() => fixture.close());
+
+  const response = await fetch(`${fixture.origin}/lookahead-e2e`);
+  const html = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.match(html, /data-fixture="lookahead-e2e-v1"/);
+  assert.match(html, /id="lookahead-spacer"/);
+  assert.match(html, /height: 3200px/);
+  assert.match(html, /id="eligible-lookahead"/);
+});
+
 test("deterministic reader fixture exposes worker, navigation, and reload lifecycle pages", async (context) => {
   const fixture = await startReaderFixture();
   context.after(() => fixture.close());

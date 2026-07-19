@@ -16,6 +16,7 @@ class PopupController {
       "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled", "maxInputHeightEnabled",
       "minInputWidth", "minInputHeight", "maxInputWidth", "maxInputHeight",
       "outputQuality", "preprocessingConcurrency", "upscaleConcurrency",
+      "aheadProcessingEnabled", "aheadProcessingImageLimit", "prefetchMarginPx",
       "imageSlicingEnabled", "imageSliceMaxWidth", "imageSliceMaxHeight", "performanceBoost",
       "textCleanupEnabled", "textTranslateEnabled", "textSourceLanguage", "textTargetLanguage",
     ];
@@ -26,6 +27,7 @@ class PopupController {
       minInputHeightEnabled: "minInputHeight",
       maxInputWidthEnabled: "maxInputWidth",
       maxInputHeightEnabled: "maxInputHeight",
+      aheadProcessingEnabled: "aheadProcessingImageLimit",
     };
     this.modeDescription = this.document.getElementById("modeDescription");
     this.previewOriginal = this.document.getElementById("previewOriginal");
@@ -161,6 +163,9 @@ class PopupController {
       outputQuality: Number(value("outputQuality")),
       preprocessingConcurrency: Number(value("preprocessingConcurrency")),
       upscaleConcurrency: Number(value("upscaleConcurrency")),
+      aheadProcessingEnabled: checked("aheadProcessingEnabled"),
+      aheadProcessingImageLimit: Number(value("aheadProcessingImageLimit")),
+      prefetchMarginPx: Number(value("prefetchMarginPx")),
       imageSlicingEnabled: checked("imageSlicingEnabled"),
       imageSliceMaxWidth: Number(value("imageSliceMaxWidth")),
       imageSliceMaxHeight: Number(value("imageSliceMaxHeight")),

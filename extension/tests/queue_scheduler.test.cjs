@@ -384,7 +384,7 @@ function loadContentClasses(options = {}) {
   };
 }
 
-function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, createElement = undefined, sendMessage = undefined } = {}) {
+function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, aheadProcessingEnabled = undefined, aheadProcessingImageLimit = undefined, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, createElement = undefined, sendMessage = undefined } = {}) {
   const traceEvents = [];
   const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, createElement, sendMessage, traceEvents });
   const viewportProvider = new ViewportImageProvider({
@@ -408,6 +408,8 @@ function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocess
   viewportProvider.imageSlicingEnabled = true;
   viewportProvider.imageSliceMaxHeight = 1000;
   viewportProvider.preprocessingConcurrency = preprocessingConcurrency;
+  if (aheadProcessingEnabled !== undefined) viewportProvider.aheadProcessingEnabled = aheadProcessingEnabled;
+  if (aheadProcessingImageLimit !== undefined) viewportProvider.aheadProcessingImageLimit = aheadProcessingImageLimit;
   viewportProvider.readDisplayedImage = readDisplayedImage || (async () => "image-data");
   viewportProvider.cropImageSegments = cropImageSegments || (async () => []);
   return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys, traceEvents };
@@ -1189,13 +1191,16 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
     unknownSecret: "should-be-dropped",
   };
   const migrated = migratePersistedSettings(raw);
-  assert.equal(migrated.storageSchemaVersion, 2);
+  assert.equal(migrated.storageSchemaVersion, 3);
   assert.equal(migrated.mode, "auto");
   assert.equal(migrated.enhanceLevel, 1);
   assert.equal(migrated.maxOutputWidth, 256);
   assert.equal(migrated.maxOutputHeight, 8192);
   assert.equal(migrated.outputQuality, 100);
   assert.equal(migrated.imageSliceMaxWidth, 8192);
+  assert.equal(migrated.aheadProcessingEnabled, true);
+  assert.equal(migrated.aheadProcessingImageLimit, 8);
+  assert.equal(migrated.prefetchMarginPx, 1800);
   assert.equal(migrated.maxInputWidth, 300);
   assert.equal(migrated.textCleanupEnabled, false);
   assert.equal(migrated.textTargetLanguage, "vi");
@@ -2359,13 +2364,15 @@ test("image-limit message fallback reuses the configured 300px minimum", async (
     storageSet: async (value) => stored.push(value),
   });
 
-  assert.equal(dispatch({ type: "SET_IMAGE_LIMITS" }, {}, (response) => responses.push(response)), true);
+  assert.equal(dispatch({ type: "SET_IMAGE_LIMITS", aheadProcessingImageLimit: 8, prefetchMarginPx: 1800 }, {}, (response) => responses.push(response)), true);
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(stored.length, 1);
   assert.equal(stored[0].minInputWidth, 300);
   assert.equal(stored[0].minInputHeight, 300);
   assert.equal(stored[0].imageSliceMaxWidth, 8192);
+  assert.equal(stored[0].aheadProcessingImageLimit, 8);
+  assert.equal(stored[0].prefetchMarginPx, 1800);
   assert.equal(responses[0].minInputWidth, 300);
   assert.equal(responses[0].minInputHeight, 300);
   assert.equal(responses[0].imageSliceMaxWidth, 8192);
@@ -2607,8 +2614,8 @@ test("intersection prefetch schedules offscreen images inside root margin", asyn
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
 });
 
-test("initial discovery registers but does not preprocess images outside the prefetch margin", async () => {
-  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+test("initial discovery registers but does not preprocess images outside the prefetch margin when lookahead is disabled", async () => {
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({ aheadProcessingEnabled: false });
   const image = new HTMLImageElement();
   image.src = "https://example.com/offscreen-discovery.png";
   image.currentSrc = image.src;
@@ -2628,8 +2635,155 @@ test("initial discovery registers but does not preprocess images outside the pre
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
 });
 
+test("initial discovery preprocesses only the bounded number of nearest lookahead images", async () => {
+  const reads = [];
+  const { viewportProvider, sentMessages, HTMLImageElement, trackedImages } = makeContentProvider({
+    preprocessingConcurrency: 3,
+    aheadProcessingImageLimit: 3,
+    readDisplayedImage: () => {
+      const pending = deferred();
+      reads.push(pending);
+      return pending.promise;
+    },
+  });
+  const images = Array.from({ length: 8 }, (_, index) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/lookahead-${index}.png`;
+    image.currentSrc = image.src;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    const top = 3300 + index * 900;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+    return image;
+  });
+
+  images.forEach((image) => viewportProvider.observeImage(image));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 8);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 3);
+  assert.equal([...trackedImages.values()].filter((entry) => entry.state === "preprocessing").length, 3);
+  assert.equal(viewportProvider.preprocessingActive, 3);
+
+  [...trackedImages.values()].forEach((entry) => viewportProvider.cancel(entry));
+  reads.forEach((read) => read.resolve("image-data"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(viewportProvider.preprocessingActive, 0);
+  assert.equal(viewportProvider.preprocessingWaiters.length, 0);
+  assert.equal(viewportProvider.aheadProcessingKeys.size, 0);
+  assert.equal(sentMessages.filter((message) => message.type === "CANCEL_IMAGE").length, 3);
+});
+
+test("repeated lookahead refreshes do not create duplicate preprocessing jobs", async () => {
+  const read = deferred();
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    aheadProcessingImageLimit: 1,
+    readDisplayedImage: () => read.promise,
+  });
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/lookahead-deduplicated.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 900;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top: 4000, bottom: 4900, left: 0, right: 900 });
+
+  viewportProvider.observeImage(image);
+  viewportProvider.refreshPriorities();
+  viewportProvider.refreshPriorities();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 1);
+  read.resolve("image-data");
+});
+
+test("lookahead selects the nearest eligible images by distance then page order", async () => {
+  const reads = [];
+  const readOrder = [];
+  const { viewportProvider, HTMLImageElement } = makeContentProvider({
+    preprocessingConcurrency: 2,
+    aheadProcessingEnabled: false,
+    aheadProcessingImageLimit: 2,
+    readDisplayedImage: (imageUrl) => {
+      readOrder.push(imageUrl);
+      const pending = deferred();
+      reads.push(pending);
+      return pending.promise;
+    },
+  });
+  const images = [
+    { name: "far", distance: 5000 },
+    { name: "near", distance: 2400 },
+    { name: "middle", distance: 3200 },
+    { name: "nearest", distance: 2100 },
+  ].map(({ name, distance }) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/${name}.png`;
+    image.currentSrc = image.src;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    const top = 800 + distance;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+    return image;
+  });
+  images.forEach((image) => viewportProvider.observeImage(image));
+  viewportProvider.aheadProcessingEnabled = true;
+  viewportProvider.refreshPriorities();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(readOrder, ["https://example.com/nearest.png", "https://example.com/near.png"]);
+  reads.forEach((read) => read.resolve("image-data"));
+});
+
+test("visible work outranks queued lookahead work", async () => {
+  const blockerRead = deferred();
+  const readOrder = [];
+  const { viewportProvider, HTMLImageElement } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    aheadProcessingImageLimit: 1,
+    readDisplayedImage: (imageUrl) => {
+      readOrder.push(imageUrl);
+      return imageUrl.includes("blocker") ? blockerRead.promise : "image-data";
+    },
+  });
+  const blocker = new HTMLImageElement();
+  blocker.src = "https://example.com/blocker.png";
+  blocker.currentSrc = blocker.src;
+  blocker.naturalWidth = blocker.clientWidth = blocker.width = 900;
+  blocker.naturalHeight = blocker.clientHeight = blocker.height = 900;
+  blocker.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+  const lookahead = new HTMLImageElement();
+  lookahead.src = "https://example.com/lookahead-priority.png";
+  lookahead.currentSrc = lookahead.src;
+  lookahead.naturalWidth = lookahead.clientWidth = lookahead.width = 900;
+  lookahead.naturalHeight = lookahead.clientHeight = lookahead.height = 900;
+  lookahead.getBoundingClientRect = () => ({ width: 900, height: 900, top: 4000, bottom: 4900, left: 0, right: 900 });
+  const visible = new HTMLImageElement();
+  visible.src = "https://example.com/visible-priority.png";
+  visible.currentSrc = visible.src;
+  visible.naturalWidth = visible.clientWidth = visible.width = 900;
+  visible.naturalHeight = visible.clientHeight = visible.height = 900;
+  visible.getBoundingClientRect = () => ({ width: 900, height: 900, top: 0, bottom: 900, left: 0, right: 900 });
+
+  const blockerPromise = viewportProvider.schedule(blocker);
+  viewportProvider.observeImage(lookahead);
+  await new Promise((resolve) => setImmediate(resolve));
+  viewportProvider.handleIntersections([{ target: visible, isIntersecting: true }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  blockerRead.resolve("blocker-data");
+  await blockerPromise;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(readOrder.slice(0, 2), [
+    "https://example.com/blocker.png",
+    "https://example.com/visible-priority.png",
+  ]);
+});
+
 test("viewport refresh requeues a discovered image when it enters prefetch", async () => {
-  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({ aheadProcessingEnabled: false });
   const image = new HTMLImageElement();
   image.src = "https://example.com/deferred-discovery.png";
   image.currentSrc = image.src;

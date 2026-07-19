@@ -24,6 +24,8 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     outputQuality: 90,
     prefetchMarginPx: 1800,
     cancelDistancePx: 3600,
+    aheadProcessingEnabled: true,
+    aheadProcessingImageLimit: 8,
     preprocessingQueueTimeoutMs: 30000,
     sliceDecodeTimeoutMs: 10000,
     sliceCropTimeoutMs: 15000,

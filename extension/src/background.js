@@ -20,6 +20,9 @@ const DEFAULT_STATE = Object.freeze({
   imageSlicingEnabled: AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled,
   imageSliceMaxWidth: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx,
   imageSliceMaxHeight: AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx,
+  aheadProcessingEnabled: AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingEnabled,
+  aheadProcessingImageLimit: AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit,
+  prefetchMarginPx: AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx,
   outputQuality: AI_MANGA_UPSCALER_CONFIG.images.outputQuality,
   sizingMode: "auto",
   resolutionPreset: "fhd",
@@ -45,11 +48,11 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
-const STORAGE_SCHEMA_VERSION = 2;
+const STORAGE_SCHEMA_VERSION = 3;
 const STORAGE_BOOLEAN_KEYS = new Set([
   "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
   "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
-  "imageSlicingEnabled", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
+  "imageSlicingEnabled", "aheadProcessingEnabled", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
 ]);
 const STORAGE_NUMERIC_BOUNDS = {
   enhanceLevel: [0, 1],
@@ -62,6 +65,8 @@ const STORAGE_NUMERIC_BOUNDS = {
   maxOutputHeight: [256, 16383],
   imageSliceMaxWidth: [512, 8192],
   imageSliceMaxHeight: [512, 8192],
+  aheadProcessingImageLimit: [1, 50],
+  prefetchMarginPx: [0, 12000],
   outputQuality: [50, 100],
   preprocessingConcurrency: [1, 12],
   upscaleConcurrency: [1, 2],
@@ -428,6 +433,9 @@ class StatisticsTracker {
       imageSlicingEnabled: current.imageSlicingEnabled !== false,
       imageSliceMaxWidth: Number(current.imageSliceMaxWidth ?? AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx),
       imageSliceMaxHeight: Number(current.imageSliceMaxHeight ?? AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx),
+      aheadProcessingEnabled: current.aheadProcessingEnabled !== false,
+      aheadProcessingImageLimit: Number(current.aheadProcessingImageLimit ?? AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit),
+      prefetchMarginPx: Number(current.prefetchMarginPx ?? AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx),
       outputQuality: Number(current.outputQuality),
       sizingMode: current.sizingMode || "auto",
       resolutionPreset: current.resolutionPreset || "fhd",
@@ -2585,7 +2593,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SET_IMAGE_LIMITS") {
-    const clamp = (value, minimum, maximum, fallback) => Math.min(Math.max(Number(value) || fallback, minimum), maximum);
+    const clamp = (value, minimum, maximum, fallback) => {
+      const number = Number(value);
+      return Math.min(Math.max(Number.isFinite(number) ? number : fallback, minimum), maximum);
+    };
     const limits = {
       minInputWidth: clamp(message.minInputWidth, 1, 16383, AI_MANGA_UPSCALER_CONFIG.images.minWidthPx),
       minInputHeight: clamp(message.minInputHeight, 1, 16383, AI_MANGA_UPSCALER_CONFIG.images.minHeightPx),
@@ -2614,6 +2625,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       textSourceLanguage: String(message.textSourceLanguage || AI_MANGA_UPSCALER_CONFIG.text.sourceLanguage).slice(0, 16),
       textTargetLanguage: String(message.textTargetLanguage || AI_MANGA_UPSCALER_CONFIG.text.targetLanguage).slice(0, 16),
     };
+    if (Object.prototype.hasOwnProperty.call(message, "aheadProcessingEnabled")) {
+      limits.aheadProcessingEnabled = message.aheadProcessingEnabled !== false;
+    }
+    if (Object.prototype.hasOwnProperty.call(message, "aheadProcessingImageLimit")) {
+      limits.aheadProcessingImageLimit = clamp(message.aheadProcessingImageLimit, 1, 50, AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit);
+    }
+    if (Object.prototype.hasOwnProperty.call(message, "prefetchMarginPx")) {
+      limits.prefetchMarginPx = clamp(message.prefetchMarginPx, 0, 12000, AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx);
+    }
     limits.maxInputWidth = Math.max(limits.maxInputWidth, limits.minInputWidth);
     limits.maxInputHeight = Math.max(limits.maxInputHeight, limits.minInputHeight);
     scheduler.setMaxConcurrentRequests(limits.upscaleConcurrency);

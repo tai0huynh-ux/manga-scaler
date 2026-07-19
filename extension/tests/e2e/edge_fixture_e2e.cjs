@@ -228,6 +228,7 @@ async function main() {
   let browserClient = null;
   let dashboardClient = null;
   let geometryClient = null;
+  let lookaheadClient = null;
   const workerClients = [];
 
   try {
@@ -698,7 +699,7 @@ async function main() {
     });
     const oldWorkerImage = await pageImageState(pageClient, "#lifecycle-primary");
     const settledWorkerState = await waitForSettledWorkerState(workerClient, workerPageUrl);
-    assert.equal(oldWorkerImage.ready, false);
+    assert.equal(oldWorkerImage.ready, false, `old worker image unexpectedly rendered: ${JSON.stringify(oldWorkerImage)}`);
     assert.doesNotMatch(oldWorkerImage.src, /^blob:/);
     assert.equal(recoveredImage.matches, 1);
     assert.equal(refererRules(settledWorkerState.rules).length, 0);
@@ -802,7 +803,39 @@ async function main() {
       queue: settledReloadState.queue,
     };
 
-    const browserExceptions = [pageClient, ...workerClients]
+    const lookaheadTargetCreated = await browserClient.send("Target.createTarget", { url: `${fixture.origin}/lookahead-e2e` });
+    const lookaheadTarget = await waitFor("lookahead fixture target", async () => {
+      const currentTargets = await listTargets(port);
+      return currentTargets.find((target) => target.id === lookaheadTargetCreated.targetId && target.webSocketDebuggerUrl) || null;
+    });
+    lookaheadClient = await connectTarget(lookaheadTarget);
+    await lookaheadClient.send("Page.enable");
+    await lookaheadClient.send("Runtime.enable");
+    const lookaheadEvidence = await waitFor("offscreen image processing before scroll", async () => {
+      const state = await lookaheadClient.evaluate(`(() => {
+        const image = document.querySelector('#eligible-lookahead');
+        if (!image) return null;
+        const rect = image.getBoundingClientRect();
+        return {
+          marker: document.body?.dataset.fixture || null,
+          ready: image.classList.contains('ai-manga-upscaler-ready'),
+          src: image.src,
+          scrollY: window.scrollY,
+          viewportHeight: window.innerHeight,
+          rectTop: rect.top,
+          viewportDistance: Math.max(0, rect.top - window.innerHeight),
+        };
+      })()`);
+      if (state?.marker !== "lookahead-e2e-v1" || !state.ready || !state.src?.startsWith("blob:")) return null;
+      const health = await readHealth();
+      if (health.queue.size !== 0 || health.queue.waiting !== 0 || health.queue.processing !== 0) return null;
+      return state;
+    }, 60000);
+    assert.equal(lookaheadEvidence.scrollY, 0, "lookahead acceptance scrolled the page");
+    assert.ok(lookaheadEvidence.viewportDistance > 1800, "lookahead image was outside the legacy prefetch margin");
+
+    const browserExceptions = [pageClient, lookaheadClient, ...workerClients]
+      .filter(Boolean)
       .flatMap((client) => client.events)
       .filter((event) => event.method === "Runtime.exceptionThrown");
     const browserExceptionDetails = browserExceptions.map((event) => ({
@@ -823,6 +856,7 @@ async function main() {
       dynamicOutput: [pageState.state.dynamicImage.naturalWidth, pageState.state.dynamicImage.naturalHeight],
       queue: pageState.health.queue,
       dashboard: dashboardEvidence,
+      lookahead: lookaheadEvidence,
       geometry: geometryEvidence,
       lifecycle: lifecycleEvidence,
       browserExceptions: browserExceptions.length,
@@ -831,6 +865,7 @@ async function main() {
     for (const client of workerClients) client.close();
     dashboardClient?.close();
     geometryClient?.close();
+    lookaheadClient?.close();
     browserClient?.close();
     pageClient?.close();
     await fixture.close();
