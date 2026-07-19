@@ -30,6 +30,47 @@ def test_upscale_rejects_invalid_browser_image_data() -> None:
     assert detail["traceId"]
 
 
+def test_upscale_validation_failure_preserves_sanitized_field_and_trace() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/upscale",
+            json={
+                "imageUrl": "https://example.com/displayed.jpg",
+                "maxOutputWidth": 128,
+                "traceId": "trace-validation-422",
+            },
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["errorCode"] == "REQUEST_VALIDATION_FAILED"
+    assert payload["status"] == 422
+    assert payload["traceId"] == "trace-validation-422"
+    assert payload["detail"] == [{
+        "field": "body.maxOutputWidth",
+        "type": "greater_than_equal",
+        "message": "Input should be greater than or equal to 256",
+    }]
+    assert "imageData" not in str(payload)
+
+
+def test_upscale_validation_failure_uses_safe_generated_trace_for_malformed_body() -> None:
+    with TestClient(app) as client:
+        response = client.post(
+            "/upscale",
+            content=b"not-json",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["errorCode"] == "REQUEST_VALIDATION_FAILED"
+    assert payload["status"] == 422
+    assert payload["traceId"]
+    assert isinstance(payload["detail"], list)
+    assert all(set(item) == {"field", "type", "message"} for item in payload["detail"])
+
+
 def test_upscale_rejects_base64_encoded_html() -> None:
     import base64
 
@@ -90,6 +131,44 @@ def test_upscale_success_returns_trace_id_from_request() -> None:
     assert response.status_code == 200
     assert response.json()["traceId"] == "trace-from-client"
     assert fake.seen_attempt == 1
+
+
+def test_upscale_forwards_browser_owned_bytes_without_downloader_url() -> None:
+    class FakeUpscaler:
+        seen = None
+
+        async def upscale(self, **kwargs):
+            self.seen = kwargs
+            return UpscaleResponse(
+                imageUrl="http://127.0.0.1:8765/cache/images/out.webp",
+                cacheKey="cache-key",
+                cacheHit=False,
+                contentType="image/webp",
+                bytesWritten=3,
+                traceId=kwargs["trace_id"],
+            )
+
+    import base64
+
+    with TestClient(app) as client:
+        original = client.app.state.upscaler_service
+        fake = FakeUpscaler()
+        try:
+            client.app.state.upscaler_service = fake
+            response = client.post(
+                "/upscale",
+                json={
+                    "imageData": base64.b64encode(b"browser-owned-bytes").decode(),
+                    "schemaVersion": 1,
+                    "traceId": "trace-browser-owned",
+                },
+            )
+        finally:
+            client.app.state.upscaler_service = original
+
+    assert response.status_code == 200
+    assert fake.seen["image_url"] == "browser-owned://supplied-image"
+    assert fake.seen["image_bytes"] == b"browser-owned-bytes"
 
 
 def test_upscale_unexpected_error_returns_safe_trace_detail() -> None:

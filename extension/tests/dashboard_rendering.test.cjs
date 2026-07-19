@@ -139,6 +139,33 @@ test("dashboard uses a placeholder for remote-only originals and failed local pr
   assert.equal(row.__parts.originalMedia.firstElementChild.dataset.placeholder, "true");
 });
 
+test("ERR-422-001 dashboard renders validation field and trace separately from preview state", () => {
+  const { renderImages, imageRows } = loadDashboard();
+  renderImages([imageRecord({
+    status: "error",
+    error: "Request validation failed",
+    errorCode: "REQUEST_VALIDATION_FAILED",
+    errorStatus: 422,
+    errorTraceId: "trace-validation-422",
+    validationFields: [{
+      field: "body.maxOutputWidth",
+      type: "greater_than_equal",
+      message: "Input should be greater than or equal to 256",
+    }],
+  })]);
+  const row = [...imageRows.values()][0];
+  const aiPlaceholder = row.__parts.aiMedia.firstElementChild;
+  const originalPlaceholder = row.__parts.originalMedia.firstElementChild;
+
+  assert.equal(aiPlaceholder.children[1].textContent, "Processing failed");
+  assert.match(aiPlaceholder.children[2].textContent, /Request validation failed/);
+  assert.match(aiPlaceholder.children[2].textContent, /Field: maxOutputWidth/);
+  assert.match(aiPlaceholder.children[2].textContent, /Input should be greater than or equal to 256/);
+  assert.match(aiPlaceholder.children[2].textContent, /Trace: trace-valida/);
+  assert.equal(originalPlaceholder.children[1].textContent, "Original preview is not available yet");
+  assert.doesNotMatch(originalPlaceholder.children[2].textContent, /validation/i);
+});
+
 test("dashboard removes keyed rows only when their records disappear", () => {
   const { renderImages, imageRows, elements } = loadDashboard();
   renderImages([imageRecord()]);

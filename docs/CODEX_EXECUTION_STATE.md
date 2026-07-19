@@ -40,7 +40,20 @@
 
 ## Next exact action
 
-Manga and Manhua live-reader gates are green on current public `truyenqqko.com` chapters. Complete a bounded Manhwa gate after addressing heavy segmentation throughput/backend restart behavior, then retry hentaivnx when no external challenge blocks automation. Require stable DOM Blob replacement, zero false-positive chrome, zero duplicate/stale work, settled queues, and no temporary Referer rules.
+Repair and re-run the live reader gate with a clean isolated backend. Hive still has 66/75 stable original-image replacements (88%) and nine detected-but-unreplaced images. Manhua reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix. The local backend became unresponsive after repeated live runs, so hentaivnx and a clean Manga rerun remain blocked.
+
+## HTTP 422 and browser-owned request checkpoint
+
+- Root cause: persisted/output-limit drift could send `body.maxOutputWidth=128`; FastAPI rejects it with validation type `greater_than_equal` because the contract minimum is `256`.
+- Backend validation failures now return only sanitized field/type/message plus trace ID. The extension preserves those fields through the registry and Dashboard, and treats 422 as non-retryable.
+- Every backend dispatch passes through one request normalizer. It clamps recoverable numeric drift, rejects non-finite values, unsupported modes/tile sizes and malformed text settings, emits only sanitized request metadata, and declares request schema version 1.
+- Stored settings migrate idempotently to schema version 1, keep known valid values, bound numeric fields, reject wrong boolean types/unknown keys, and reset the unsupported historical value `anime` to the documented default instead of claiming an unproven legacy mapping.
+- With browser-owned `imageData`, the API accepts Blob/Data metadata or no source URL and does not invoke the downloader. Without bytes, only HTTP/HTTPS URLs are accepted.
+- Verification: 52 backend tests, 141 extension tests, JavaScript checks, Ruff, 72% coverage, secret/runtime-artifact scans with zero findings, and deterministic Edge lifecycle E2E PASS. Edge produced stable Blob replacements, duplicate replacements `0`, stale Chapter A entries `0`, residual Referer rules `0`, browser exceptions `0`, and queue processing/waiting/size `0`.
+- Commit/push: `f0da83c7c94d796b0e240d02d4945ef7d190133d` reached `origin/main` with zero divergence.
+- Live-site URL acceptance was not rerun because `AI_MANGA_LIVE_URL` was not supplied; the deterministic contract-equivalent fixture is the current runtime proof.
+
+Processing Monitor synchronization is now in progress on `codex/live-reader-acceptance-c518`; direct Dashboard browser interaction/load acceptance must pass before integration into `main`.
 
 ## Protected-read lifecycle acceptance checkpoint
 
@@ -53,6 +66,17 @@ Manga and Manhua live-reader gates are green on current public `truyenqqko.com` 
 - `chrome.runtime.reload()` now recovers without page reload. Content script block scoping permits safe reinjection, and a DOM-backed instance lease prevents old/new content contexts from racing or duplicating replacements.
 - Edge lifecycle result: zero browser exceptions, zero duplicate replacements, zero residual Referer rules, and queue/active/retry/read-lock state settled to zero.
 - Verification: 47 backend tests, 126 extension tests, JavaScript syntax checks, Ruff, 71% backend coverage, and real Edge fixture/lifecycle E2E passed.
+- Commit/push: `f21a208b31b228e4f6043dae211cbb93f3bded12` is at `origin/main` with zero divergence and a clean tree at the checkpoint boundary.
+
+## Live reader slicing and candidate-filter checkpoint
+
+- Real HTMLElement getter-only `dataset` objects now work through raw-slice preparation and segment registration without replacing the DOM property.
+- Reader-chrome detection walks nested `.reading-detail.box_doc` ancestors; common one-pixel tracking GIFs and `noavatar` assets are rejected before scheduling.
+- The live harness snapshots original chapter images before raw-slice insertion and measures a sliced original as complete only when every raw slice has a stable Blob replacement.
+- Hive 293 measured 75/75 detected, 66/75 replacements (88%), 184/184 backend successes, zero sanitized failures, zero residual rules, and zero extension exceptions; nine originals remained unreplaced.
+- Manhua 320 measured 26/26 replacements with 110/110 backend successes in the clean first-pass run, but two reader-chrome false positives blocked PASS.
+- Backend `/health` stopped responding after repeated live runs; no hentaivnx or clean Manga result is claimed.
+- Integrated commit/push: `c7b687e3be6acbbf9dc944fb3be959cf6edf3106` reached `origin/main`; full verification passed 49 backend tests, 139 extension tests, JavaScript checks, Ruff, and 71% coverage.
 
 ## Worker-restart Referer cleanup checkpoint
 

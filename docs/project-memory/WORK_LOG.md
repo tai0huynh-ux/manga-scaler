@@ -130,3 +130,28 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: `npm.cmd test` passed 152 extension tests; backend pytest passed 47 tests; Ruff and 71% coverage passed; `npm.cmd run test:e2e:edge-fixture` passed with two completed jobs, zero browser exceptions, zero failed/cancelled jobs, settled queues, worker restart, navigation, and reload evidence.
 - Git: Pending automatic isolated-branch sync; main checkout remains untouched.
 - Remaining: Dashboard UI interaction coverage and representative heavy Manhwa/hentaivnx acceptance remain open.
+
+## 2026-07-19 - Live reader harness and slicing DOM compatibility
+
+- Request: Continue automatically from the pushed lifecycle checkpoint into live TruyenQQ acceptance and repair only runtime-proven regressions.
+- Changes: Added the Edge live-reader harness with original-image snapshotting, complete sliced-group Blob measurement, quiescence evidence, and exception classification. Removed whole-object `dataset` assignments from raw-slice preparation/registration. Reader-chrome filtering now walks nested reading containers and rejects one-pixel tracking GIFs and `noavatar` assets.
+- Invariant/decision: Real HTMLElement getter-only DOM properties remain intact. A live PASS requires stable Blob replacement for at least 95% of original eligible chapter images, zero extension-owned false positives, zero duplicates/stale work, settled queues, and zero temporary rules.
+- Verification: The dataset regression failed before the production fix and passed afterward. Integrated full verification passed 49 backend tests, 139 extension tests, JavaScript checks, Ruff, and 71% coverage. Hive 293 measured 75/75 detected and 66/75 stable replacements (88%) with 184/184 backend successes, zero extension exceptions, and zero residual rules. Manhua 320 measured 26/26 replacements and 110/110 backend successes but exposed reader-chrome false positives. No hentaivnx or clean Manga PASS is claimed because the backend became unresponsive after repeated live runs.
+- Git: Integrated changes committed and pushed as `c7b687e3be6acbbf9dc944fb3be959cf6edf3106`.
+- Remaining: Repair Hive's detected-but-unreplaced scheduling path, restart the backend in a clean isolated process, then rerun all three TruyenQQ readers before hentaivnx.
+
+## 2026-07-19 - HTTP 422 diagnostics and browser-owned request contract
+
+- Request: Identify the exact 422 field, preserve safe validation details, normalize request/settings drift, prefer browser-owned bytes, and prove the lifecycle/runtime gate remains settled.
+- Changes: Added the structured FastAPI validation handler and Dashboard error contract; made 422 non-retryable; normalized every upscale request with schema version 1; added idempotent persisted-setting migration; allowed Blob/Data/missing URL metadata only with `imageData`; skipped backend download when browser bytes exist; corrected live-reader eligible-image reporting.
+- Invariant/decision: Browser-owned bytes are authoritative. URL-only requests remain HTTP/HTTPS, unsafe schemes never reach the downloader, request diagnostics never contain full URLs or image bytes, and local contract failures never retry.
+- Verification: Reproduced `body.maxOutputWidth=128` / `greater_than_equal`; normalized dispatch sends `256`. Full verification passed 52 backend tests, 141 extension tests, JavaScript checks, Ruff, and 72% coverage. Real Edge fixture/lifecycle E2E passed with stable Blob rendering, duplicate replacements `0`, stale Chapter A entries `0`, residual rules `0`, browser exceptions `0`, and settled queue. Secret and tracked runtime-artifact scans found zero hits.
+- Git: Contract implementation committed and pushed as `f0da83c7c94d796b0e240d02d4945ef7d190133d`; documentation and final harness correction follow in the next green sync commit.
+- Remaining: A representative live reader still requires an explicit `AI_MANGA_LIVE_URL`; current runtime evidence is deterministic contract-equivalent rather than a new live-site PASS.
+## 2026-07-19 - Live-reader identity evidence and Hive scheduling checkpoint
+
+- Request: Continue clean live-reader acceptance with stable image identity and per-image sanitized evidence.
+- Changes: Added stable marker/operation identity to the Edge live harness; excluded renderer-owned Blob slices from source inventory; captured sanitized URL, byte-length, source-kind, normalized output limits, backend status, trace, DOM dimensions, duplicate, failure, and cleanup evidence; preserved nested request metadata in sanitized background traces; added deterministic helper tests. Added a focused regression for requeueing discovered `seen` images when they re-enter prefetch.
+- Verification: `npm.cmd test` passed 148 extension tests and JavaScript checks; `scripts/verify.ps1 -Fast` passed 52 backend tests and 148 extension tests. Clean Manga 1188 passed 64/64 replacements with 68/68 backend completions, zero duplicates/stale replacements, zero false positives, and zero residual rules. Clean Hive 293 remained 66/75 replacements (88%) with nine bottom reader images left `seen`; no backend failures, duplicate jobs, stale replacements, extension exceptions, or residual rules were observed.
+- Decision: Live gate remains `FIX_REQUIRED`; extreme-image work is not started.
+- Remaining: Determine why the nine bottom Hive nodes remain `seen` despite `refreshPriorities()` requeue coverage, then rerun Manhwa, Manhua, and hentaivnx.

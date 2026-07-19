@@ -12,6 +12,7 @@
 - **A non-cooperative CDN response body could retain preprocessing forever:** resolved by racing both browser fetch and body reads against abort.
 - **Worker startup cleanup could delete unrelated Referer rules or reuse active IDs:** resolved with exact ownership signatures, active-ID reservation, and an idempotent initialization barrier.
 - **Unpacked-extension reload could leave stale/duplicate content contexts:** resolved with reinjectable block scope, a newest-instance DOM lease, stale-marker cleanup, and verified automatic rediscovery.
+- **Dashboard reported only `Backend returned 422`:** resolved by preserving sanitized FastAPI validation details/trace IDs, marking 422 non-retryable, normalizing request fields before dispatch, and accepting browser-owned bytes without forcing an HTTP source URL.
 
 ## Remaining limitations
 
@@ -22,8 +23,10 @@
 - GPU/VRAM trace sampling is not implemented.
 - Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
 - Hentaivnx live chapter replacement remains unproven. Its sampled CDN requires Referer, and the final worker diagnostic was not stable enough to claim a completed replacement after the timeout fix.
-- `truyenqqko.com` is the currently verified public reader; Manga and Manhua pass, while heavy Manhwa throughput remains unresolved.
-- Current public `truyenqqko.com` Manga and Manhua chapters pass live replacement, but heavy Manhwa chapters can exceed the bounded gate or restart the backend while processing hundreds of long-image segments; representative Manhwa PASS remains open.
+- Current TruyenQQ URLs are now verified, but the live gate is not green: Hive 293 measured 66/75 stable original-image Blob replacements (88%) with nine detected-but-unreplaced images.
+- Manhua 320 reached 26/26 replacements but exposed tracking/avatar false positives before the candidate-filter fix; a clean post-fix rerun was blocked by backend instability.
+- Processing Monitor core is implemented, but real Dashboard cancel/retry/filter/export/reload interaction and the 500-job browser-render load gate remain unproven.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - Browser-level extension behavior still requires manual verification on representative manga sites.
+- Hentaivnx and a clean post-fix Manga run remain unverified; do not promote this checkpoint to live-site PASS.

@@ -25,7 +25,8 @@ def test_upscale_openapi_uses_browser_field_names() -> None:
         "sourceFingerprint",
     } <= properties.keys()
     assert "image_url" not in properties
-    assert schema["required"] == ["imageUrl"]
+    assert "imageUrl" not in schema.get("required", [])
+    assert "schemaVersion" in properties
 
 
 def test_upscale_request_round_trips_aliases() -> None:
@@ -57,3 +58,28 @@ def test_upscale_request_round_trips_aliases() -> None:
     assert serialized["sourceFingerprint"] == payload["sourceFingerprint"]
     assert serialized["textProcessing"]["targetLanguage"] == "vi"
     assert isinstance(request.text_processing, TextProcessingOptionsRequest)
+
+
+def test_browser_owned_bytes_allow_blob_data_or_missing_metadata_url() -> None:
+    for image_url in [
+        None,
+        "blob:https://reader.example.test/11111111-1111-1111-1111-111111111111",
+        "data:image/png;base64,iVBORw0KGgo=",
+    ]:
+        payload = {"imageData": "aW1hZ2U="}
+        if image_url is not None:
+            payload["imageUrl"] = image_url
+        request = UpscaleRequest.model_validate(payload)
+        assert request.image_data == "aW1hZ2U="
+
+
+def test_image_url_requires_http_scheme_without_browser_owned_bytes() -> None:
+    for payload in [
+        {"imageUrl": "file:///private/image.png"},
+        {"imageUrl": "blob:https://reader.example.test/id"},
+    ]:
+        try:
+            UpscaleRequest.model_validate(payload)
+        except ValueError:
+            continue
+        raise AssertionError(f"unsafe source accepted: {payload}")

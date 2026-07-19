@@ -115,6 +115,7 @@ function loadBackgroundClasses(options = {}) {
     clearTimeout: options.timers?.clearTimeout || clearTimeout,
     console,
     importScripts() {},
+    ensureBackendStarted: options.ensureBackendStarted || (async () => ({ ok: true, status: "online" })),
     chrome: {
       tabs: { sendMessage: async () => undefined },
       declarativeNetRequest: {
@@ -128,11 +129,14 @@ function loadBackgroundClasses(options = {}) {
   });
   vm.runInContext(configSource, context);
   vm.runInContext(monitorSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider; globalThis.__normalizeUpscaleRequest = typeof normalizeUpscaleRequest === "function" ? normalizeUpscaleRequest : null; globalThis.__sanitizeUpscaleRequestMetadata = typeof sanitizeUpscaleRequestMetadata === "function" ? sanitizeUpscaleRequestMetadata : null; globalThis.__migratePersistedSettings = typeof migratePersistedSettings === "function" ? migratePersistedSettings : null;`, context);
   return {
     QueueScheduler: context.__QueueScheduler,
     PageImageRegistry: context.__PageImageRegistry,
     BackendUpscaleProvider: context.__BackendUpscaleProvider,
+    normalizeUpscaleRequest: context.__normalizeUpscaleRequest,
+    sanitizeUpscaleRequestMetadata: context.__sanitizeUpscaleRequestMetadata,
+    migratePersistedSettings: context.__migratePersistedSettings,
   };
 }
 
@@ -839,6 +843,362 @@ test("background request carries trace metadata without image data in trace payl
   assert.equal(requests[0].sourceFingerprint, "sha256-trace");
   assert.equal(traceEvents.some((event) => event.event === "background.cache.miss"), true);
   assert.equal(traceEvents.some((event) => JSON.stringify(event).includes("base64-payload")), false);
+});
+
+test("ERR-422-001 backend validation detail and trace survive the provider boundary", async () => {
+  const responseBody = {
+    errorCode: "REQUEST_VALIDATION_FAILED",
+    traceId: "trace-validation-422",
+    status: 422,
+    detail: [{
+      field: "body.maxOutputWidth",
+      type: "greater_than_equal",
+      message: "Input should be greater than or equal to 256",
+    }],
+  };
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    fetch: async () => ({ ok: false, status: 422, text: async () => JSON.stringify(responseBody) }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await assert.rejects(
+    provider.upscale("https://example.com/image.png", {
+      imageData: "iVBORw0KGgo=",
+      jobId: "job-1",
+      operationId: "operation-1",
+      traceId: "trace-request",
+      attempt: 1,
+      maxProcessingSeconds: 60,
+    }),
+    (error) => {
+      assert.equal(error.status, 422);
+      assert.equal(error.errorCode, "REQUEST_VALIDATION_FAILED");
+      assert.equal(error.traceId, "trace-validation-422");
+      assert.equal(error.retryable, false);
+      assert.deepEqual(JSON.parse(JSON.stringify(error.validationFields)), responseBody.detail);
+      assert.match(error.sanitizedMessage, /Request validation failed/i);
+      return true;
+    },
+  );
+});
+
+test("ERR-422-005 malformed and HTML backend error bodies use a safe fallback", async () => {
+  for (const body of ["{not-json", "<html><body>proxy error</body></html>"]) {
+    const { BackendUpscaleProvider } = loadBackgroundClasses({
+      fetch: async () => ({ ok: false, status: 422, text: async () => body }),
+    });
+    const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+    await assert.rejects(
+      provider.upscale("https://example.com/image.png", {
+        imageData: "iVBORw0KGgo=",
+        jobId: "job-1",
+        operationId: "operation-1",
+        traceId: "trace-request",
+        attempt: 1,
+        maxProcessingSeconds: 60,
+      }),
+      (error) => {
+        assert.equal(error.status, 422);
+        assert.equal(error.retryable, false);
+        assert.equal(error.validationFields.length, 0);
+        assert.equal(error.sanitizedMessage, "Request validation failed");
+        assert.doesNotMatch(error.message, /<html>|not-json/i);
+        return true;
+      },
+    );
+  }
+});
+
+test("ERR-422-003 backend error parsing never exposes imageData or tokenized URLs", async () => {
+  const secret = "secret-image-payload-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    fetch: async () => ({
+      ok: false,
+      status: 422,
+      text: async () => JSON.stringify({
+        errorCode: "REQUEST_VALIDATION_FAILED",
+        traceId: "trace-redacted",
+        detail: [{
+          field: "body.imageData",
+          type: "value_error",
+          message: `imageData=${secret} https://cdn.example.test/page.png?token=private`,
+        }],
+      }),
+    }),
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await assert.rejects(
+    provider.upscale("https://example.com/image.png", {
+      imageData: secret,
+      jobId: "job-1",
+      operationId: "operation-1",
+      traceId: "trace-request",
+      attempt: 1,
+      maxProcessingSeconds: 60,
+    }),
+    (error) => {
+      const serialized = JSON.stringify({
+        message: error.message,
+        sanitizedMessage: error.sanitizedMessage,
+        validationFields: error.validationFields,
+      });
+      assert.doesNotMatch(serialized, /secret-image-payload|token=private/);
+      assert.match(serialized, /redacted/i);
+      return true;
+    },
+  );
+});
+
+test("ERR-422-002 non-retryable validation failures settle after one attempt", async () => {
+  let attempts = 0;
+  const validationError = new Error("Request validation failed");
+  validationError.status = 422;
+  validationError.errorCode = "REQUEST_VALIDATION_FAILED";
+  validationError.retryable = false;
+  const QueueScheduler = loadQueueScheduler();
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async () => null, set: async () => undefined },
+    upscaleProvider: {
+      upscale: async () => { attempts += 1; throw validationError; },
+      cancel: async () => undefined,
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("validation-no-retry"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(attempts, 1);
+  assert.equal(scheduler.retryTimers.size, 0);
+  assert.equal(scheduler.active.size, 0);
+  assert.equal(scheduler.pending.size, 0);
+});
+
+test("REQ-NORM normalizes safe numeric drift and removes undefined values", () => {
+  const { normalizeUpscaleRequest } = loadBackgroundClasses();
+  assert.equal(typeof normalizeUpscaleRequest, "function");
+  const request = normalizeUpscaleRequest({
+    imageUrl: "https://example.com/image.png",
+    imageData: "iVBORw0KGgo=",
+    mode: "artwork",
+    enhanceLevel: 4,
+    outputQuality: 12,
+    maxOutputWidth: 128,
+    maxOutputHeight: 99999,
+    tileSize: 256,
+    jobId: "job-1",
+    operationId: "operation-1",
+    traceId: "trace-1",
+    optionalValue: undefined,
+    textProcessing: {
+      enabled: false,
+      cleanup: false,
+      translate: false,
+      sourceLanguage: "auto",
+      targetLanguage: "vi",
+      renderText: true,
+    },
+  }, {});
+
+  assert.equal(request.enhanceLevel, 1);
+  assert.equal(request.outputQuality, 50);
+  assert.equal(request.maxOutputWidth, 256);
+  assert.equal(request.maxOutputHeight, 16383);
+  assert.equal(request.schemaVersion, 1);
+  assert.equal(JSON.stringify(request).includes("undefined"), false);
+});
+
+test("REQ-NORM rejects unsafe values before backend dispatch", () => {
+  const { normalizeUpscaleRequest } = loadBackgroundClasses();
+  const base = {
+    imageUrl: "https://example.com/image.png",
+    imageData: "iVBORw0KGgo=",
+    mode: "auto",
+    enhanceLevel: 0.35,
+    outputQuality: 90,
+    maxOutputWidth: 2048,
+    maxOutputHeight: 8192,
+    tileSize: 256,
+    jobId: "job-1",
+    textProcessing: null,
+  };
+  const cases = [
+    ["NaN", { enhanceLevel: Number.NaN }],
+    ["Infinity", { maxOutputWidth: Number.POSITIVE_INFINITY }],
+    ["unsupported mode", { mode: "anime" }],
+    ["unsupported tile", { tileSize: 300 }],
+    ["long job ID", { jobId: "x".repeat(201) }],
+    ["malformed textProcessing", { textProcessing: "enabled" }],
+  ];
+
+  for (const [description, change] of cases) {
+    assert.throws(() => normalizeUpscaleRequest({ ...base, ...change }, {}), { retryable: false }, description);
+  }
+});
+
+test("REQ-NORM conditionally accepts Blob/Data metadata only with browser-owned bytes", () => {
+  const { normalizeUpscaleRequest } = loadBackgroundClasses();
+  for (const imageUrl of [
+    "blob:https://reader.example.test/11111111-1111-1111-1111-111111111111",
+    "data:image/png;base64,iVBORw0KGgo=",
+  ]) {
+    const accepted = normalizeUpscaleRequest({
+      imageUrl,
+      imageData: "iVBORw0KGgo=",
+      mode: "auto",
+      tileSize: 256,
+      jobId: "job-1",
+    }, {});
+    assert.equal(accepted.imageUrl, imageUrl);
+    assert.throws(() => normalizeUpscaleRequest({ ...accepted, imageData: null }, {}), { retryable: false });
+  }
+});
+
+test("request metadata sanitizer records shape without URL tokens or image bytes", () => {
+  const { normalizeUpscaleRequest, sanitizeUpscaleRequestMetadata } = loadBackgroundClasses();
+  const secret = "secret-image-payload-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz";
+  const request = normalizeUpscaleRequest({
+    imageUrl: "https://cdn.example.test/page.png?token=private#reader",
+    imageData: secret,
+    mode: "auto",
+    tileSize: 256,
+    jobId: "job-1",
+    operationId: "operation-1",
+    textProcessing: null,
+  }, {});
+  const metadata = sanitizeUpscaleRequestMetadata(request);
+  const serialized = JSON.stringify(metadata);
+
+  assert.equal(metadata.image_url_protocol, "https:");
+  assert.equal(metadata.image_url_hostname, "cdn.example.test");
+  assert.equal(metadata.image_url_has_query, true);
+  assert.equal(metadata.image_url_has_fragment, true);
+  assert.equal(metadata.image_data_present, true);
+  assert.doesNotMatch(serialized, /token=private|secret-image-payload|iVBOR/);
+});
+
+test("request-start trace preserves nested sanitized normalization evidence", async () => {
+  const traceEvents = [];
+  const secret = "secret-image-payload";
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    traceEvents,
+    fetch: async (url) => String(url).endsWith("/upscale") ? {
+      ok: true,
+      status: 200,
+      json: async () => ({ imageUrl: "http://127.0.0.1:8765/cache/images/result.webp", contentType: "image/webp" }),
+    } : {
+      ok: true,
+      status: 200,
+      headers: { get: () => "image/webp" },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.upscale("https://cdn.example.test/page.png?token=private", {
+    imageData: Buffer.from(secret).toString("base64"),
+    jobId: "job-1",
+    operationId: "operation-1",
+    traceId: "trace-1",
+    attempt: 1,
+    maxProcessingSeconds: 60,
+    maxOutputWidth: 256,
+    maxOutputHeight: 256,
+    outputQuality: 90,
+    tileSize: 256,
+  });
+
+  const started = traceEvents.find((event) => event.event === "background.backend.request.started");
+  assert.equal(started.metadata.request_metadata.image_data_present, true);
+  assert.equal(started.metadata.request_metadata.max_output_width, 256);
+  assert.equal(started.metadata.request_metadata.image_url_hostname, "cdn.example.test");
+  assert.doesNotMatch(JSON.stringify(started), /token=private|secret-image-payload/);
+});
+
+test("provider dispatches the normalized request contract", async () => {
+  const requests = [];
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const { BackendUpscaleProvider } = loadBackgroundClasses({
+    fetch: async (url, init) => {
+      if (String(url).endsWith("/upscale")) {
+        requests.push(JSON.parse(init.body));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            imageUrl: "http://127.0.0.1:8765/cache/images/result.webp",
+            cacheKey: "cache-key",
+            cacheHit: false,
+            contentType: "image/webp",
+            traceId: "trace-normalized",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => "image/webp" },
+        arrayBuffer: async () => pngBytes.buffer,
+      };
+    },
+  });
+  const provider = new BackendUpscaleProvider("http://127.0.0.1:8765", 20000);
+
+  await provider.upscale("https://example.com/source.png", {
+    imageData: "iVBORw0KGgo=",
+    mode: "artwork",
+    enhanceLevel: 4,
+    maxOutputWidth: 128,
+    maxOutputHeight: 99999,
+    outputQuality: 12,
+    tileSize: 256,
+    jobId: "job-normalized",
+    operationId: "operation-normalized",
+    traceId: "trace-request",
+    maxProcessingSeconds: 60,
+    textProcessing: null,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].schemaVersion, 1);
+  assert.equal(requests[0].enhanceLevel, 1);
+  assert.equal(requests[0].maxOutputWidth, 256);
+  assert.equal(requests[0].maxOutputHeight, 16383);
+  assert.equal(requests[0].outputQuality, 50);
+  assert.equal(Object.values(requests[0]).some((value) => value === undefined), false);
+});
+
+test("persisted settings migration is bounded, rejects legacy modes, and is idempotent", () => {
+  const { migratePersistedSettings } = loadBackgroundClasses();
+  const raw = {
+    storageSchemaVersion: 0,
+    mode: "anime",
+    enhanceLevel: 9,
+    maxOutputWidth: 128,
+    maxOutputHeight: Number.POSITIVE_INFINITY,
+    outputQuality: 101,
+    maxInputWidth: 10,
+    minInputWidth: 300,
+    textCleanupEnabled: "yes",
+    textTargetLanguage: "vietnamese-language-code-too-long",
+    unknownSecret: "should-be-dropped",
+  };
+  const migrated = migratePersistedSettings(raw);
+  assert.equal(migrated.storageSchemaVersion, 1);
+  assert.equal(migrated.mode, "auto");
+  assert.equal(migrated.enhanceLevel, 1);
+  assert.equal(migrated.maxOutputWidth, 256);
+  assert.equal(migrated.maxOutputHeight, 8192);
+  assert.equal(migrated.outputQuality, 100);
+  assert.equal(migrated.maxInputWidth, 300);
+  assert.equal(migrated.textCleanupEnabled, false);
+  assert.equal(migrated.textTargetLanguage, "vi");
+  assert.equal(Object.prototype.hasOwnProperty.call(migrated, "unknownSecret"), false);
+  assert.deepEqual(migratePersistedSettings(migrated), migrated);
 });
 
 test("background retry keeps trace id and increments attempt", async () => {
@@ -2156,6 +2516,32 @@ test("initial discovery registers but does not preprocess images outside the pre
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
 });
 
+test("viewport refresh requeues a discovered image when it enters prefetch", async () => {
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/deferred-discovery.png";
+  image.currentSrc = image.src;
+  image.naturalWidth = 900;
+  image.naturalHeight = 900;
+  image.clientWidth = 900;
+  image.clientHeight = 900;
+  image.width = 900;
+  image.height = 900;
+  let top = 5000;
+  image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+
+  viewportProvider.observeImage(image);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
+
+  top = 100;
+  viewportProvider.refreshPriorities();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+});
+
 test("preprocessing started is emitted only after an operation owns a slot", async () => {
   const firstRead = deferred();
   const { viewportProvider, sentMessages } = makeContentProvider({
@@ -2295,6 +2681,36 @@ test("candidate evaluator rejects explicitly marked interface and advertising im
   assert.equal(viewportProvider.canProcessCandidate(navigationIcon), false);
 });
 
+test("candidate evaluator rejects the common one-pixel tracking GIF", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const trackingPixel = makeTallImage("tracking-pixel");
+  trackingPixel.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  trackingPixel.currentSrc = trackingPixel.src;
+
+  assert.equal(imageProvider.canProcess(trackingPixel), false);
+});
+
+test("candidate evaluator rejects noavatar assets despite filename boundaries", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const avatar = makeTallImage("avatar");
+  avatar.src = "https://cdn.example.test/images/noavatar.png";
+  avatar.currentSrc = avatar.src;
+
+  assert.equal(imageProvider.canProcess(avatar), false);
+});
+
 test("DISCOVERY-002 candidate evaluator rejects reader chrome outside explicit page containers", () => {
   const { ImageProvider } = loadContentClasses();
   const imageProvider = new ImageProvider({
@@ -2358,7 +2774,6 @@ test("candidate evaluator rejects lazy comment noavatar assets", () => {
 
   assert.equal(imageProvider.canProcess(avatar), false);
 });
-
 test("candidate evaluator rejects fixed banner overlays", () => {
   const banner = makeTallImage("banner");
   banner.naturalHeight = 500;

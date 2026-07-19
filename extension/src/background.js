@@ -44,6 +44,81 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
+const STORAGE_SCHEMA_VERSION = 1;
+const STORAGE_BOOLEAN_KEYS = new Set([
+  "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
+  "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
+  "imageSlicingEnabled", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
+]);
+const STORAGE_NUMERIC_BOUNDS = {
+  enhanceLevel: [0, 1],
+  maxProcessingSeconds: [5, 300],
+  minInputWidth: [1, 16383],
+  minInputHeight: [1, 16383],
+  maxInputWidth: [1, 32768],
+  maxInputHeight: [1, 32768],
+  maxOutputWidth: [256, 16383],
+  maxOutputHeight: [256, 16383],
+  imageSliceMaxHeight: [512, 8192],
+  outputQuality: [50, 100],
+  preprocessingConcurrency: [1, 12],
+  upscaleConcurrency: [1, 2],
+};
+const STORAGE_STRING_LIMITS = {
+  textSourceLanguage: 16,
+  textTargetLanguage: 16,
+};
+
+function migratePersistedSettings(rawState = {}) {
+  const source = rawState && typeof rawState === "object" && !Array.isArray(rawState) ? rawState : {};
+  const migrated = { ...DEFAULT_STATE, storageSchemaVersion: STORAGE_SCHEMA_VERSION };
+  for (const key of Object.keys(DEFAULT_STATE)) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    if (STORAGE_BOOLEAN_KEYS.has(key)) {
+      if (typeof value === "boolean") migrated[key] = value;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(STORAGE_NUMERIC_BOUNDS, key)) {
+      const [minimum, maximum] = STORAGE_NUMERIC_BOUNDS[key];
+      const number = Number(value);
+      if (Number.isFinite(number)) migrated[key] = Math.min(Math.max(number, minimum), maximum);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(STORAGE_STRING_LIMITS, key)) {
+      if (typeof value === "string" && value.length <= STORAGE_STRING_LIMITS[key]) migrated[key] = value;
+      continue;
+    }
+    if (key === "mode") {
+      if (AI_MANGA_UPSCALER_CONFIG.enhancement.modes.includes(value)) migrated[key] = value;
+      continue;
+    }
+    if (key === "sizingMode" && ["pixel", "auto", "screen"].includes(value)) migrated[key] = value;
+    else if (key === "resolutionPreset" && ["hd", "fhd", "2k", "4k"].includes(value)) migrated[key] = value;
+    else if (key === "screenOrientation" && ["auto", "landscape", "portrait"].includes(value)) migrated[key] = value;
+    else if (key === "blacklistRules" && Array.isArray(value)) migrated[key] = value.filter((item) => typeof item === "string").slice(0, 100);
+    else if (key === "lastQuality" || key === "lastDetectedMode" || key === "lastComparison") {
+      if (value === null || typeof value === "string" || typeof value === "object") migrated[key] = value;
+    } else if (typeof value === typeof DEFAULT_STATE[key]) {
+      migrated[key] = value;
+    }
+  }
+  migrated.maxInputWidth = Math.max(migrated.maxInputWidth, migrated.minInputWidth);
+  migrated.maxInputHeight = Math.max(migrated.maxInputHeight, migrated.minInputHeight);
+  return migrated;
+}
+
+async function loadMigratedSettings(storage = chrome.storage.local) {
+  const raw = await storage.get(null);
+  const migrated = migratePersistedSettings(raw);
+  const comparable = { ...migrated };
+  const current = raw && typeof raw === "object" ? raw : {};
+  const changed = current.storageSchemaVersion !== STORAGE_SCHEMA_VERSION
+    || JSON.stringify(Object.fromEntries(Object.keys(comparable).map((key) => [key, current[key]]))) !== JSON.stringify(comparable);
+  if (changed) await storage.set(migrated);
+  return migrated;
+}
+
 function newTraceId() {
   try {
     if (crypto?.randomUUID) return crypto.randomUUID();
@@ -63,13 +138,24 @@ function safeTracePrefix(value, length = 16) {
   return value.slice(0, length);
 }
 
-function sanitizeTraceMetadata(metadata = {}) {
+function sanitizeTraceValue(key, value, depth = 0) {
+  const lower = String(key).toLowerCase();
+  if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) return undefined;
+  if (typeof value === "string") return value.length > 256 ? `${value.slice(0, 253)}...` : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (depth >= 2) return undefined;
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => sanitizeTraceValue(key, item, depth + 1)).filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object") return sanitizeTraceMetadata(value, depth + 1);
+  return undefined;
+}
+
+function sanitizeTraceMetadata(metadata = {}, depth = 0) {
   const sanitized = {};
   for (const [key, value] of Object.entries(metadata || {})) {
-    const lower = key.toLowerCase();
-    if (lower.includes("imagedata") || lower.includes("base64") || lower.includes("authorization")) continue;
-    if (typeof value === "string") sanitized[key] = value.length > 256 ? `${value.slice(0, 253)}...` : value;
-    else if (typeof value === "number" || typeof value === "boolean" || value === null) sanitized[key] = value;
+    const safeValue = sanitizeTraceValue(key, value, depth);
+    if (safeValue !== undefined) sanitized[key] = safeValue;
   }
   return sanitized;
 }
@@ -97,6 +183,160 @@ function emitTrace({ event, traceId, component = "background", stage = "backgrou
   } catch {
     return null;
   }
+}
+
+const UPSCALE_REQUEST_SCHEMA_VERSION = 1;
+const UPSCALE_MODES = new Set(["auto", "manga", "artwork", "photo"]);
+const UPSCALE_TILE_SIZES = new Set([256, 512, 1024]);
+
+class RequestNormalizationError extends Error {
+  constructor(field, message) {
+    super(message);
+    this.name = "RequestNormalizationError";
+    this.errorCode = "REQUEST_NORMALIZATION_FAILED";
+    this.validationFields = [{ field, type: "invalid_value", message }];
+    this.sanitizedMessage = message;
+    this.retryable = false;
+  }
+}
+
+function normalizeFiniteNumber(field, value, { fallback = null, minimum = null, maximum = null, integer = false } = {}) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new RequestNormalizationError(field, `${field} must be a finite number.`);
+  let normalized = integer ? Math.round(number) : number;
+  if (minimum !== null) normalized = Math.max(minimum, normalized);
+  if (maximum !== null) normalized = Math.min(maximum, normalized);
+  return normalized;
+}
+
+function normalizeBoundedString(field, value, maximumLength, { required = false } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw new RequestNormalizationError(field, `${field} is required.`);
+    return null;
+  }
+  if (typeof value !== "string") throw new RequestNormalizationError(field, `${field} must be a string.`);
+  if (value.length > maximumLength) {
+    throw new RequestNormalizationError(field, `${field} must be at most ${maximumLength} characters.`);
+  }
+  return value;
+}
+
+function normalizeTextProcessing(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new RequestNormalizationError("textProcessing", "textProcessing must be an object.");
+  }
+  const booleanField = (name, fallback) => {
+    if (value[name] === undefined) return fallback;
+    if (typeof value[name] !== "boolean") {
+      throw new RequestNormalizationError(`textProcessing.${name}`, `textProcessing.${name} must be a boolean.`);
+    }
+    return value[name];
+  };
+  const languageField = (name, fallback) => {
+    if (value[name] === undefined || value[name] === null || value[name] === "") return fallback;
+    if (typeof value[name] !== "string" || value[name].length > 16) {
+      throw new RequestNormalizationError(`textProcessing.${name}`, `textProcessing.${name} must be a short language code.`);
+    }
+    return value[name];
+  };
+  return {
+    enabled: booleanField("enabled", false),
+    cleanup: booleanField("cleanup", true),
+    translate: booleanField("translate", false),
+    sourceLanguage: languageField("sourceLanguage", "auto"),
+    targetLanguage: languageField("targetLanguage", "vi"),
+    renderText: booleanField("renderText", true),
+  };
+}
+
+function normalizeUpscaleRequest(input = {}, persistedState = {}) {
+  const source = { ...persistedState, ...input };
+  const imageData = source.imageData === undefined || source.imageData === null || source.imageData === ""
+    ? null
+    : normalizeBoundedString("imageData", source.imageData, 64 * 1024 * 1024);
+  const imageUrl = normalizeBoundedString("imageUrl", source.imageUrl, 16384, { required: true });
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(imageUrl);
+  } catch {
+    throw new RequestNormalizationError("imageUrl", "imageUrl must be an absolute URL.");
+  }
+  const browserOwnedProtocols = new Set(["blob:", "data:"]);
+  if (!["http:", "https:"].includes(parsedUrl.protocol) && !(imageData && browserOwnedProtocols.has(parsedUrl.protocol))) {
+    throw new RequestNormalizationError("imageUrl", "imageUrl must use HTTP/HTTPS unless browser-owned imageData is present.");
+  }
+  const mode = source.mode || AI_MANGA_UPSCALER_CONFIG.enhancement.defaultMode;
+  if (!UPSCALE_MODES.has(mode)) {
+    throw new RequestNormalizationError("mode", `Unsupported enhancement mode: ${String(mode).slice(0, 32)}.`);
+  }
+  const tileSize = normalizeFiniteNumber("tileSize", source.tileSize, { fallback: 256, integer: true });
+  if (!UPSCALE_TILE_SIZES.has(tileSize)) {
+    throw new RequestNormalizationError("tileSize", "tileSize must be one of 256, 512, or 1024.");
+  }
+  const request = {
+    schemaVersion: UPSCALE_REQUEST_SCHEMA_VERSION,
+    imageUrl,
+    mode,
+    enhanceLevel: normalizeFiniteNumber("enhanceLevel", source.enhanceLevel, {
+      fallback: AI_MANGA_UPSCALER_CONFIG.enhancement.defaultLevel,
+      minimum: 0,
+      maximum: 1,
+    }),
+    imageData,
+    jobId: normalizeBoundedString("jobId", source.jobId, 200),
+    maxOutputWidth: normalizeFiniteNumber("maxOutputWidth", source.maxOutputWidth, {
+      fallback: null, minimum: 256, maximum: 16383, integer: true,
+    }),
+    maxOutputHeight: normalizeFiniteNumber("maxOutputHeight", source.maxOutputHeight, {
+      fallback: null, minimum: 256, maximum: 16383, integer: true,
+    }),
+    outputQuality: normalizeFiniteNumber("outputQuality", source.outputQuality, {
+      fallback: AI_MANGA_UPSCALER_CONFIG.images.outputQuality, minimum: 50, maximum: 100, integer: true,
+    }),
+    tileSize,
+    textProcessing: normalizeTextProcessing(source.textProcessing),
+    traceId: normalizeBoundedString("traceId", source.traceId, 200),
+    operationId: normalizeBoundedString("operationId", source.operationId, 200),
+    queueKey: normalizeBoundedString("queueKey", source.queueKey || source.jobId, 300),
+    attempt: normalizeFiniteNumber("attempt", source.attempt, { fallback: 1, minimum: 1, maximum: 100, integer: true }),
+    sourceFingerprint: normalizeBoundedString("sourceFingerprint", source.sourceFingerprint, 200),
+  };
+  if (source.model !== undefined && source.model !== null) {
+    request.model = normalizeBoundedString("model", source.model, 100);
+  }
+  return request;
+}
+
+function sanitizeUpscaleRequestMetadata(request) {
+  let parsedUrl = null;
+  try { parsedUrl = new URL(request.imageUrl); } catch { parsedUrl = null; }
+  const imageDataLength = typeof request.imageData === "string" ? request.imageData.length : 0;
+  const textProcessing = request.textProcessing && typeof request.textProcessing === "object"
+    ? Object.entries(request.textProcessing).map(([key, value]) => `${key}:${typeof value}`).join(",")
+    : null;
+  return {
+    job_id_length: request.jobId?.length || 0,
+    operation_id_length: request.operationId?.length || 0,
+    image_url_protocol: parsedUrl?.protocol || null,
+    image_url_hostname: parsedUrl?.hostname || null,
+    image_url_length: request.imageUrl?.length || 0,
+    image_url_has_query: Boolean(parsedUrl?.search),
+    image_url_has_fragment: Boolean(parsedUrl?.hash),
+    image_data_present: imageDataLength > 0,
+    image_data_encoded_length: imageDataLength,
+    image_data_decoded_length: imageDataLength ? Math.max(0, Math.floor((imageDataLength * 3) / 4) - ((request.imageData.match(/=*$/)?.[0].length) || 0)) : 0,
+    mode: request.mode,
+    enhance_level: request.enhanceLevel,
+    max_output_width: request.maxOutputWidth,
+    max_output_height: request.maxOutputHeight,
+    output_quality: request.outputQuality,
+    tile_size: request.tileSize,
+    text_processing_types: textProcessing,
+    request_schema_version: request.schemaVersion,
+    extension_version: chrome.runtime?.getManifest?.().version || null,
+  };
 }
 
 /**
@@ -500,6 +740,19 @@ class CompositeCacheProvider {
   }
 }
 
+class BackendRequestError extends Error {
+  constructor({ status, errorCode, traceId, validationFields, sanitizedMessage, retryable }) {
+    super(sanitizedMessage);
+    this.name = "BackendRequestError";
+    this.status = status;
+    this.errorCode = errorCode;
+    this.traceId = traceId;
+    this.validationFields = validationFields;
+    this.sanitizedMessage = sanitizedMessage;
+    this.retryable = retryable;
+  }
+}
+
 /**
  * Calls the local backend and materializes a blob payload for the renderer.
  */
@@ -526,6 +779,11 @@ class BackendUpscaleProvider {
 
     try {
       const imageData = options.imageData || (await this.readBrowserImage(imageUrl, options.pageUrl, signal));
+      const normalizedRequest = normalizeUpscaleRequest({
+        ...options,
+        imageUrl,
+        imageData,
+      }, {});
       const requestStarted = performance.now();
       emitTrace({
         event: "background.backend.request.started",
@@ -535,60 +793,28 @@ class BackendUpscaleProvider {
         metadata: {
           queue_key_prefix: safeTracePrefix(options.jobId),
           source_fingerprint_prefix: safeTracePrefix(options.sourceFingerprint),
+          request_metadata: sanitizeUpscaleRequestMetadata(normalizedRequest),
         },
       });
       const response = await fetch(`${this.baseUrl}/upscale`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageUrl,
-          mode: options.mode,
-          enhanceLevel: options.enhanceLevel,
-          imageData,
-          jobId: options.jobId,
-          maxOutputWidth: options.maxOutputWidth,
-          maxOutputHeight: options.maxOutputHeight,
-          outputQuality: options.outputQuality,
-          tileSize: options.tileSize,
-          textProcessing: options.textProcessing,
-          traceId: options.traceId,
-          operationId: options.operationId,
-          queueKey: options.queueKey || options.jobId,
-          attempt: options.attempt,
-          sourceFingerprint: options.sourceFingerprint,
-        }),
+        body: JSON.stringify(normalizedRequest),
         signal,
       });
       if (!response.ok) {
-        let errorPayload = null;
-        try {
-          errorPayload = await response.json();
-        } catch {
-          errorPayload = null;
-        }
+        const backendError = await this.readBackendError(response, signal);
         emitTrace({
           event: "background.backend.request.failed",
-          traceId: options.traceId || errorPayload?.detail?.traceId,
+          traceId: backendError.traceId || options.traceId,
           status: "failed",
           attempt: options.attempt,
           metadata: {
             http_status: response.status,
-            error_code: errorPayload?.detail?.errorCode || "BACKEND_REQUEST_FAILED",
+            error_code: backendError.errorCode,
             duration_ms: Math.max(0, performance.now() - requestStarted),
           },
         });
-        const detail = errorPayload?.detail && typeof errorPayload.detail === "object"
-          ? errorPayload.detail
-          : {
-              errorCode: "BACKEND_REQUEST_FAILED",
-              message: `Backend returned ${response.status}`,
-              status: response.status,
-              traceId: options.traceId || null,
-            };
-        const backendError = new Error(detail.message || `Backend returned ${response.status}`);
-        backendError.status = response.status;
-        backendError.code = detail.errorCode || "BACKEND_REQUEST_FAILED";
-        backendError.detail = detail;
         throw backendError;
       }
 
@@ -676,6 +902,53 @@ class BackendUpscaleProvider {
     } catch {
       // Backend may already be stopped or the job may have completed.
     }
+  }
+
+  async readBackendError(response, signal) {
+    let payload = null;
+    try {
+      const text = await Promise.race([response.text(), this.rejectOnAbort(signal)]);
+      if (text && text.length <= 65536) payload = JSON.parse(text);
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+    const root = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+    const legacyDetail = root.detail && typeof root.detail === "object" && !Array.isArray(root.detail)
+      ? root.detail
+      : {};
+    const rawFields = Array.isArray(root.detail)
+      ? root.detail
+      : (Array.isArray(legacyDetail.detail) ? legacyDetail.detail : []);
+    const validationFields = rawFields.map((field) => ({
+      field: this.sanitizeBackendText(field?.field, "body", 200),
+      type: this.sanitizeBackendText(field?.type, "validation_error", 100),
+      message: this.sanitizeBackendText(field?.message, "Request validation failed", 300),
+    }));
+    const status = Number(response.status) || 0;
+    const errorCode = this.sanitizeBackendText(
+      root.errorCode || legacyDetail.errorCode,
+      status === 422 ? "REQUEST_VALIDATION_FAILED" : "BACKEND_REQUEST_FAILED",
+      100,
+    );
+    const traceId = this.sanitizeBackendText(root.traceId || legacyDetail.traceId, "", 200) || null;
+    const fallbackMessage = status === 422 ? "Request validation failed" : `Backend returned ${status}`;
+    const sanitizedMessage = this.sanitizeBackendText(root.message || legacyDetail.message, fallbackMessage, 300);
+    return new BackendRequestError({
+      status,
+      errorCode,
+      traceId,
+      validationFields,
+      sanitizedMessage,
+      retryable: [502, 503, 504].includes(status),
+    });
+  }
+
+  sanitizeBackendText(value, fallback, maximumLength) {
+    let text = typeof value === "string" && value.trim() ? value : fallback;
+    text = text.replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted-url]");
+    text = text.replace(/(imageData\s*[=:]\s*)[^\s,;]+/gi, "$1[redacted-data]");
+    text = text.replace(/\b[A-Za-z0-9+/]{64,}={0,2}\b/g, "[redacted-data]");
+    return text.replace(/\s+/g, " ").trim().slice(0, maximumLength);
   }
 
   async readBrowserImage(imageUrl, pageUrl, signal) {
@@ -1377,13 +1650,18 @@ class QueueScheduler {
   }
 
   async failJob(job, error, status = "error") {
-    const message = error instanceof Error ? error.message : "Unknown upscale error";
+    const message = error?.sanitizedMessage || (error instanceof Error ? error.message : "Unknown upscale error");
     await this.statisticsTracker.recordError(job.tabId);
     if (!this.isCurrentJob(job)) return false;
     pageImageRegistry.update(job.tabId, job.imageId, {
       operationId: job.operationId,
       status,
       error: message,
+      errorCode: error?.errorCode || null,
+      errorStatus: Number(error?.status) || null,
+      errorTraceId: error?.traceId || job.traceId,
+      validationFields: Array.isArray(error?.validationFields) ? error.validationFields : [],
+      retryable: error?.retryable !== false,
       failedAt: performance.now(),
       errorModel: AI_PROCESSING_MONITOR.normalizeError(error, status === "timeout" ? "TIMED_OUT" : "FAILED"),
     });
@@ -1405,8 +1683,12 @@ class QueueScheduler {
       sourceRevision: job.sourceRevision,
       traceId: job.traceId,
       message,
+      errorCode: error?.errorCode || null,
+      errorStatus: Number(error?.status) || null,
+      errorTraceId: error?.traceId || job.traceId,
+      validationFields: Array.isArray(error?.validationFields) ? error.validationFields : [],
       status,
-      permanent: status === "timeout",
+      permanent: status === "timeout" || error?.retryable === false,
     }).catch(() => {});
     return true;
   }
@@ -1726,13 +2008,13 @@ function resolveOutputLimits(settings, metrics = {}) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await chrome.storage.local.get({ enabled: true });
+  const settings = await loadMigratedSettings();
   if (settings.enabled) await maintainRuntime();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await statisticsTracker.ensureDefaults();
-  const settings = await chrome.storage.local.get({ enabled: true });
+  const settings = await loadMigratedSettings();
   if (settings.enabled) await maintainRuntime();
 });
 
@@ -2345,7 +2627,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 statisticsTracker.ensureDefaults();
-chrome.storage.local.get(DEFAULT_STATE).then((settings) => {
+loadMigratedSettings().then((settings) => {
   scheduler.setMaxConcurrentRequests(settings.upscaleConcurrency);
   scheduler.setPaused(!settings.enabled);
   if (settings.enabled) maintainRuntime({ ensureContent: false });

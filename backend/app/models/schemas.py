@@ -1,8 +1,9 @@
 """Request and response contracts for the local REST API."""
 
 from typing import Any, Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, HttpUrl, field_serializer
+from pydantic import BaseModel, Field, HttpUrl, TypeAdapter, field_serializer, model_validator
 
 
 class HealthResponse(BaseModel):
@@ -21,10 +22,17 @@ class HealthResponse(BaseModel):
 class UpscaleRequest(BaseModel):
     """Payload sent by the extension when it discovers an image."""
 
-    image_url: HttpUrl = Field(alias="imageUrl", description="Absolute source image URL.")
+    schema_version: int = Field(default=1, alias="schemaVersion", ge=1, le=1)
+    image_url: str | None = Field(
+        default=None,
+        alias="imageUrl",
+        max_length=16384,
+        description="HTTP(S) source URL or browser-owned metadata URL when imageData is supplied.",
+    )
     image_data: str | None = Field(
         default=None,
         alias="imageData",
+        max_length=90 * 1024 * 1024,
         description="Base64-encoded bytes supplied by the browser that already loaded the image.",
     )
     job_id: str | None = Field(default=None, alias="jobId", max_length=200)
@@ -49,6 +57,23 @@ class UpscaleRequest(BaseModel):
     queue_key: str | None = Field(default=None, alias="queueKey", max_length=300)
     attempt: int | None = Field(default=None, ge=1, le=100)
     source_fingerprint: str | None = Field(default=None, alias="sourceFingerprint", max_length=200)
+
+    @model_validator(mode="after")
+    def validate_image_source(self) -> "UpscaleRequest":
+        """Require a safe URL unless the browser supplied the actual bytes."""
+        has_image_data = isinstance(self.image_data, str) and bool(self.image_data)
+        if not self.image_url:
+            if not has_image_data:
+                raise ValueError("imageUrl is required unless imageData is provided.")
+            return self
+
+        parsed = urlparse(self.image_url)
+        if parsed.scheme in {"http", "https"}:
+            TypeAdapter(HttpUrl).validate_python(self.image_url)
+            return self
+        if parsed.scheme in {"blob", "data"} and has_image_data:
+            return self
+        raise ValueError("imageUrl must use http or https unless browser-owned imageData is provided.")
 
 
 class UpscaleResponse(BaseModel):
