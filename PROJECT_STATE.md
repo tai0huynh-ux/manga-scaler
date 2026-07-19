@@ -21,7 +21,7 @@ The detailed verified baseline is maintained in [`docs/project-memory/CURRENT_ST
 
 ## Active milestone
 
-Backend restart/cancellation hardening is green on the isolated feature branch: shutdown cancels active, queued, and queue-capacity-blocked submitters; restart begins with empty registries/futures; and a stale completion cannot remove a newer same-ID job. Processing Monitor, HTTP 422, live-reader, worker/DNR lifecycle, and geometry contracts remain green.
+Backend restart/cancellation hardening is integrated on `main` at `edd461eecafd2807335f70f08f6b607a856c9ce4`: shutdown cancels active, queued, and queue-capacity-blocked submitters; restart begins with empty registries/futures; and a stale completion cannot remove a newer same-ID job. Processing Monitor, HTTP 422, live-reader, worker/DNR lifecycle, and geometry contracts remain green.
 
 ## Required reading
 

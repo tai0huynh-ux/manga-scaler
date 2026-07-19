@@ -215,3 +215,10 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Three focused regressions failed before the fix. Final verification passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% coverage with `inference_queue.py` at 92%. Edge fixture/Dashboard/geometry/lifecycle E2E passed with 55/55 geometry slices, zero browser exceptions, zero duplicate/stale work, and settled queues/rules.
 - Git: Pending isolated feature-branch automatic sync; main remains unchanged by this change set.
 - Remaining: Improve focused model-manager/downloader/upscaler coverage, then run reliability soak and production-quality benchmarks.
+
+## 2026-07-19 - Backend lifecycle checkpoint integrated into main
+
+- Request: Integrate the verified backend restart/cancellation checkpoint without modifying or weakening existing browser lifecycle assertions.
+- Changes: Pushed feature commit `edd461eecafd2807335f70f08f6b607a856c9ce4` and fast-forwarded the clean, unchanged `main` worktree to it.
+- Verification: Final main `scripts/verify.ps1` passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% coverage. The first Edge run was rejected after a transient pre-reload registry count of two; an unchanged clean rerun passed Dashboard, 55/55 geometry slices, worker restart, navigation, extension reload, zero browser exceptions, and settled queues/rules.
+- Remaining: Improve focused model-manager/downloader/upscaler coverage, then run reliability soak and production-quality benchmarks.

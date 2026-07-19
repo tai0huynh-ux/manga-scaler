@@ -49,6 +49,7 @@ Improve focused model-manager/downloader/upscaler coverage, then run longer reli
 - A real FastAPI `TestClient` lifecycle test starts an HTTP upscale request, cancels it through `DELETE /jobs/{job_id}`, proves queue settlement, closes the application lifespan, restarts it, and verifies that the old job is absent while workers are healthy.
 - Full verification passed 57 backend tests, 180 extension tests, JavaScript checks, Ruff, and 73% backend coverage; `inference_queue.py` reached 92% coverage.
 - Edge fixture/Dashboard/geometry/lifecycle E2E remained green with 55/55 geometry slices, zero browser exceptions, zero duplicate replacements, zero stale navigation entries, and settled browser/backend queues.
+- Feature commit `edd461eecafd2807335f70f08f6b607a856c9ce4` was fast-forwarded into `main` after a clean preflight. The first main Edge attempt observed a transient extra pre-reload registry row and was rejected; an unchanged clean rerun passed the complete gate.
 
 ## Processing Monitor integration checkpoint
 

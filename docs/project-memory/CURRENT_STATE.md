@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-19, Asia/Bangkok.
-- Branch: `main`; Processing Monitor and real-browser geometry integration commit: `83e5a175dd39ca4ca64ad2fa84ca98dc208bb317`.
+- Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
