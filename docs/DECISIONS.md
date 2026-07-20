@@ -1,5 +1,15 @@
 # Engineering decisions
 
+## 2026-07-20 - Keep the source visible until a responsive slice group is complete
+
+Context: A stale or constrained DOM size could send an extreme manga page through full-image inference, producing a very narrow output at the backend height cap. Existing slicing also exposed temporary raw slices and replaced them one by one, increasing visible layout/paint churn while reading.
+
+Decision: Inspect bounded PNG/JPEG/WebP/GIF headers after the existing browser read and promote oversized source bytes into slicing. Yield between crop/encode segments, then build every slice in one hidden, contained, percentage-positioned wrapper; render enhanced segments there and activate the wrapper only after all exact segment operations succeed.
+
+Reason: Browser-owned bytes describe source geometry more reliably than stale HTML attributes, while a single final DOM swap preserves scroll continuity and avoids mixed temporary/enhanced strips.
+
+Consequence: The original image remains visible during processing, full renders keep responsive width and automatic height, segment failure rolls back without disturbing the reader, and real-browser geometry assertions use responsive percentages plus measured positions rather than fixed pixel style values.
+
 ## 2026-07-19 - Browser-owned bytes are authoritative request input
 
 Context: Protected and Blob/Data images may already be available to the browser while the backend cannot safely or meaningfully download their display URL.

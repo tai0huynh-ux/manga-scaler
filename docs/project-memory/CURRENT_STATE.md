@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-20, Asia/Bangkok.
-- Current green feature checkpoint: event-driven extension runtime and bounded persistence on parent baseline `11091a2`.
+- Current green feature checkpoint: source-verified slicing and atomic responsive image rendering on parent baseline `97601d1`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -13,13 +13,14 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the extension runtime lag-reduction change set:
+Full `scripts/verify.ps1` result on the source-verified slicing and atomic-render change set:
 
 - Backend: 59 tests passed, including O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
-- Extension: 199 tests passed, including coalesced monitor persistence, settings-cache races, idempotent enable/disable discovery, bounded scroll work, one-shot lookahead, 500-job monitor load, and geometry regressions.
+- Extension: 204 tests passed, including decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, atomic slice activation, coalesced monitor persistence, bounded scroll work, one-shot lookahead, and geometry regressions.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
+- Real Edge unpacked-extension E2E passed with the DirectML backend: `768x32768` rendered through 55/55 ready slices, `2048x1200` rendered through two responsive 50% tiles inside a 735 px wrapper, browser exceptions were zero, and queue/rules/lifecycle state settled.
 
 Git integrity recovery also passed `git fsck --full` after injected `desktop.ini` files were moved to a recoverable external backup. Git reported one dangling blob but no corruption.
 
@@ -35,7 +36,10 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Backend `/health` uses an in-memory artifact-name set initialized once by `ImageCache`; request-time file counting is O(1) and new cache writes update the set.
 - Operation-aware stale-result protection across content, background, and backend.
 - Transactional long-image slicing with full-image fallback.
+- A source-header geometry check promotes constrained or stale-DOM PNG/JPEG/WebP/GIF images into slicing before a full-image request can collapse an extreme page to the backend output-height cap.
 - User-configurable two-dimensional slicing with exact source X/Y/width/height identity and positioned DOM tile reconstruction; the default `8192` width preserves normal vertical manga slicing.
+- Full-image Blob rendering uses the actual rendered rectangle, responsive width, automatic height, and preserved aspect ratio instead of stale HTML width/height attributes.
+- Slice crop/encode work yields between segments to keep browser input and scrolling responsive. Wrappers use percentage geometry and CSS containment; the original page stays visible while enhanced segments load in a hidden wrapper, then one atomic activation swaps the completed group into the reader. Any segment failure still rolls back the entire group.
 - Browser byte reads using cache, credentials, host permissions, and temporary Referer rules.
 - Background memory plus IndexedDB caching and deterministic cache variants.
 - Bounded retries, deferred work, cancellation, tab-generation cleanup, and statistics.
@@ -91,7 +95,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Backend network exposure is not hardened; keep it loopback-only.
 - Native-host generated manifest/executable are machine-specific artifacts even if present in this checkout.
 - Live reader acceptance for the HTTP 422 checkpoint was not rerun without an `AI_MANGA_LIVE_URL`; current runtime proof is the deterministic Edge fixture with the real loopback backend/model.
-- The lag-reduction checkpoint is verified by automated regression and full repository gates; a new long-duration live-browser performance soak has not yet been recorded.
+- The lag and malformed-image checkpoints are verified by automated regression, full repository gates, and deterministic Edge E2E; a new long-duration live-browser performance soak on the exact reported reader has not yet been recorded.
 
 ## Next likely work
 

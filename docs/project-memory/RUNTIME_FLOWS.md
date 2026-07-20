@@ -8,6 +8,8 @@ DOM discovery
   -> preprocessing_queued
   -> preprocessing slot acquired
   -> browser reads displayed bytes
+  -> inspect encoded source geometry
+  -> promote to slicing when source dimensions exceed slice limits
   -> source fingerprint
   -> ENQUEUE_IMAGE
   -> background waiting
@@ -87,18 +89,24 @@ processing events
 
 ```text
 read parent bytes
+  -> inspect encoded PNG/JPEG/WebP/GIF dimensions when DOM geometry did not request slicing
+  -> promote constrained tall/wide sources into the slice transaction
   -> fingerprint parent
   -> decode source
-  -> crop/encode raw segments
+  -> crop/encode raw segments, yielding between segments
   -> load all raw segment Blob URLs
   -> fingerprint every segment
   -> prepare wrapper transaction
-  -> commit wrapper and hide parent
+  -> commit hidden wrapper while keeping parent visible
   -> register every segment job
   -> remove parent registry job
+  -> render enhanced segments inside the hidden wrapper
+  -> activate wrapper and hide parent once every segment is ready
 ```
 
-Failure before or during commit rolls back owned DOM state and Blob URLs. Depending on the stage, the operation either enqueues the full image exactly once or records a terminal preprocessing error. One segment failure rolls back the entire committed group and cancels sibling jobs.
+Failure before, during, or after commit rolls back owned DOM state and Blob URLs. Depending on the stage, the operation either enqueues the full image exactly once or records a terminal preprocessing error. One segment failure rolls back the entire committed group and cancels sibling jobs. The parent remains readable during processing, so partial segment completion never causes repeated page reflow or visible mixed-quality strips.
+
+The wrapper owns responsive geometry: source tile coordinates are converted to percentages inside one aspect-ratio box, and CSS containment limits layout/paint invalidation. Raw segment nodes retain wrapper-owned percentages when their enhanced Blob replaces the temporary crop. Full images use the measured rendered rectangle rather than stale HTML width/height attributes and never lock both axes to fixed pixels.
 
 Removing only the hidden parent DOM node must preserve an already committed slice group. A true parent source change must roll back the old group before replacement work begins.
 

@@ -77,7 +77,9 @@ Persisted settings schema version 3 adds `aheadProcessingEnabled`, `aheadProcess
 
 Preprocessing priority is strict: visible work outranks normal prefetch, which outranks ahead work. A queued ahead waiter may be promoted when it enters the prefetch margin; distant normal-prefetch waiters may be deferred, but ahead waiters are not cancelled solely for being beyond `cancelDistancePx`. Navigation, pagehide, disable, source replacement, and cancellation clear owned ahead keys and release preprocessing slots through the existing guarded settlement paths.
 
-Two-dimensional segment identity includes source X, Y, width, and height in operation IDs, source revisions, cache variants, DOM datasets, and display metrics. The renderer positions tiles by exact rendered left/top/width/height inside one fixed-size relative wrapper; rollback remains group-atomic and idempotent.
+Two-dimensional segment identity includes source X, Y, width, and height in operation IDs, source revisions, cache variants, DOM datasets, and display metrics. The renderer converts exact rendered tile geometry to percentages inside one responsive aspect-ratio wrapper. The wrapper stays hidden and the parent remains visible until every exact segment render succeeds; activation happens once, while rollback remains group-atomic and idempotent before and after activation.
+
+Browser-owned encoded dimensions are authoritative when DOM geometry is absent, stale, or constrained. A bounded PNG/JPEG/WebP/GIF header probe may promote an operation from the full-image path into slicing, but it must reuse the already-read bytes and guarded preprocessing slot rather than performing a second browser read.
 
 ## Discovery support boundary
 

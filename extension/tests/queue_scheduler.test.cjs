@@ -844,6 +844,15 @@ function makeTallImage(index) {
   return image;
 }
 
+function makePngHeaderBase64(width, height) {
+  const bytes = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes.toString("base64");
+}
+
 function makeTransactionalSliceRenderer({ token = "slice-owner-token", onRollback = () => {}, onRender = async () => "rendered" } = {}) {
   return {
     prepareRawSlices(image, _metadata, segments) {
@@ -2220,6 +2229,44 @@ test("responsive-only render preserves the selected original source identity", a
   assert.equal(renderer.isOwnedSource(image), true);
 });
 
+test("image metadata uses the rendered rectangle instead of stale width attributes", () => {
+  const { ImageProvider, HTMLImageElement } = loadContentClasses();
+  const provider = new ImageProvider({});
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/reader-page.png";
+  image.width = 76;
+  image.height = 1536;
+  image.clientWidth = 900;
+  image.clientHeight = 18000;
+  image.getBoundingClientRect = () => ({ width: 900, height: 18000 });
+
+  const metadata = provider.read(image);
+
+  assert.equal(metadata.width, 900);
+  assert.equal(metadata.height, 18000);
+});
+
+test("renderer preserves responsive aspect ratio and leaves slice geometry owned by its wrapper", () => {
+  const { Renderer } = loadContentClasses();
+  const renderer = new Renderer();
+  const image = makeTallImage("responsive-freeze");
+  image.style = {};
+
+  renderer.freezeLayout(image, { width: 900, height: 18000 });
+
+  assert.equal(image.style.width, "900px");
+  assert.equal(image.style.maxWidth, "100%");
+  assert.equal(image.style.height, "auto");
+  assert.equal(image.style.aspectRatio, "900 / 18000");
+  assert.equal(image.style.objectFit, "contain");
+
+  const rawSlice = makeTallImage("raw-responsive-freeze");
+  rawSlice.dataset.aiEnhancerRawSlice = "true";
+  rawSlice.style = { width: "100%", height: "25%" };
+  renderer.freezeLayout(rawSlice, { width: 900, height: 4500 });
+  assert.deepEqual(rawSlice.style, { width: "100%", height: "25%" });
+});
+
 test("content completion clears a load-error without marking the source completed", async () => {
   const { viewportProvider, trackedImages, trackedImageKeys, completedImageKeys } = makeContentProvider({
     renderer: {
@@ -2585,6 +2632,7 @@ test("extremely tall slicing covers every source row exactly once", async () => 
 
 test("two-dimensional slicing covers every source pixel exactly once", async () => {
   const drawCalls = [];
+  let yieldCalls = 0;
   const { ViewportImageProvider } = loadContentClasses({
     createElement: (tagName) => {
       assert.equal(tagName, "canvas");
@@ -2600,6 +2648,7 @@ test("two-dimensional slicing covers every source pixel exactly once", async () 
   provider.imageSliceMaxHeight = 1200;
   provider.decodeBase64Image = async () => ({ width: 2500, height: 2500 });
   provider.canvasToSegmentPayload = async (canvas) => ({ objectUrl: `blob:${canvas.width}x${canvas.height}`, imageData: "segment" });
+  provider.yieldToBrowser = async () => { yieldCalls += 1; };
   const image = makeTallImage("grid-2500x2500");
   image.naturalWidth = 2500;
   image.naturalHeight = 2500;
@@ -2611,6 +2660,7 @@ test("two-dimensional slicing covers every source pixel exactly once", async () 
 
   assert.equal(segments.length, 9);
   assert.equal(drawCalls.length, 9);
+  assert.equal(yieldCalls, 8);
   assert.equal(segments.reduce((total, segment) => total + segment.sourceWidth * segment.sourceHeight, 0), 2500 * 2500);
   assert.deepEqual(JSON.parse(JSON.stringify(segments.map(({ sourceX, sourceY, sourceWidth, sourceHeight }) => [sourceX, sourceY, sourceWidth, sourceHeight]))), [
     [0, 0, 1000, 1200], [1000, 0, 1000, 1200], [2000, 0, 500, 1200],
@@ -2632,12 +2682,14 @@ test("raw grid slices retain exact rendered positions", () => {
   ]);
 
   assert.equal(transaction.wrapper.style.position, "relative");
-  assert.equal(transaction.wrapper.style.height, "800px");
-  assert.deepEqual(rawImages.map((raw) => [raw.style.left, raw.style.top, raw.style.width, raw.style.height, raw.style.position]), [
-    ["0px", "0px", "500px", "400px", "absolute"],
-    ["500px", "0px", "500px", "400px", "absolute"],
-    ["0px", "400px", "500px", "400px", "absolute"],
-    ["500px", "400px", "500px", "400px", "absolute"],
+  assert.equal(transaction.wrapper.style.height, "auto");
+  assert.equal(transaction.wrapper.style.aspectRatio, "1000 / 800");
+  assert.equal(transaction.wrapper.style.contain, "layout paint style");
+  assert.deepEqual(rawImages.map((raw) => [raw.style.left, raw.style.top, raw.style.width, raw.style.height, raw.style.position, raw.style.objectFit]), [
+    ["0%", "0%", "50%", "50%", "absolute", "contain"],
+    ["50%", "0%", "50%", "50%", "absolute", "contain"],
+    ["0%", "50%", "50%", "50%", "absolute", "contain"],
+    ["50%", "50%", "50%", "50%", "absolute", "contain"],
   ]);
 });
 
@@ -3762,6 +3814,11 @@ test("raw slice transaction has terminal idempotent state transitions", () => {
   transaction.commit();
   assert.equal(transaction.state, "committed");
   assert.equal(inserted.length, 1);
+  assert.equal(transaction.wrapper.hidden, true);
+  assert.equal(image.style.display || "", "");
+  transaction.activate();
+  transaction.activate();
+  assert.equal(transaction.wrapper.hidden, false);
   assert.equal(image.style.display, "none");
   transaction.rollback();
   transaction.rollback();
@@ -3804,6 +3861,7 @@ test("prepared stale slice rollback cannot unhide a newer committed wrapper", ()
     { operationId: "new-op", sourceRevision: "new-rev" },
   );
   current.commit();
+  current.activate();
 
   stale.rollback();
 
@@ -4080,6 +4138,106 @@ test("successful segments and fallback images each enqueue once", async () => {
   assert.equal(slotStats.acquired, slotStats.released);
   assert.ok(slotStats.maxActive <= viewportProvider.preprocessingConcurrency);
   assert.ok(slotStats.minActive >= 0);
+});
+
+test("decoded tall source is promoted to slicing when page geometry is constrained", async () => {
+  const renderer = makeTransactionalSliceRenderer();
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    renderer,
+    readDisplayedImage: async () => makePngHeaderBase64(900, 12000),
+    cropImageSegments: () => [{
+      index: 0,
+      sourceX: 0,
+      sourceY: 0,
+      sourceWidth: 900,
+      sourceHeight: 12000,
+      renderedWidth: 900,
+      renderedHeight: 1600,
+      objectUrl: "blob:decoded-tall-segment",
+      imageData: "decoded-tall-segment-data",
+    }],
+    sendMessage: () => Promise.resolve(),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  viewportProvider.imageSliceMaxHeight = 2200;
+  const image = makeTallImage("decoded-tall-source");
+  image.naturalWidth = 900;
+  image.naturalHeight = 1500;
+  image.width = 900;
+  image.height = 1500;
+  image.clientWidth = 900;
+  image.clientHeight = 1500;
+  image.getBoundingClientRect = () => ({ width: 900, height: 1500, top: 0, bottom: 1500, left: 0, right: 900 });
+
+  await viewportProvider.schedule(image);
+
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(enqueued.filter((message) => message.cacheVariant === "full").length, 0, JSON.stringify(sentMessages));
+  assert.equal(enqueued.filter((message) => String(message.cacheVariant).startsWith("segment-")).length, 1, JSON.stringify(sentMessages));
+});
+
+test("encoded source geometry recognizes common manga image formats", () => {
+  const { ViewportImageProvider } = loadContentClasses();
+  const provider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  const jpeg = Buffer.from([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08,
+    0x2e, 0xe0, 0x03, 0x84,
+  ]).toString("base64");
+  const gif = Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x84, 0x03, 0xe0, 0x2e]).toString("base64");
+  const webp = Buffer.alloc(30);
+  webp.write("RIFF", 0, "ascii");
+  webp.write("WEBP", 8, "ascii");
+  webp.write("VP8X", 12, "ascii");
+  webp[24] = 0x83;
+  webp[25] = 0x03;
+  webp[27] = 0xdf;
+  webp[28] = 0x2e;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(provider.encodedImageDimensions(jpeg))), { width: 900, height: 12000 });
+  assert.deepEqual(JSON.parse(JSON.stringify(provider.encodedImageDimensions(gif))), { width: 900, height: 12000 });
+  assert.deepEqual(JSON.parse(JSON.stringify(provider.encodedImageDimensions(webp.toString("base64")))), { width: 900, height: 12000 });
+});
+
+test("slice wrapper activates only after every enhanced segment has loaded", async () => {
+  let activationCount = 0;
+  const renderer = {
+    prepareRawSlices(_image, _metadata, segments) {
+      return {
+        token: "atomic-slice-swap",
+        state: "prepared",
+        rawImages: segments.map((segment) => makeTallImage(`atomic-${segment.index}`)),
+        commit() { this.state = "committed"; return true; },
+        activate() { activationCount += 1; return true; },
+        rollback() { this.state = "rolledBack"; return true; },
+      };
+    },
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages } = makeContentProvider({
+    renderer,
+    sendMessage: () => Promise.resolve(),
+    cropImageSegments: () => [0, 1].map((index) => ({
+      index,
+      sourceX: 0,
+      sourceY: index * 1000,
+      sourceWidth: 900,
+      sourceHeight: 1000,
+      renderedWidth: 900,
+      renderedHeight: 1000,
+      objectUrl: `blob:atomic-${index}`,
+      imageData: `atomic-data-${index}`,
+    })),
+  });
+  viewportProvider.withTimeout = async (promise) => promise;
+  await viewportProvider.schedule(makeTallImage("atomic-parent"));
+  const completions = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+
+  assert.equal(activationCount, 0);
+  assert.equal(await viewportProvider.complete({ ...completions[0], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-0" }), "rendered");
+  assert.equal(activationCount, 0);
+  assert.equal(await viewportProvider.complete({ ...completions[1], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-1" }), "rendered");
+  assert.equal(activationCount, 1);
 });
 
 test("one segment failure rolls back the entire committed slice group", async () => {

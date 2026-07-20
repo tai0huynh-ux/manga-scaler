@@ -631,18 +631,30 @@ async function main() {
       const wrapper = image?.previousElementSibling?.classList.contains('ai-enhancer-slice-wrapper') ? image.previousElementSibling : null;
       const rawSlices = wrapper ? [...wrapper.querySelectorAll('img.ai-enhancer-raw-slice')] : [];
       if (image?.dataset.aiEnhancerSliced !== 'true' || rawSlices.length !== 2 || !rawSlices.every((raw) => raw.classList.contains('ai-manga-upscaler-ready') && raw.src.startsWith('blob:'))) return null;
+      const wrapperRect = wrapper.getBoundingClientRect();
       return {
         width: image.naturalWidth,
         height: image.naturalHeight,
         rawSlices: rawSlices.length,
-        positions: rawSlices.map((raw) => ({ left: raw.style.left, top: raw.style.top, width: raw.style.width, position: raw.style.position })),
+        positions: rawSlices.map((raw) => {
+          const rect = raw.getBoundingClientRect();
+          return { left: raw.style.left, top: raw.style.top, width: raw.style.width, position: raw.style.position, renderedLeft: Math.round(rect.left - wrapperRect.left), renderedWidth: Math.round(rect.width) };
+        }),
         wrapperPosition: wrapper.style.position,
+        wrapperHidden: wrapper.hidden,
+        wrapperWidth: Math.round(wrapperRect.width),
+        parentDisplay: image.style.display,
       };
     })()`), 180000);
     assert.equal(wideGeometryState.width, 2048);
     assert.equal(wideGeometryState.height, 1200);
     assert.equal(wideGeometryState.wrapperPosition, "relative");
-    assert.deepEqual(wideGeometryState.positions.map((item) => item.left), ["0px", "512px"]);
+    assert.equal(wideGeometryState.wrapperHidden, false);
+    assert.equal(wideGeometryState.parentDisplay, "none");
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.left), ["0%", "50%"]);
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.width), ["50%", "50%"]);
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.renderedLeft), [0, Math.round(wideGeometryState.wrapperWidth / 2)]);
+    assert.deepEqual(wideGeometryState.positions.map((item) => item.renderedWidth), [Math.round(wideGeometryState.wrapperWidth / 2), Math.round(wideGeometryState.wrapperWidth / 2)]);
     assert.deepEqual(wideGeometryState.positions.map((item) => item.position), ["absolute", "absolute"]);
     const geometryHealth = await waitFor("extreme geometry backend settlement", async () => {
       const health = await readHealth();

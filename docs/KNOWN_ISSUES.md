@@ -16,6 +16,8 @@
 - **Live advertisement overlays prevented bottom-page scheduling:** resolved in acceptance by locating and clicking the real visible close control; production occlusion rejection remains conservative.
 - **Duplicate live jobs were over-counted across replacement operations:** resolved by preserving pending trace identity, distinguishing reprioritization from enqueue, and including operation identity in duplicate evidence.
 - **Backend shutdown could retain queued job registry entries:** resolved by tracking every job/enqueue operation, cancelling capacity-blocked submitters, identity-safe cleanup, and verified clean lifespan restart.
+- **Processed extreme pages could collapse into a narrow strip:** resolved by measuring the rendered rectangle, probing encoded source dimensions, promoting oversized PNG/JPEG/WebP/GIF bytes into slicing, and keeping full renders aspect-safe.
+- **Segment insertion caused visible reading churn:** resolved by rendering segments in a hidden responsive wrapper and performing one atomic activation only after the complete group succeeds.
 
 ## Remaining limitations
 

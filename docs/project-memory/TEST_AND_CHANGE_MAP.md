@@ -56,13 +56,13 @@ Full verification runs:
 - DirectML fallback specificity and failed-provider session eviction.
 - Text cleanup, truthful capability reporting, rendering, and translation memory.
 - Content source replacement races and stale completion rejection.
-- Renderer transaction rollback and Blob ownership.
+- Renderer responsive geometry, hidden-wrapper atomic activation, transaction rollback, and Blob ownership.
 - Preprocessing priority, slot limits, timeout/cancellation settlement.
 - Long-image transaction commit, rollback, sibling cancellation, and segment ordering.
-- Minimum-dimension boundaries, extreme-tall row coverage, and safe extreme-wide rejection.
+- Minimum-dimension boundaries, encoded PNG/JPEG/WebP/GIF source promotion, extreme-tall row coverage, and safe extreme-wide rejection.
 - Dependency-free local reader endpoints for responsive, lazy, dynamic, protected, cross-origin, and unsupported source categories.
 - Protected-reader transport endpoints for exact per-page Referer bytes, slow/hanging/disconnected bodies, invalid image payloads, and abortable large streams.
-- Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, Blob rendering, false-positive rejection, and queue settlement.
+- Real Edge unpacked-extension flow through static/dynamic discovery, browser byte read, backend DirectML inference, responsive percentage-based slice rendering, atomic wrapper activation, false-positive rejection, and queue settlement.
 - Background operation isolation, retry invalidation, cache identity, tab generation.
 - Exact-URL Referer rule serialization, terminal cleanup, and discovery-time rule rejection.
 - Background-provider initialization cleanup for interrupted temporary and legacy Referer session rules.

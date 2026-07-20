@@ -125,13 +125,14 @@ class ImageProvider {
   read(image) {
     const originalSource = image.dataset.aiMangaOriginalSrc;
     const stableUrl = originalSource ? new URL(originalSource, document.baseURI).href : image.currentSrc || image.src;
+    const rect = image.getBoundingClientRect?.() || {};
     return {
       imageUrl: stableUrl,
       src: originalSource || image.getAttribute("src"),
       srcset: image.dataset.aiMangaOriginalSrcset || image.getAttribute("srcset"),
       sizes: image.dataset.aiMangaOriginalSizes || image.getAttribute("sizes"),
-      width: image.width || image.clientWidth,
-      height: image.height || image.clientHeight,
+      width: rect.width || image.clientWidth || image.width || image.naturalWidth || 0,
+      height: rect.height || image.clientHeight || image.height || image.naturalHeight || 0,
       pictureSources: this.readPictureSources(image),
     };
   }
@@ -262,14 +263,16 @@ class Renderer {
   prepareRawSlices(image, metadata, segments, identity = {}) {
     const wrapper = document.createElement("div");
     wrapper.className = "ai-enhancer-slice-wrapper";
+    wrapper.hidden = true;
     const token = `${identity.operationId || "slice"}-${this.transactionSequence++}`;
     wrapper.dataset.aiEnhancerSliceToken = token;
     wrapper.dataset.aiEnhancerParentOperationId = identity.operationId || "";
-    if (metadata.width > 0) {
-      wrapper.style.width = `${metadata.width}px`;
-      wrapper.style.maxWidth = "100%";
-    }
     wrapper.style.position = "relative";
+    wrapper.style.height = "auto";
+    wrapper.style.maxWidth = "100%";
+    wrapper.style.overflow = "hidden";
+    wrapper.style.contain = "layout paint style";
+    wrapper.style.isolation = "isolate";
     const previousDisplay = image.style.display;
     const slicedDataset = this.captureDatasetValue(image, "aiEnhancerSliced");
     const segmentUrls = new Set(segments.map((segment) => segment?.objectUrl).filter((objectUrl) => typeof objectUrl === "string"));
@@ -282,8 +285,17 @@ class Renderer {
       sequentialTop = Math.max(sequentialTop, renderedTop + renderedHeight);
       return { renderedLeft, renderedTop, renderedWidth, renderedHeight };
     });
+    const wrapperWidth = Math.max(
+      Number(metadata.width) || 0,
+      ...layouts.map((layout) => layout.renderedLeft + layout.renderedWidth),
+    );
     const wrapperHeight = Math.max(Number(metadata.height) || 0, ...layouts.map((layout) => layout.renderedTop + layout.renderedHeight));
-    if (wrapperHeight > 0) wrapper.style.height = `${wrapperHeight}px`;
+    if (wrapperWidth > 0) wrapper.style.width = `${wrapperWidth}px`;
+    if (wrapperWidth > 0 && wrapperHeight > 0) wrapper.style.aspectRatio = `${wrapperWidth} / ${wrapperHeight}`;
+    const asPercent = (value, total) => {
+      if (!(total > 0)) return "0%";
+      return `${Number(((Number(value) || 0) * 100 / total).toFixed(6))}%`;
+    };
     const rawImages = segments.map((segment, position) => {
       const layout = layouts[position];
       const raw = new Image();
@@ -300,12 +312,13 @@ class Renderer {
       raw.decoding = "async";
       raw.src = segment.objectUrl;
       raw.style.position = "absolute";
-      raw.style.left = `${layout.renderedLeft}px`;
-      raw.style.top = `${layout.renderedTop}px`;
-      raw.style.width = layout.renderedWidth > 0 ? `${layout.renderedWidth}px` : "100%";
-      raw.style.height = `${layout.renderedHeight}px`;
+      raw.style.left = asPercent(layout.renderedLeft, wrapperWidth);
+      raw.style.top = asPercent(layout.renderedTop, wrapperHeight);
+      raw.style.width = layout.renderedWidth > 0 ? asPercent(layout.renderedWidth, wrapperWidth) : "100%";
+      raw.style.height = asPercent(layout.renderedHeight, wrapperHeight);
       raw.style.display = "block";
-      raw.style.objectFit = "fill";
+      raw.style.objectFit = "contain";
+      raw.style.objectPosition = "left top";
       wrapper.appendChild(raw);
       this.activeObjectUrls.set(raw, segment.objectUrl);
       return raw;
@@ -318,6 +331,7 @@ class Renderer {
       identity,
       rawImages,
       segments,
+      active: false,
       commit: () => {
         if (transaction.state === "committed") return true;
         if (transaction.state !== "prepared" || !image.parentNode) return false;
@@ -327,9 +341,16 @@ class Renderer {
         }
         this.sliceTransactions.set(image, transaction);
         image.parentNode.insertBefore(wrapper, image);
-        image.style.display = "none";
         image.dataset.aiEnhancerSliced = "true";
         transaction.state = "committed";
+        return true;
+      },
+      activate: () => {
+        if (transaction.state !== "committed") return false;
+        if (transaction.active) return true;
+        wrapper.hidden = false;
+        image.style.display = "none";
+        transaction.active = true;
         return true;
       },
       rollback: () => {
@@ -362,7 +383,7 @@ class Renderer {
 
   installRawSlices(image, metadata, segments) {
     const transaction = this.prepareRawSlices(image, metadata, segments);
-    transaction.commit();
+    if (transaction.commit()) transaction.activate();
     return transaction.rawImages;
   }
 
@@ -400,6 +421,9 @@ class Renderer {
       sizes: this.captureAttribute(image, "sizes"),
       width: image.style.width,
       height: image.style.height,
+      maxWidth: image.style.maxWidth,
+      aspectRatio: image.style.aspectRatio,
+      objectFit: image.style.objectFit,
       originalSrc: this.captureDatasetValue(image, "aiMangaOriginalSrc"),
       originalSrcset: this.captureDatasetValue(image, "aiMangaOriginalSrcset"),
       originalSizes: this.captureDatasetValue(image, "aiMangaOriginalSizes"),
@@ -419,6 +443,9 @@ class Renderer {
     return {
       width: image.style.width,
       height: image.style.height,
+      maxWidth: image.style.maxWidth,
+      aspectRatio: image.style.aspectRatio,
+      objectFit: image.style.objectFit,
       originalSrc: image.dataset.aiMangaOriginalSrc,
       originalSrcset: image.dataset.aiMangaOriginalSrcset,
       originalSizes: image.dataset.aiMangaOriginalSizes,
@@ -452,6 +479,9 @@ class Renderer {
       if (!image.hasAttribute?.("sizes")) this.restoreAttribute(image, "sizes", snapshot.sizes);
       if (!applied || image.style.width === applied.width) image.style.width = snapshot.width;
       if (!applied || image.style.height === applied.height) image.style.height = snapshot.height;
+      if (!applied || image.style.maxWidth === applied.maxWidth) this.restoreStyleValue(image.style, "maxWidth", snapshot.maxWidth);
+      if (!applied || image.style.aspectRatio === applied.aspectRatio) this.restoreStyleValue(image.style, "aspectRatio", snapshot.aspectRatio);
+      if (!applied || image.style.objectFit === applied.objectFit) this.restoreStyleValue(image.style, "objectFit", snapshot.objectFit);
       if (!applied || image.dataset.aiMangaOriginalSrc === applied.originalSrc) {
         this.restoreDatasetValue(image, "aiMangaOriginalSrc", snapshot.originalSrc);
       }
@@ -488,6 +518,18 @@ class Renderer {
     }
     this.revokeObjectUrl(objectUrl);
     return true;
+  }
+
+  restoreStyleValue(style, name, value) {
+    if (value === undefined) {
+      try {
+        delete style[name];
+      } catch {
+        style[name] = "";
+      }
+      return;
+    }
+    style[name] = value;
   }
 
   revokeObjectUrl(objectUrl) {
@@ -537,12 +579,16 @@ class Renderer {
   }
 
   freezeLayout(image, metadata) {
+    if (image?.dataset?.aiEnhancerRawSlice === "true") return;
     if (metadata.width > 0) {
       image.style.width = `${metadata.width}px`;
+      image.style.maxWidth = "100%";
     }
-    if (metadata.height > 0) {
-      image.style.height = `${metadata.height}px`;
+    image.style.height = "auto";
+    if (metadata.width > 0 && metadata.height > 0) {
+      image.style.aspectRatio = `${metadata.width} / ${metadata.height}`;
     }
+    image.style.objectFit = "contain";
   }
 
   setPreviewOriginal(enabled) {
@@ -570,6 +616,7 @@ class Renderer {
   }
 
   fadeOut(image) {
+    if (image?.dataset?.aiEnhancerRawSlice === "true") return Promise.resolve();
     return new Promise((resolve) => {
       image.classList.add("ai-manga-upscaler-fading");
       setTimeout(resolve, AI_MANGA_UPSCALER_CONFIG.render.fadeMs);
@@ -634,6 +681,10 @@ class Renderer {
 
       .ai-enhancer-slice-wrapper {
         display: block !important;
+      }
+
+      .ai-enhancer-slice-wrapper[hidden] {
+        display: none !important;
       }
 
       .ai-enhancer-raw-slice {
@@ -1034,6 +1085,26 @@ class ViewportImageProvider {
       await this.sendPreprocessingStatus(operationEntry, "PREPROCESSING_STARTED", "preprocessing");
       readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
       if (!this.isCurrentImageEntry(operationEntry)) return;
+      const sourceDimensions = readResult.ok ? this.encodedImageDimensions(readResult.imageData) : null;
+      if (allowSegments && this.shouldSliceSourceDimensions(sourceDimensions)) {
+        emitTrace({
+          event: "content.slicing.promoted",
+          traceId,
+          status: "promoted",
+          metadata: {
+            input_width: sourceDimensions.width,
+            input_height: sourceDimensions.height,
+            rendered_width: metadata.width,
+            rendered_height: metadata.height,
+          },
+        });
+        await this.scheduleSegments(image, metadata, imageId, operationId, baseKey, options, {
+          readResult,
+          signal,
+          release,
+        });
+        return;
+      }
       sourceFingerprint = readResult.ok
         ? await this.withTimeout(
             Promise.resolve(this.sourceFingerprint(readResult.imageData)),
@@ -1072,21 +1143,26 @@ class ViewportImageProvider {
     }
   }
 
-  async scheduleSegments(image, metadata, imageId, operationId, baseKey, options = {}) {
+  async scheduleSegments(image, metadata, imageId, operationId, baseKey, options = {}, prepared = null) {
     const operation = trackedImageKeys.get(baseKey);
     if (!operation || operation.operationId !== operationId || trackedImages.get(imageId) !== operation) return;
     operation.aheadProcessing = options.aheadProcessing === true;
     if (operation.aheadProcessing) this.aheadProcessingKeys.set(baseKey, image);
-    const signal = this.createPreprocessingSignal();
+    const signal = prepared?.signal || this.createPreprocessingSignal();
     operation.preprocessingSignal = signal;
-    operation.state = "preprocessing_queued";
-    this.sendPreprocessingStatus(operation, "PREPROCESSING_QUEUED", "preprocessing_queued");
-    const release = await this.acquirePreprocessingSlot(operation);
+    let release = prepared?.release || null;
+    if (!release) {
+      operation.state = "preprocessing_queued";
+      this.sendPreprocessingStatus(operation, "PREPROCESSING_QUEUED", "preprocessing_queued");
+      release = await this.acquirePreprocessingSlot(operation);
+    }
     if (!release) return;
     try {
       if (!this.isCurrentKeyOperation(baseKey, operation)) return;
-      operation.state = "preprocessing";
-      await this.sendPreprocessingStatus(operation, "PREPROCESSING_STARTED", "preprocessing");
+      if (operation.state !== "preprocessing") {
+        operation.state = "preprocessing";
+        await this.sendPreprocessingStatus(operation, "PREPROCESSING_STARTED", "preprocessing");
+      }
       emitTrace({
         event: "content.slicing.started",
         traceId: operation.traceId,
@@ -1099,7 +1175,9 @@ class ViewportImageProvider {
         this.cancelPreprocessingSignal(signal, "superseded");
         return;
       }
-      const readResult = this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
+      const readResult = prepared?.readResult
+        ? this.normalizeReadResult(prepared.readResult)
+        : this.normalizeReadResult(await this.readDisplayedImage(metadata.imageUrl));
       if (!readResult.ok) {
         this.logSliceFailure(readResult.reason, {
           imageUrl: metadata.imageUrl,
@@ -1368,7 +1446,7 @@ class ViewportImageProvider {
           imageData: segment.imageData,
           cacheVariant: `segment-${segment.index}-${segment.sourceX}-${segment.sourceY}-${segment.sourceWidth}-${segment.sourceHeight}`,
           pageOrder: segmentOrder,
-          viewportDistance: this.viewportDistance(rawImage) + segment.index,
+          viewportDistance: this.viewportDistance(image) + segment.index,
           displayMetrics: {
             ...this.displayMetrics(rawImage),
             sourceWidth: segment.sourceWidth,
@@ -1851,6 +1929,86 @@ class ViewportImageProvider {
     return sourceWidth > this.imageSliceMaxWidth || sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
   }
 
+  shouldSliceSourceDimensions(dimensions) {
+    if (!this.imageSlicingEnabled || !dimensions) return false;
+    return dimensions.width > this.imageSliceMaxWidth || dimensions.height > this.imageSliceMaxHeight;
+  }
+
+  encodedImageDimensions(imageData) {
+    if (typeof imageData !== "string" || !imageData) return null;
+    try {
+      const bytes = this.base64PrefixToBytes(imageData, 256 * 1024);
+      const readUint16Be = (offset) => (bytes[offset] << 8) | bytes[offset + 1];
+      const readUint16Le = (offset) => bytes[offset] | (bytes[offset + 1] << 8);
+      const readUint24Le = (offset) => bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+      const readUint32Be = (offset) => (
+        (bytes[offset] * 0x1000000) +
+        (bytes[offset + 1] << 16) +
+        (bytes[offset + 2] << 8) +
+        bytes[offset + 3]
+      );
+      const ascii = (offset, length) => String.fromCharCode(...bytes.subarray(offset, offset + length));
+
+      if (bytes.length >= 24 && ascii(1, 3) === "PNG") {
+        return { width: readUint32Be(16), height: readUint32Be(20) };
+      }
+      if (bytes.length >= 10 && (ascii(0, 3) === "GIF")) {
+        return { width: readUint16Le(6), height: readUint16Le(8) };
+      }
+      if (bytes.length >= 30 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
+        const chunk = ascii(12, 4);
+        if (chunk === "VP8X") {
+          return { width: readUint24Le(24) + 1, height: readUint24Le(27) + 1 };
+        }
+        if (chunk === "VP8 " && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+          return { width: readUint16Le(26) & 0x3fff, height: readUint16Le(28) & 0x3fff };
+        }
+        if (chunk === "VP8L" && bytes[20] === 0x2f) {
+          return {
+            width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+            height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+          };
+        }
+      }
+      if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+        let offset = 2;
+        const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+        while (offset + 8 < bytes.length) {
+          while (offset < bytes.length && bytes[offset] !== 0xff) offset += 1;
+          while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+          if (offset >= bytes.length) break;
+          const marker = bytes[offset];
+          if (sofMarkers.has(marker)) {
+            return { width: readUint16Be(offset + 6), height: readUint16Be(offset + 4) };
+          }
+          if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+            offset += 1;
+            continue;
+          }
+          if (offset + 2 >= bytes.length) break;
+          const segmentLength = readUint16Be(offset + 1);
+          if (segmentLength < 2) break;
+          offset += segmentLength + 1;
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  base64PrefixToBytes(base64Value, maxBytes) {
+    const comma = base64Value.indexOf(",");
+    const payload = comma >= 0 ? base64Value.slice(comma + 1) : base64Value;
+    const requestedCharacters = Math.ceil(maxBytes / 3) * 4;
+    const prefixLength = Math.min(payload.length, requestedCharacters);
+    const alignedLength = prefixLength - (prefixLength % 4);
+    const binary = atob(payload.slice(0, alignedLength || prefixLength));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
   canProcessCandidate(image, options = {}) {
     if (!this.isVisibleCandidate(image, options)) {
       return false;
@@ -2001,6 +2159,8 @@ class ViewportImageProvider {
             ...payload,
           });
           index += 1;
+          const hasMoreSegments = sourceX + sourceWidth < source.width || sourceY + sourceHeight < source.height;
+          if (hasMoreSegments) await this.yieldToBrowser();
         }
       }
     } catch (error) {
@@ -2008,6 +2168,18 @@ class ViewportImageProvider {
       throw error;
     }
     return segments;
+  }
+
+  async yieldToBrowser() {
+    if (typeof globalThis.scheduler?.yield === "function") {
+      try {
+        await globalThis.scheduler.yield();
+        return;
+      } catch {
+        // Fall through when the page exposes an incompatible scheduler object.
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   decodeBase64Image(imageData) {
@@ -2413,11 +2585,28 @@ class ViewportImageProvider {
       });
       return "load-error";
     }
+    if (entry.sliceGroup) {
+      const group = entry.sliceGroup;
+      group.completed.add(entry.segmentRecord);
+      if (group.completed.size === group.records.length && group.transaction?.activate?.() === false) {
+        this.rollbackSliceGroup(group, "slice-activate-error");
+        this.sendMonitorMessage({
+          type: "RENDER_FAILED",
+          imageId: entry.imageId,
+          operationId: entry.operationId,
+          sourceRevision: entry.sourceRevision,
+          sourceFingerprint: entry.sourceFingerprint || null,
+          traceId: entry.traceId || message.traceId,
+          imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
+          outcome: "load-error",
+        });
+        return "load-error";
+      }
+    }
     this.removeTrackedEntry(entry);
     if (entry.baseKey) {
       completedImageKeys.add(entry.baseKey);
     }
-    if (entry.sliceGroup) entry.sliceGroup.completed.add(entry.segmentRecord);
     emitTrace({
       event: "content.render.completed",
       traceId: entry.traceId || message.traceId,
