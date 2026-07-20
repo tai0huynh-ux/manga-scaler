@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-21, Asia/Bangkok.
-- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation; the previous committed checkpoint is `279f2d63612b57cc28c0f0d97030a2536d5983af` and this Dashboard delta is queued for repository auto-sync.
+- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation; the Dashboard implementation, tests, E2E contract, product docs, and project memory were committed and pushed as `63fe9449b884e7aad71f9c85706530db51dec749`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
