@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added an accessible `Hide details` / `Show details` control to Processing Monitor; collapsing the detail pane expands the jobs table while preserving the selected job and timeline for immediate restoration.
 - Fixed screen/automatic sizing corrupting manga text by avoiding neural inference when the requested target is at or below `1.5x` the source; these jobs now use a truthful Lanczos/Pillow resize path, keep aspect ratio, and report zero GPU time.
 - Changed screen-preset automatic orientation to follow source-image geometry instead of the desktop monitor, bounded automatic DPR at `1.5`, reduced the detail multiplier to `1.15`, and versioned the extension cache identity so malformed legacy results are not reused.
 - Fixed extreme manga pages becoming narrow or malformed by promoting source-verified tall/wide images into slicing and preserving responsive aspect ratio during Blob rendering.

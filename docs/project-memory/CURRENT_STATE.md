@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-21, Asia/Bangkok.
-- Current green feature checkpoint: resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation are verified locally and queued for repository auto-sync; the previous source-verified rendering checkpoint is `249e9f55b7e9f334c243560fb9227195cd31708d`.
+- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation; the previous committed checkpoint is `279f2d63612b57cc28c0f0d97030a2536d5983af` and this Dashboard delta is queued for repository auto-sync.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -16,7 +16,7 @@
 Full `scripts/verify.ps1` result on the page-load ahead and early-slice-activation change set:
 
 - Backend: 60 tests passed, including resize-safe output geometry, O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
-- Extension: 210 tests passed, including source-oriented screen sizing, bounded high-DPI automatic sizing, `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
+- Extension: 211 tests passed, including the accessible Processing Monitor detail toggle, source-oriented screen sizing, bounded high-DPI automatic sizing, `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -78,7 +78,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
 - Browser-owned image bytes allow Blob/Data metadata or an omitted source URL; the backend skips URL download whenever decoded `imageData` is present.
-- Dashboard browser acceptance now proves summary counts, status/stage/site/tab/search filters, sanitized 422 details/export, linked retry attempts, real queue/backend cancellation, terminal clearing, reload recovery, and 500 synthetic-job render/filter/detail latency.
+- Dashboard browser acceptance now proves summary counts, status/stage/site/tab/search filters, sanitized 422 details/export, linked retry attempts, real queue/backend cancellation, terminal clearing, reload recovery, an accessible detail-pane collapse/restore interaction that preserves diagnostics, and 500 synthetic-job render/filter/detail latency.
 - Backend queue shutdown cancels active, queued, and queue-capacity-blocked submitters, clears tracked jobs/futures before restart, and uses exact object ownership so stale same-ID completion cannot remove a newer job.
 - FastAPI lifecycle acceptance proves an active HTTP upscale can be cancelled through `DELETE /jobs/{job_id}`, the queue settles, and the next application lifespan starts workers with no stale job.
 
@@ -91,7 +91,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Persistent extension trace storage and Trace Dashboard are not implemented.
 - Artifact capture and reproduction packages are not implemented.
 - GPU/VRAM trace sampling is not implemented.
-- Dashboard now has monitor summary cards, keyed job rows, filters, timeline/detail diagnostics, copy-trace, safe JSON export, and cancel/retry controls. Safe original/enhanced preview policy remains in the existing comparison section; monitor diagnostics never persist image bytes or full source URLs.
+- Dashboard now has monitor summary cards, keyed job rows, filters, a collapsible timeline/detail pane, copy-trace, safe JSON export, and cancel/retry controls. Safe original/enhanced preview policy remains in the existing comparison section; monitor diagnostics never persist image bytes or full source URLs.
 - OCR depends on local Tesseract installation.
 - Translation uses an unofficial best-effort Google endpoint and requires network access.
 - Backend network exposure is not hardened; keep it loopback-only.
@@ -119,3 +119,9 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Screen `auto` orientation now follows source geometry. Automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier instead of unbounded high-DPI expansion.
 - Requested targets at or below `1.5x` use Lanczos/Pillow instead of neural inference. A direct API check produced `546x1080`, reported `model=lanczos`, `provider=Pillow`, `gpu=0`, and preserved the reproduced dialogue geometry.
 - Full verification passed `60` backend tests, `210` extension tests, JavaScript checks, Ruff, and `73%` backend coverage. Real Edge E2E passed with zero browser exceptions, `55/55` tall slices, two responsive wide tiles, and settled queue/Referer/worker/navigation/reload state.
+
+## Latest Dashboard interaction delta (2026-07-21)
+
+- The Processing Monitor header now exposes a semantic `Hide details` / `Show details` control with `aria-controls` and synchronized `aria-expanded` state.
+- Collapsing hides only the detail aside, expands the jobs table to the full monitor width, and preserves the selected job, timeline, and sanitized diagnostics for immediate restoration.
+- Focused Dashboard regression passed `5/5`; fast verification passed `60` backend and `211` extension tests. A clean Edge E2E rerun clicked both states, preserved detail content, reported zero browser exceptions, rendered `55/55` tall slices and two responsive wide tiles, and settled queue, Referer, worker, navigation, and reload state.

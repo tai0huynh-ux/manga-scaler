@@ -16,6 +16,7 @@ class FakeElement {
     this.textContent = "";
     this.hidden = false;
     this.disabled = false;
+    this.attributes = new Map();
   }
 
   get firstElementChild() { return this.children[0] || null; }
@@ -48,6 +49,10 @@ class FakeElement {
     this.listeners.get(type).push(callback);
   }
 
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+
   dispatch(type) { (this.listeners.get(type) || []).forEach((callback) => callback({ type, target: this })); }
 
   querySelector(selector) {
@@ -70,6 +75,9 @@ function loadDashboard() {
   const elements = {
     imageList: new FakeElement("div"),
     imageCount: new FakeElement("span"),
+    monitorLayout: new FakeElement("div"),
+    monitorDetail: new FakeElement("aside"),
+    toggleMonitorDetail: new FakeElement("button"),
   };
   const document = {
     createElement: (tagName) => new FakeElement(tagName),
@@ -87,8 +95,13 @@ function loadDashboard() {
       storage: { local: { get: async () => ({ blacklistRules: [] }), set: async () => undefined } },
     },
   });
-  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows;`, context);
-  return { renderImages: context.__renderImages, imageRows: context.__imageRows, elements };
+  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle;`, context);
+  return {
+    renderImages: context.__renderImages,
+    imageRows: context.__imageRows,
+    initializeMonitorDetailToggle: context.__initializeMonitorDetailToggle,
+    elements,
+  };
 }
 
 function imageRecord(overrides = {}) {
@@ -101,6 +114,32 @@ function imageRecord(overrides = {}) {
     ...overrides,
   };
 }
+
+test("monitor detail toggle collapses and restores the panel without losing its contents", () => {
+  const { initializeMonitorDetailToggle, elements } = loadDashboard();
+  const detailContent = new FakeElement("p");
+  elements.monitorDetail.appendChild(detailContent);
+
+  initializeMonitorDetailToggle();
+  assert.equal(elements.monitorDetail.hidden, false);
+  assert.equal(elements.monitorLayout.dataset.detailCollapsed, "false");
+  assert.equal(elements.toggleMonitorDetail.getAttribute("aria-expanded"), "true");
+  assert.equal(elements.toggleMonitorDetail.textContent, "Hide details");
+
+  elements.toggleMonitorDetail.dispatch("click");
+  assert.equal(elements.monitorDetail.hidden, true);
+  assert.equal(elements.monitorLayout.dataset.detailCollapsed, "true");
+  assert.equal(elements.toggleMonitorDetail.getAttribute("aria-expanded"), "false");
+  assert.equal(elements.toggleMonitorDetail.textContent, "Show details");
+  assert.equal(elements.monitorDetail.firstElementChild, detailContent);
+
+  elements.toggleMonitorDetail.dispatch("click");
+  assert.equal(elements.monitorDetail.hidden, false);
+  assert.equal(elements.monitorLayout.dataset.detailCollapsed, "false");
+  assert.equal(elements.toggleMonitorDetail.getAttribute("aria-expanded"), "true");
+  assert.equal(elements.toggleMonitorDetail.textContent, "Hide details");
+  assert.equal(elements.monitorDetail.firstElementChild, detailContent);
+});
 
 test("dashboard keyed rendering preserves image nodes when URLs do not change", () => {
   const { renderImages, imageRows } = loadDashboard();

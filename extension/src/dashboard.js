@@ -269,6 +269,23 @@ function renderMonitorDetail(job) {
   target.appendChild(timeline);
 }
 
+function initializeMonitorDetailToggle() {
+  const layout = document.getElementById("monitorLayout");
+  const detail = document.getElementById("monitorDetail");
+  const toggle = document.getElementById("toggleMonitorDetail");
+  if (!layout || !detail || !toggle) return;
+
+  const setCollapsed = (collapsed) => {
+    detail.hidden = collapsed;
+    layout.dataset.detailCollapsed = String(collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.textContent = collapsed ? "Show details" : "Hide details";
+  };
+
+  setCollapsed(detail.hidden);
+  toggle.addEventListener("click", () => setCollapsed(!detail.hidden));
+}
+
 function formatMonitorSource(source) {
   if (!source) return "Unavailable";
   return `${source.scheme}://${source.hostname}${source.path || "/"}${source.queryKeys?.length ? ` ?${source.queryKeys.join(", ")}` : ""}`;
@@ -594,6 +611,7 @@ imageSettingIds.forEach((id) => {
   "monitorSiteFilter", "monitorTabFilter",
 ].forEach((id) => document.getElementById(id).addEventListener("change", () => renderMonitor(monitorSnapshot || { jobs: [] })));
 document.getElementById("monitorSearchFilter").addEventListener("input", () => renderMonitor(monitorSnapshot || { jobs: [] }));
+initializeMonitorDetailToggle();
 document.getElementById("refreshMonitor").addEventListener("click", refresh);
 [["clearMonitorCompleted", "COMPLETED"], ["clearMonitorFailed", "FAILED"]].forEach(([id, stage]) => {
   document.getElementById(id).addEventListener("click", async () => {

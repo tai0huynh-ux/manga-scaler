@@ -425,6 +425,46 @@ async function main() {
     assert.ok(dashboardState.rows.every((row) => row.status), "Dashboard status must be visible as text");
     assert.equal(dashboardState.containsImageData, false);
 
+    const detailToggleState = await dashboardClient.evaluate(`(() => {
+      const layout = document.getElementById('monitorLayout');
+      const detail = document.getElementById('monitorDetail');
+      const toggle = document.getElementById('toggleMonitorDetail');
+      const detailText = detail.textContent;
+      toggle.click();
+      const collapsed = {
+        hidden: detail.hidden,
+        layoutState: layout.dataset.detailCollapsed,
+        expanded: toggle.getAttribute('aria-expanded'),
+        label: toggle.textContent,
+        detailPreserved: detail.textContent === detailText,
+      };
+      toggle.click();
+      return {
+        collapsed,
+        restored: {
+          hidden: detail.hidden,
+          layoutState: layout.dataset.detailCollapsed,
+          expanded: toggle.getAttribute('aria-expanded'),
+          label: toggle.textContent,
+          detailPreserved: detail.textContent === detailText,
+        },
+      };
+    })()`);
+    assert.deepEqual(detailToggleState.collapsed, {
+      hidden: true,
+      layoutState: "true",
+      expanded: "false",
+      label: "Show details",
+      detailPreserved: true,
+    });
+    assert.deepEqual(detailToggleState.restored, {
+      hidden: false,
+      layoutState: "false",
+      expanded: "true",
+      label: "Hide details",
+      detailPreserved: true,
+    });
+
     const completedFilter = await dashboardClient.evaluate(`(() => {
       const select = document.getElementById('monitorStatusFilter');
       select.value = 'COMPLETED';
@@ -590,6 +630,7 @@ async function main() {
     dashboardEvidence.cancel = { stage: cancelledFromDashboard.stage, backendCancelCalls: 1 };
     dashboardEvidence.exportSanitized = true;
     dashboardEvidence.reloadRecovered = true;
+    dashboardEvidence.detailToggle = detailToggleState;
     dashboardEvidence.load = { syntheticJobs: 500, renderedRows: dashboardLoad.rows, renderMs: Math.round(dashboardLoad.renderMs), filterMs: Math.round(dashboardLoad.filterMs), detailMs: Math.round(dashboardLoad.detailMs), heapGrowthBytes: heapBefore && heapAfter ? heapAfter - heapBefore : null };
 
     dashboardClient.close();

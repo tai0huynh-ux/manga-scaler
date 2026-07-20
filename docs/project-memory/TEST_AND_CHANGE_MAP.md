@@ -70,7 +70,7 @@ Full verification runs:
 - Real Edge MV3 worker stop/reactivation, full navigation invalidation, and unpacked-extension reload with automatic content recovery.
 - Page-load ahead snapshot: `window.load` one-shot wiring, nearest canonical-source ownership, duplicate URLs with different render sizes, bounded active pumping until every snapshot source settles, disable/cancellation/fallback/slice settlement, and a real Edge image committed as a Blob while `scrollY=0` beyond the legacy prefetch margin.
 - Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
-- Dashboard stable keyed rows and safe preview policy.
+- Dashboard stable keyed rows, safe preview policy, and accessible detail-pane collapse/restore behavior verified through DOM regression and real Edge click interaction.
 - Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.
 - Source-oriented screen presets, bounded high-DPI automatic output sizing, resize-safe cache versioning, and aspect-preserving Lanczos output for targets at or below `1.5x`.
 
