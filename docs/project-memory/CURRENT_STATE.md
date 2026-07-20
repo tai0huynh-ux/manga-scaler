@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-20, Asia/Bangkok.
-- Current green feature checkpoint: source-verified slicing and atomic responsive image rendering on parent baseline `97601d1`.
+- Current green feature checkpoint: source-verified slicing and atomic responsive image rendering, implemented and pushed in `249e9f55b7e9f334c243560fb9227195cd31708d`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
