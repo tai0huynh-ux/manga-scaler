@@ -2,8 +2,8 @@
 
 ## Baseline
 
-- Verified date: 2026-07-20, Asia/Bangkok.
-- Current green feature checkpoint: page-load ahead draining, canonical duplicate suppression, and early responsive slice activation are verified locally and queued for repository auto-sync; the previous source-verified rendering checkpoint is `249e9f55b7e9f334c243560fb9227195cd31708d`.
+- Verified date: 2026-07-21, Asia/Bangkok.
+- Current green feature checkpoint: resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation are verified locally and queued for repository auto-sync; the previous source-verified rendering checkpoint is `249e9f55b7e9f334c243560fb9227195cd31708d`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -15,8 +15,8 @@
 
 Full `scripts/verify.ps1` result on the page-load ahead and early-slice-activation change set:
 
-- Backend: 59 tests passed, including O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
-- Extension: 208 tests passed, including `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
+- Backend: 60 tests passed, including resize-safe output geometry, O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
+- Extension: 210 tests passed, including source-oriented screen sizing, bounded high-DPI automatic sizing, `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -45,6 +45,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Bounded retries, deferred work, cancellation, tab-generation cleanup, and statistics.
 - FastAPI health, upscale, cancel, model status/switch/reload, comparison, and text endpoints.
 - Auto manga/artwork/photo classification.
+- Resize-only Lanczos/Pillow output for targets at or below `1.5x`, avoiding destructive neural undersampling while preserving post-processing, cache, quality, cancellation, and renderer contracts.
+- Source-oriented screen presets plus bounded automatic DPR/detail sizing; extension cache namespace `pipeline:v2-resize-safe` excludes malformed pre-fix results.
 - ONNX model download/checksum/load/warmup/hot reload and provider fallback.
 - Tiled inference, post-enhancement, WebP output, original cache, and quality metrics.
 - Conservative text cleanup, optional Tesseract OCR, online translation, rendering, and local translation memory.
@@ -105,8 +107,15 @@ Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/7
 2. Run longer reliability soak and production-quality benchmarks before release claims.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.
-## Latest verified delta (2026-07-20)
+## Previous verified delta (2026-07-20)
 
 - Page-load ahead processing now waits for `window.load`, snapshots eligible images once, assigns one owner per canonical source URL, and drains every unique snapshot source through the configured active-owner limit. Later dynamic images use normal viewport/prefetch promotion; duplicate source nodes stay suppressed even when rendered dimensions differ.
 - Slice wrappers activate after raw slices and all segment jobs register successfully, before enhanced results arrive. Enhanced results replace exact raw nodes progressively; rollback remains group-atomic and releases the next ahead slot on success, failure, cancellation, fallback, slice completion, disable, and page hide.
 - Verification is green: focused and full gates now cover `59` backend tests and `208` extension tests, plus Ruff, JavaScript syntax, and `73%` backend coverage; Edge E2E has zero browser exceptions, `55/55` tall slices, two responsive wide tiles, and settled queue/Referer/worker/navigation/reload state.
+
+## Latest verified delta (2026-07-21)
+
+- Reproduced the reported 5% case from local artifacts: an `800x1583` source became a `544x1080` result after the anime model received only about `136x270`, visibly corrupting dialogue glyphs.
+- Screen `auto` orientation now follows source geometry. Automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier instead of unbounded high-DPI expansion.
+- Requested targets at or below `1.5x` use Lanczos/Pillow instead of neural inference. A direct API check produced `546x1080`, reported `model=lanczos`, `provider=Pillow`, `gpu=0`, and preserved the reproduced dialogue geometry.
+- Full verification passed `60` backend tests, `210` extension tests, JavaScript checks, Ruff, and `73%` backend coverage. Real Edge E2E passed with zero browser exceptions, `55/55` tall slices, two responsive wide tiles, and settled queue/Referer/worker/navigation/reload state.

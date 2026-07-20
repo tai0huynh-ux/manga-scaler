@@ -71,6 +71,20 @@ def test_fit_for_model_scale_respects_independent_output_bounds() -> None:
     assert fitted.width / fitted.height == source.width / source.height
 
 
+def test_resize_for_output_preserves_portrait_geometry_without_neural_downsampling() -> None:
+    source = Image.new("RGB", (800, 1583))
+    pipeline = ImagePipeline(
+        EncodingConfig(format="WEBP", quality=90, lossless=False, method=4),
+        EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
+    )
+
+    assert round(pipeline.output_scale_for_bounds(source, 1920, 1080), 3) == 0.682
+    resized = asyncio.run(pipeline.resize_for_output(source, 1920, 1080))
+
+    assert resized.size == (546, 1080)
+    assert abs((resized.width / resized.height) - (source.width / source.height)) < 0.001
+
+
 def test_tile_plan_trace_summary_is_emitted_once(tmp_path) -> None:
     configure_tracing(TraceConfig(enabled=True, file="trace.jsonl", includeStack=True), tmp_path)
     source = Image.new("RGB", (300, 300), color=(1, 2, 3))

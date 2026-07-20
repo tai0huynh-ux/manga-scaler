@@ -120,8 +120,10 @@ Removing only the hidden parent DOM node must preserve an already committed slic
   -> RGB decode and original PNG cache
   -> optional text processing
   -> auto/manual mode resolution
-  -> model resolution/download/checksum/session
-  -> source fit to output bounds
+  -> requested output-scale calculation
+  -> target scale <= 1.5: Lanczos/Pillow resize without model loading
+  -> target scale > 1.5: model resolution/download/checksum/session
+  -> neural source fit to output bounds
   -> deterministic output cache key
   -> cache hit OR tiled inference
   -> enhancement and grayscale policy
@@ -130,6 +132,8 @@ Removing only the hidden parent DOM node must preserve an already committed slic
 ```
 
 DirectML device-loss signatures may trigger one model reload on the next provider. Other inference errors propagate unchanged.
+
+Resize-only jobs preserve the source aspect ratio and remain distinct in backend and extension cache identities. They still run configured post-processing, grayscale policy, WebP encoding, quality analysis, cancellation checks, and renderer commit. Screen-preset `auto` orientation follows source geometry; automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier to bound high-DPI work.
 
 ## Trace flow
 

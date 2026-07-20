@@ -81,6 +81,13 @@ Two-dimensional segment identity includes source X, Y, width, and height in oper
 
 Browser-owned encoded dimensions are authoritative when DOM geometry is absent, stale, or constrained. A bounded PNG/JPEG/WebP/GIF header probe may promote an operation from the full-image path into slicing, but it must reuse the already-read bytes and guarded preprocessing slot rather than performing a second browser read.
 
+## Output sizing and resize path
+
+- `screenOrientation=auto` follows source image geometry, not the physical monitor orientation.
+- Automatic output sizing caps the effective device-pixel ratio at `1.5` and uses a bounded `1.15` detail multiplier.
+- A requested target scale at or below `1.5x` must not downsample the source and then feed it to an `x4` neural model. It uses aspect-safe Lanczos resize and reports `lanczos`/`Pillow`/zero GPU time instead.
+- Neural and resize-only results use distinct backend keys and the extension `pipeline:v2-resize-safe` cache namespace. A stale pre-fix cache entry must never replace a current resize-safe result.
+
 ## Discovery support boundary
 
 - The current scanner supports light-DOM `<img>` elements, including responsive `<picture>` sources after they resolve to the owned image element.

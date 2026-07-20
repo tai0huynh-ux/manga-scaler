@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from types import SimpleNamespace
 
 from app.core.config import Settings
 from app.core.tracing import duration_ms, emit_trace_event, safe_prefix
@@ -10,7 +11,7 @@ from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
 from app.services.image_classifier import ClassificationResult, ImageTypeClassifier
-from app.services.image_pipeline import EncodedImage, ImagePipeline
+from app.services.image_pipeline import EncodedImage, ImagePipeline, InferenceImage
 from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
 from app.services.quality import QualityAnalyzer
@@ -19,6 +20,7 @@ from app.services.text_processor import TextProcessingOptions, TextProcessor
 from app.utils.hashing import sha256_bytes
 
 LOGGER = logging.getLogger(__name__)
+RESIZE_ONLY_MAX_SCALE = 1.5
 
 
 class UpscalerService:
@@ -176,8 +178,16 @@ class UpscalerService:
 
             classification = self._resolve_mode(job.mode, image)
             profile = self.settings.modes[classification.mode]
+            output_scale = self.pipeline.output_scale_for_bounds(
+                image, job.max_output_width, job.max_output_height
+            )
+            resize_only = output_scale <= RESIZE_ONLY_MAX_SCALE
             model_started = time.perf_counter()
-            model = self.model_manager.get_model(job.model_name or profile.model)
+            model = (
+                SimpleNamespace(name="lanczos", provider="Pillow", scale=1, fixed_tile_size=None)
+                if resize_only
+                else self.model_manager.get_model(job.model_name or profile.model)
+            )
             emit_trace_event(
                 event="backend.upscale.model.resolved",
                 trace_id=job.trace_id,
@@ -190,21 +200,32 @@ class UpscalerService:
                 queue_key=job.queue_key,
                 backend_job_id=job.client_job_id,
                 source_fingerprint=job.source_fingerprint,
-                metadata={"mode": classification.mode, "model": model.name, "provider": model.provider},
+                metadata={
+                    "mode": classification.mode,
+                    "model": model.name,
+                    "provider": model.provider,
+                    "resize_only": resize_only,
+                    "requested_output_scale": round(output_scale, 3),
+                },
             )
-            inference_image = await self.pipeline.fit_for_model_scale(
-                image, model.scale, job.max_output_width, job.max_output_height
+            inference_image = await (
+                self.pipeline.resize_for_output(image, job.max_output_width, job.max_output_height)
+                if resize_only
+                else self.pipeline.fit_for_model_scale(
+                    image, model.scale, job.max_output_width, job.max_output_height
+                )
             )
-            requested_tile_size = self._resolve_tile_size(job.tile_size)
-            tile_size = model.fixed_tile_size or requested_tile_size
-            overlap = min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
+            requested_tile_size = None if resize_only else self._resolve_tile_size(job.tile_size)
+            tile_size = None if resize_only else (model.fixed_tile_size or requested_tile_size)
+            overlap = 0 if resize_only else min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
             enhance_level = profile.enhance_level if job.enhance_level is None else job.enhance_level
             enhancement_key = round(enhance_level, 3)
             output_quality = job.output_quality or self.settings.encoding.quality
             output_width = job.max_output_width or self.settings.encoding.max_output_dimension
             output_height = job.max_output_height or self.settings.encoding.max_output_dimension
+            tile_key = tile_size if tile_size is not None else "resize"
             output_key = (
-                f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_size}-e{enhancement_key}"
+                f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_key}-e{enhancement_key}"
                 f"-w{output_width}-h{output_height}-q{output_quality}-text{self._text_key(text_options)}-webp"
             )
 
@@ -310,7 +331,7 @@ class UpscalerService:
             )
             inference_started = time.perf_counter()
             emit_trace_event(
-                event="backend.upscale.inference.started",
+                event="backend.upscale.resize.started" if resize_only else "backend.upscale.inference.started",
                 trace_id=job.trace_id,
                 component="upscaler",
                 stage="inference",
@@ -320,20 +341,29 @@ class UpscalerService:
                 queue_key=job.queue_key,
                 backend_job_id=job.client_job_id,
                 source_fingerprint=job.source_fingerprint,
-                metadata={"model": model.name, "provider": model.provider, "tile_size": tile_size, "overlap": overlap},
+                metadata={
+                    "model": model.name,
+                    "provider": model.provider,
+                    "tile_size": tile_size,
+                    "overlap": overlap,
+                    "requested_output_scale": round(output_scale, 3),
+                },
             )
-            output, model = await self._infer_with_provider_recovery(
-                image=inference_image,
-                model=model,
-                tile_size=tile_size,
-                overlap=overlap,
-                job=job,
-            )
+            if resize_only:
+                output = InferenceImage(image=inference_image, gpu_time_ms=0.0)
+            else:
+                output, model = await self._infer_with_provider_recovery(
+                    image=inference_image,
+                    model=model,
+                    tile_size=tile_size,
+                    overlap=overlap,
+                    job=job,
+                )
             self._ensure_active(job)
             timings.set("inference", inference_started)
             timings.values["gpu"] = output.gpu_time_ms
             emit_trace_event(
-                event="backend.upscale.inference.completed",
+                event="backend.upscale.resize.completed" if resize_only else "backend.upscale.inference.completed",
                 trace_id=job.trace_id,
                 component="upscaler",
                 stage="inference",
@@ -465,7 +495,7 @@ class UpscalerService:
         timings: dict[str, float],
         requested_mode: str,
         classification: ClassificationResult,
-        tile_size: int,
+        tile_size: int | None,
         enhance_level: float,
         original_path,
         quality: dict[str, float],

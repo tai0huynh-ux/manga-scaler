@@ -72,6 +72,7 @@ Full verification runs:
 - Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
 - Dashboard stable keyed rows and safe preview policy.
 - Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.
+- Source-oriented screen presets, bounded high-DPI automatic output sizing, resize-safe cache versioning, and aspect-preserving Lanczos output for targets at or below `1.5x`.
 
 ## Manual gaps
 

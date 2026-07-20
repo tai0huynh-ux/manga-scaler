@@ -1556,7 +1556,7 @@ class QueueScheduler {
       const textVariant = job.textProcessing?.enabled
         ? `text:${job.textProcessing.cleanup ? "c1" : "c0"}:${job.textProcessing.translate ? "tr1" : "tr0"}:${job.textProcessing.sourceLanguage || "auto"}>${job.textProcessing.targetLanguage || "vi"}`
         : "text:off";
-      const cacheIdentity = `${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
+      const cacheIdentity = `pipeline:v2-resize-safe|${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (!this.isCurrentJob(job)) {
         return;
@@ -2115,8 +2115,13 @@ function resolveOutputLimits(settings, metrics = {}) {
   const presets = { hd: [1280, 720], fhd: [1920, 1080], "2k": [2560, 1440], "4k": [3840, 2160] };
   if (settings.sizingMode === "screen") {
     let [width, height] = presets[settings.resolutionPreset] || presets.fhd;
+    const sourceWidth = Number(metrics.sourceWidth) || Number(metrics.renderedWidth) || 0;
+    const sourceHeight = Number(metrics.sourceHeight) || Number(metrics.renderedHeight) || 0;
+    const automaticOrientation = sourceWidth > 0 && sourceHeight > 0
+      ? (sourceHeight > sourceWidth ? "portrait" : "landscape")
+      : ((metrics.screenHeight || 0) > (metrics.screenWidth || 0) ? "portrait" : "landscape");
     const orientation = settings.screenOrientation === "auto"
-      ? ((metrics.screenHeight || 0) > (metrics.screenWidth || 0) ? "portrait" : "landscape")
+      ? automaticOrientation
       : settings.screenOrientation;
     if (orientation === "portrait") [width, height] = [height, width];
     return {
@@ -2124,15 +2129,16 @@ function resolveOutputLimits(settings, metrics = {}) {
       height: outputHeightEnabled ? Math.min(height, configuredMaxHeight) : null,
     };
   }
-  const ratio = clamp(Number(metrics.devicePixelRatio) || 1, 1, 3);
+  // A bounded DPR/detail multiplier keeps automatic sizing responsive on high-DPI displays.
+  const ratio = clamp(Number(metrics.devicePixelRatio) || 1, 1, 1.5);
   const visibleWidth = Math.min(Number(metrics.renderedWidth) || 512, Number(metrics.viewportWidth) || 1920);
   const visibleHeight = Math.min(Number(metrics.renderedHeight) || 512, Number(metrics.viewportHeight) || 1080);
   const screenWidth = (Number(metrics.screenWidth) || 1920) * ratio;
   const screenHeight = (Number(metrics.screenHeight) || 1080) * ratio;
   const snap = (value, maximum) => clamp(Math.ceil(value / 256) * 256, 256, maximum);
   return {
-    width: outputWidthEnabled ? snap(Math.min(Math.max(visibleWidth * ratio * 1.35, 768), screenWidth), configuredMaxWidth) : null,
-    height: outputHeightEnabled ? snap(Math.min(Math.max(visibleHeight * ratio * 1.35, 768), screenHeight), configuredMaxHeight) : null,
+    width: outputWidthEnabled ? snap(Math.min(Math.max(visibleWidth * ratio * 1.15, 768), screenWidth), configuredMaxWidth) : null,
+    height: outputHeightEnabled ? snap(Math.min(Math.max(visibleHeight * ratio * 1.15, 768), screenHeight), configuredMaxHeight) : null,
   };
 }
 

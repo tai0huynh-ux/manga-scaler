@@ -79,3 +79,13 @@ All eligible images remain discoverable for page statistics, but only images ins
 ## 2026-07-15 — Keep Dashboard image nodes stable
 
 Dashboard polling uses keyed row reconciliation. Unchanged preview URLs retain the same image node and browser request. Remote website URLs are links, not preview sources, because extension pages do not reliably share anti-hotlink headers, cookies, or signed URL context.
+
+## 2026-07-21 - Use deterministic resize below the neural-resolution threshold
+
+Context: Screen and automatic output limits could require an `x4` model to process a source first reduced to roughly one quarter of the requested result. A reproduced `800x1583` manga page became a `136x270` neural input for a `544x1080` result, corrupting dialogue even at 5% post-processing strength.
+
+Decision: When the requested target scale is at or below `1.5x` the decoded source, resize directly with Pillow Lanczos, then apply the configured bounded enhancement and encoding stages. Larger targets retain the configured ONNX model path.
+
+Reason: Small upscales and downscales do not need neural super-resolution. Avoiding destructive pre-model reduction preserves text and line geometry while removing GPU inference cost.
+
+Consequence: Resize-only responses truthfully report `model=lanczos`, `provider=Pillow`, `scale=1`, and no tile size. Screen auto-orientation follows source geometry, automatic DPR is capped at `1.5`, and the extension cache namespace is versioned to prevent old malformed AI outputs from surviving the fix.

@@ -73,6 +73,38 @@ class ImagePipeline:
         fitted.thumbnail((maximum_source_width, maximum_source_height), Image.Resampling.LANCZOS)
         return fitted
 
+    def output_scale_for_bounds(
+        self, image: Image.Image, max_output_width: int | None = None, max_output_height: int | None = None
+    ) -> float:
+        """Return the scale needed to fit an image inside the requested output bounds."""
+        maximum_width = min(max_output_width or self.encoding.max_output_dimension, self.encoding.max_output_dimension)
+        maximum_height = min(max_output_height or self.encoding.max_output_dimension, self.encoding.max_output_dimension)
+        if image.width <= 0 or image.height <= 0:
+            return 1.0
+        return min(maximum_width / image.width, maximum_height / image.height)
+
+    async def resize_for_output(
+        self, image: Image.Image, max_output_width: int | None = None, max_output_height: int | None = None
+    ) -> Image.Image:
+        """Resize directly to the requested bounds without neural inference."""
+        return await asyncio.to_thread(
+            self._resize_for_output_sync, image, max_output_width, max_output_height
+        )
+
+    def _resize_for_output_sync(
+        self, image: Image.Image, max_output_width: int | None, max_output_height: int | None
+    ) -> Image.Image:
+        maximum_width = min(max_output_width or self.encoding.max_output_dimension, self.encoding.max_output_dimension)
+        maximum_height = min(max_output_height or self.encoding.max_output_dimension, self.encoding.max_output_dimension)
+        scale = self.output_scale_for_bounds(image, maximum_width, maximum_height)
+        target_size = (
+            max(1, round(image.width * scale)),
+            max(1, round(image.height * scale)),
+        )
+        if target_size == image.size:
+            return image
+        return image.resize(target_size, Image.Resampling.LANCZOS)
+
     def _enhance_sync(self, image: Image.Image, level: float) -> Image.Image:
         level = min(max(level, 0.0), 1.0)
         if level == 0:

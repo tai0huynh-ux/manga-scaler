@@ -2475,6 +2475,7 @@ test("cache identity prefers source fingerprint for different bytes under same u
 
   assert.equal(keys.length, 2);
   assert.notEqual(keys[0], keys[1]);
+  assert.ok(keys[0].startsWith("pipeline:v2-resize-safe|"));
   assert.ok(keys[0].includes("sha256-a"));
   assert.ok(keys[1].includes("sha256-b"));
 });
@@ -4832,6 +4833,59 @@ test("auto output limits use configured caps for raw image segments", () => {
 
   assert.equal(limits.width, 2048);
   assert.equal(limits.height, 8192);
+});
+
+test("screen auto orientation follows portrait source geometry", () => {
+  const resolveOutputLimits = loadBackgroundHelpers();
+  const limits = resolveOutputLimits(
+    {
+      sizingMode: "screen",
+      resolutionPreset: "fhd",
+      screenOrientation: "auto",
+      maxOutputWidthEnabled: true,
+      maxOutputHeightEnabled: true,
+      maxOutputWidth: 2048,
+      maxOutputHeight: 8192,
+    },
+    {
+      sourceWidth: 800,
+      sourceHeight: 1583,
+      renderedWidth: 600,
+      renderedHeight: 1187,
+      screenWidth: 1920,
+      screenHeight: 1080,
+    },
+  );
+
+  assert.equal(limits.width, 1080);
+  assert.equal(limits.height, 1920);
+});
+
+test("auto output limits bound high-DPR work while retaining a quality floor", () => {
+  const resolveOutputLimits = loadBackgroundHelpers();
+  const limits = resolveOutputLimits(
+    {
+      sizingMode: "auto",
+      maxOutputWidthEnabled: true,
+      maxOutputHeightEnabled: true,
+      maxOutputWidth: 2048,
+      maxOutputHeight: 8192,
+    },
+    {
+      sourceWidth: 800,
+      sourceHeight: 1583,
+      renderedWidth: 600,
+      renderedHeight: 1187,
+      viewportWidth: 1280,
+      viewportHeight: 900,
+      screenWidth: 2560,
+      screenHeight: 1440,
+      devicePixelRatio: 3,
+    },
+  );
+
+  assert.equal(limits.width, 1280);
+  assert.equal(limits.height, 1792);
 });
 
 test("stale completion cannot remove a replacement job with the same image id", async () => {

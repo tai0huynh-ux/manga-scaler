@@ -20,6 +20,7 @@
 - **Segment insertion caused visible reading churn and delayed the main replacement:** resolved by registering segments in a hidden responsive wrapper, activating once before enhanced results arrive, and replacing exact raw nodes progressively with group rollback on failure.
 - **The initial ahead pass stopped after its first batch:** resolved by taking one `window.load` snapshot and draining every unique source through the bounded active-owner limit.
 - **Identical source URLs at different DOM sizes could enqueue duplicate work:** resolved with page-lifetime canonical source ownership and duplicate-node suppression.
+- **Screen presets fed severely downsampled manga into the anime model and corrupted text at 5% strength:** resolved by source-oriented presets, bounded automatic sizing, a Lanczos/Pillow path for targets up to `1.5x`, and a cache-identity bump that excludes stale malformed results.
 
 ## Remaining limitations
 
