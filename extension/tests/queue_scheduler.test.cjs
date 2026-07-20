@@ -227,6 +227,7 @@ function loadContentClasses(options = {}) {
   const prefix = content.slice(0, content.indexOf("const renderer ="));
   class FakeObserver {
     observe() {}
+    unobserve() {}
   }
   class FakeNode {}
   class FakeHTMLElement extends FakeNode {
@@ -321,6 +322,26 @@ function loadContentClasses(options = {}) {
   const sentMessages = [];
   const timers = options.timers || { setTimeout, clearTimeout };
   const urlApi = options.urlApi || URL;
+  const windowListeners = new Map();
+  const fakeWindow = {
+    innerWidth: 1200,
+    innerHeight: 900,
+    addEventListener(type, callback, listenerOptions = {}) {
+      if (!windowListeners.has(type)) windowListeners.set(type, []);
+      windowListeners.get(type).push({ callback, once: listenerOptions?.once === true });
+    },
+    removeEventListener(type, callback) {
+      const listeners = windowListeners.get(type) || [];
+      windowListeners.set(type, listeners.filter((listener) => listener.callback !== callback));
+    },
+    dispatch(type) {
+      const listeners = [...(windowListeners.get(type) || [])];
+      for (const listener of listeners) {
+        listener.callback({ type, target: fakeWindow });
+        if (listener.once) fakeWindow.removeEventListener(type, listener.callback);
+      }
+    },
+  };
   const context = vm.createContext({
     URL: urlApi,
     Map,
@@ -333,9 +354,10 @@ function loadContentClasses(options = {}) {
     crypto: options.crypto || webcrypto,
     MutationObserver: FakeObserver,
     IntersectionObserver: FakeObserver,
-    window: { innerWidth: 1200, innerHeight: 900, addEventListener() {} },
+    window: fakeWindow,
     document: {
       baseURI: "https://example.com/page",
+      readyState: options.documentReadyState || "complete",
       getElementById: () => ({}),
       createElement: (tagName) => {
         if (typeof options.createElement === "function") return options.createElement(tagName);
@@ -358,7 +380,7 @@ function loadContentClasses(options = {}) {
       querySelectorAll: options.querySelectorAll || (() => options.documentImages || []),
     },
     getComputedStyle: (element) => element.style || {},
-    chrome: { storage: { local: { get: async () => ({}) }, onChanged: { addListener() {} } }, runtime: { sendMessage: (message) => { sentMessages.push(message); return typeof options.sendMessage === "function" ? options.sendMessage(message) : { catch() {} }; }, onMessage: { addListener() {} } } },
+    chrome: { storage: { local: { get: options.storageGet || (async (defaults) => defaults) }, onChanged: { addListener() {} } }, runtime: { sendMessage: (message) => { sentMessages.push(message); return typeof options.sendMessage === "function" ? options.sendMessage(message) : { catch() {} }; }, onMessage: { addListener() {} } } },
     HTMLImageElement: FakeHtmlImageElement,
     HTMLElement: FakeHTMLElement,
     Node: FakeNode,
@@ -386,15 +408,17 @@ function loadContentClasses(options = {}) {
     completedImageKeys: context.__completedImageKeys,
     contentInstanceId: context.__contentInstanceId,
     documentElement: context.document.documentElement,
+    window: context.window,
   };
 }
 
-function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, aheadProcessingEnabled = undefined, aheadProcessingImageLimit = undefined, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, createElement = undefined, sendMessage = undefined, querySelectorAll = undefined } = {}) {
+function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocessingConcurrency = 3, aheadProcessingEnabled = undefined, aheadProcessingImageLimit = undefined, renderer = null, timers = null, urlApi = null, imageProvider = null, elementsFromPoint = undefined, onImageCreated = undefined, createElement = undefined, sendMessage = undefined, querySelectorAll = undefined, documentReadyState = undefined, storageGet = undefined } = {}) {
   const traceEvents = [];
-  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, createElement, sendMessage, querySelectorAll, traceEvents });
+  const { ViewportImageProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys, window } = loadContentClasses({ timers, urlApi, elementsFromPoint, onImageCreated, createElement, sendMessage, querySelectorAll, documentReadyState, storageGet, traceEvents });
   const viewportProvider = new ViewportImageProvider({
     imageProvider: imageProvider || {
       canProcess: () => true,
+      updateLimits() {},
       read: (image) => ({
         imageUrl: image.src,
         src: image.src,
@@ -417,7 +441,7 @@ function makeContentProvider({ readDisplayedImage, cropImageSegments, preprocess
   if (aheadProcessingImageLimit !== undefined) viewportProvider.aheadProcessingImageLimit = aheadProcessingImageLimit;
   viewportProvider.readDisplayedImage = readDisplayedImage || (async () => "image-data");
   viewportProvider.cropImageSegments = cropImageSegments || (async () => []);
-  return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys, traceEvents };
+  return { viewportProvider, HTMLImageElement, sentMessages, trackedImages, trackedImageKeys, completedImageKeys, traceEvents, window };
 }
 
 function makeFakeTimers() {
@@ -2850,6 +2874,46 @@ test("initial discovery registers but does not preprocess images outside the pre
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
 });
 
+test("initial ahead processing waits for window load and snapshots the page only once", async () => {
+  const images = [];
+  const reads = [];
+  const { viewportProvider, sentMessages, HTMLImageElement, trackedImages, window } = makeContentProvider({
+    documentReadyState: "loading",
+    aheadProcessingImageLimit: 2,
+    storageGet: async (defaults) => ({ ...defaults, aheadProcessingImageLimit: 2 }),
+    querySelectorAll: (selector) => selector === "img" ? images : [],
+    readDisplayedImage: (imageUrl) => {
+      const pending = deferred();
+      reads.push({ imageUrl, pending });
+      return pending.promise;
+    },
+  });
+  for (let index = 0; index < 3; index += 1) {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/load-snapshot-${index}.png`;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    const top = 4000 + index * 1000;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+    images.push(image);
+  }
+
+  await viewportProvider.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reads.length, 0);
+
+  window.dispatch("load");
+  window.dispatch("load");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(viewportProvider.pageLoadHandled, true);
+  assert.equal(reads.length, 2);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
+
+  viewportProvider.setEnabled(false);
+  reads.forEach(({ pending }) => pending.resolve("image-data"));
+});
+
 test("disabled discovery stays dormant and repeated enable notifications scan only once", () => {
   let imageScans = 0;
   const images = [];
@@ -2928,7 +2992,7 @@ test("a completed image remains skipped after disable and re-enable", () => {
   assert.equal((image.listeners.get("load") || []).length, 1);
 });
 
-test("initial discovery preprocesses only the bounded number of nearest lookahead images", async () => {
+test("initial discovery opens only a bounded number of nearest lookahead images at once", async () => {
   const reads = [];
   const { viewportProvider, sentMessages, HTMLImageElement, trackedImages } = makeContentProvider({
     preprocessingConcurrency: 3,
@@ -2961,13 +3025,176 @@ test("initial discovery preprocesses only the bounded number of nearest lookahea
   assert.equal([...trackedImages.values()].filter((entry) => entry.state === "preprocessing").length, 3);
   assert.equal(viewportProvider.preprocessingActive, 3);
 
-  [...trackedImages.values()].forEach((entry) => viewportProvider.cancel(entry));
+  viewportProvider.setEnabled(false);
   reads.forEach((read) => read.resolve("image-data"));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(viewportProvider.preprocessingActive, 0);
   assert.equal(viewportProvider.preprocessingWaiters.length, 0);
   assert.equal(viewportProvider.aheadProcessingKeys.size, 0);
   assert.equal(sentMessages.filter((message) => message.type === "CANCEL_IMAGE").length, 3);
+});
+
+test("page-load ahead queue drains every unique source without exceeding its active limit", async () => {
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    aheadProcessingImageLimit: 2,
+    renderer,
+    readDisplayedImage: async (imageUrl) => `bytes:${imageUrl}`,
+  });
+  viewportProvider.imageSlicingEnabled = false;
+  viewportProvider.sourceFingerprint = async (imageData) => `fingerprint:${imageData}`;
+  const specifications = [
+    { name: "first", source: "shared", top: 2600, size: 900 },
+    { name: "duplicate", source: "shared", top: 2800, size: 700 },
+    { name: "second", source: "second", top: 3000, size: 900 },
+    { name: "third", source: "third", top: 4000, size: 900 },
+    { name: "fourth", source: "fourth", top: 5000, size: 900 },
+  ];
+  const images = specifications.map(({ name, source, top, size }) => {
+    const image = new HTMLImageElement();
+    image.name = name;
+    image.src = `https://example.com/${source}.png`;
+    image.naturalWidth = image.width = size;
+    image.naturalHeight = image.height = size;
+    image.clientWidth = size;
+    image.clientHeight = size;
+    image.getBoundingClientRect = () => ({ width: size, height: size, top, bottom: top + size, left: 0, right: size });
+    return image;
+  });
+
+  images.forEach((image) => viewportProvider.observeImage(image));
+  assert.equal(viewportProvider.runInitialAheadProcessing(), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const completed = new Set();
+  let maxAheadActive = viewportProvider.aheadProcessingKeys.size;
+  while (completed.size < 4) {
+    const enqueue = sentMessages.find((message) => (
+      message.type === "ENQUEUE_IMAGE" && !completed.has(message.operationId)
+    ));
+    assert.ok(enqueue, JSON.stringify(sentMessages));
+    assert.ok(viewportProvider.aheadProcessingKeys.size <= 2);
+    maxAheadActive = Math.max(maxAheadActive, viewportProvider.aheadProcessingKeys.size);
+    assert.equal(await viewportProvider.complete({ ...enqueue, type: "UPSCALE_COMPLETE", imageBase64: "enhanced" }), "rendered");
+    completed.add(enqueue.operationId);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.deepEqual(enqueued.map((message) => message.imageUrl), [
+    "https://example.com/shared.png",
+    "https://example.com/second.png",
+    "https://example.com/third.png",
+    "https://example.com/fourth.png",
+  ]);
+  assert.equal(new Set(enqueued.map((message) => message.imageUrl)).size, 4);
+  assert.equal(maxAheadActive, 2);
+  assert.equal(viewportProvider.aheadProcessingKeys.size, 0);
+  assert.equal(viewportProvider.runInitialAheadProcessing(), false);
+  viewportProvider.scheduleAheadProcessing();
+  images[1].dispatch("load");
+  viewportProvider.handleIntersections([{ target: images[1], isIntersecting: true }]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 4);
+});
+
+test("ahead ownership survives full-image fallback until fallback rendering settles", async () => {
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    aheadProcessingImageLimit: 1,
+    renderer,
+    readDisplayedImage: async () => "fallback-data",
+    cropImageSegments: async () => [],
+  });
+  viewportProvider.sourceFingerprint = async () => "fallback-fingerprint";
+  const images = [
+    { source: "fallback-first", top: 2400, height: 4000 },
+    { source: "fallback-second", top: 7000, height: 900 },
+  ].map(({ source, top, height }) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/${source}.png`;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = height;
+    image.getBoundingClientRect = () => ({ width: 900, height, top, bottom: top + height, left: 0, right: 900 });
+    return image;
+  });
+
+  images.forEach((image) => viewportProvider.observeImage(image));
+  viewportProvider.runInitialAheadProcessing();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const first = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE");
+  assert.equal(first.imageUrl, "https://example.com/fallback-first.png");
+  assert.equal(viewportProvider.aheadProcessingKeys.size, 1);
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 1);
+
+  assert.equal(await viewportProvider.complete({ ...first, type: "UPSCALE_COMPLETE", imageBase64: "enhanced" }), "rendered");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const enqueued = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE");
+  assert.deepEqual(enqueued.map((message) => message.imageUrl), [
+    "https://example.com/fallback-first.png",
+    "https://example.com/fallback-second.png",
+  ]);
+});
+
+test("ahead ownership releases only after the final slice result", async () => {
+  const renderer = makeTransactionalSliceRenderer();
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    aheadProcessingImageLimit: 1,
+    renderer,
+    readDisplayedImage: async () => "slice-data",
+    cropImageSegments: async () => [0, 1].map((index) => ({
+      index,
+      sourceX: 0,
+      sourceY: index * 2000,
+      sourceWidth: 900,
+      sourceHeight: 2000,
+      renderedWidth: 900,
+      renderedHeight: 2000,
+      objectUrl: `blob:ahead-slice-${index}`,
+      imageData: `slice-data-${index}`,
+    })),
+  });
+  viewportProvider.sourceFingerprint = async (imageData) => `fingerprint:${imageData}`;
+  const images = [
+    { source: "slice-first", top: 2400, height: 4000 },
+    { source: "slice-second", top: 7000, height: 900 },
+  ].map(({ source, top, height }) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/${source}.png`;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = height;
+    image.getBoundingClientRect = () => ({ width: 900, height, top, bottom: top + height, left: 0, right: 900 });
+    return image;
+  });
+
+  images.forEach((image) => viewportProvider.observeImage(image));
+  viewportProvider.runInitialAheadProcessing();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const segments = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+  assert.equal(segments.length, 2);
+  assert.equal(viewportProvider.aheadProcessingKeys.size, 1);
+
+  assert.equal(await viewportProvider.complete({ ...segments[0], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-0" }), "rendered");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 2);
+  assert.equal(await viewportProvider.complete({ ...segments[1], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-1" }), "rendered");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(sentMessages.some((message) => message.type === "ENQUEUE_IMAGE" && message.imageUrl === "https://example.com/slice-second.png"));
 });
 
 test("initial lookahead performs one bounded layout selection on a large page", () => {
@@ -4198,7 +4425,7 @@ test("encoded source geometry recognizes common manga image formats", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(provider.encodedImageDimensions(webp.toString("base64")))), { width: 900, height: 12000 });
 });
 
-test("slice wrapper activates only after every enhanced segment has loaded", async () => {
+test("slice wrapper activates once after every segment job registers without waiting for completions", async () => {
   let activationCount = 0;
   const renderer = {
     prepareRawSlices(_image, _metadata, segments) {
@@ -4233,9 +4460,9 @@ test("slice wrapper activates only after every enhanced segment has loaded", asy
   await viewportProvider.schedule(makeTallImage("atomic-parent"));
   const completions = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
 
-  assert.equal(activationCount, 0);
+  assert.equal(activationCount, 1);
   assert.equal(await viewportProvider.complete({ ...completions[0], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-0" }), "rendered");
-  assert.equal(activationCount, 0);
+  assert.equal(activationCount, 1);
   assert.equal(await viewportProvider.complete({ ...completions[1], type: "UPSCALE_COMPLETE", imageBase64: "enhanced-1" }), "rendered");
   assert.equal(activationCount, 1);
 });

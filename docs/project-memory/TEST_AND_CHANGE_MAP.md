@@ -68,7 +68,7 @@ Full verification runs:
 - Background-provider initialization cleanup for interrupted temporary and legacy Referer session rules.
 - Rule-ownership preservation, ID collision avoidance, delayed-startup races, URL normalization, redirect matching, cancellation, and timeout lock release.
 - Real Edge MV3 worker stop/reactivation, full navigation invalidation, and unpacked-extension reload with automatic content recovery.
-- Bounded ahead-of-viewport discovery: nearest-image selection, lookahead limits, visible-over-lookahead priority, duplicate suppression, disable behavior, cancellation settlement, and a real Edge image committed as a Blob while `scrollY=0` beyond the legacy prefetch margin.
+- Page-load ahead snapshot: `window.load` one-shot wiring, nearest canonical-source ownership, duplicate URLs with different render sizes, bounded active pumping until every snapshot source settles, disable/cancellation/fallback/slice settlement, and a real Edge image committed as a Blob while `scrollY=0` beyond the legacy prefetch margin.
 - Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
 - Dashboard stable keyed rows and safe preview policy.
 - Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.

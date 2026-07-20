@@ -17,7 +17,9 @@
 - **Duplicate live jobs were over-counted across replacement operations:** resolved by preserving pending trace identity, distinguishing reprioritization from enqueue, and including operation identity in duplicate evidence.
 - **Backend shutdown could retain queued job registry entries:** resolved by tracking every job/enqueue operation, cancelling capacity-blocked submitters, identity-safe cleanup, and verified clean lifespan restart.
 - **Processed extreme pages could collapse into a narrow strip:** resolved by measuring the rendered rectangle, probing encoded source dimensions, promoting oversized PNG/JPEG/WebP/GIF bytes into slicing, and keeping full renders aspect-safe.
-- **Segment insertion caused visible reading churn:** resolved by rendering segments in a hidden responsive wrapper and performing one atomic activation only after the complete group succeeds.
+- **Segment insertion caused visible reading churn and delayed the main replacement:** resolved by registering segments in a hidden responsive wrapper, activating once before enhanced results arrive, and replacing exact raw nodes progressively with group rollback on failure.
+- **The initial ahead pass stopped after its first batch:** resolved by taking one `window.load` snapshot and draining every unique source through the bounded active-owner limit.
+- **Identical source URLs at different DOM sizes could enqueue duplicate work:** resolved with page-lifetime canonical source ownership and duplicate-node suppression.
 
 ## Remaining limitations
 

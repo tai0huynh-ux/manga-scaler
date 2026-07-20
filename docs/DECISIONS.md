@@ -1,14 +1,22 @@
 # Engineering decisions
 
-## 2026-07-20 - Keep the source visible until a responsive slice group is complete
+## 2026-07-20 - Activate registered slice wrappers before enhanced results arrive
 
-Context: A stale or constrained DOM size could send an extreme manga page through full-image inference, producing a very narrow output at the backend height cap. Existing slicing also exposed temporary raw slices and replaced them one by one, increasing visible layout/paint churn while reading.
+Context: A stale or constrained DOM size could send an extreme manga page through full-image inference, producing a very narrow output at the backend height cap. Waiting for every backend segment result before replacing the main image made long pages appear stuck, while inserting each enhanced segment into the reader caused visible layout/paint churn.
 
-Decision: Inspect bounded PNG/JPEG/WebP/GIF headers after the existing browser read and promote oversized source bytes into slicing. Yield between crop/encode segments, then build every slice in one hidden, contained, percentage-positioned wrapper; render enhanced segments there and activate the wrapper only after all exact segment operations succeed.
+Decision: Inspect bounded PNG/JPEG/WebP/GIF headers after the existing browser read and promote oversized source bytes into slicing. Yield between crop/encode segments, build every slice in one hidden, contained, percentage-positioned wrapper, register all exact segment jobs, and activate the wrapper once registration succeeds. Enhanced results then replace their exact raw nodes progressively; any later segment failure still rolls back the whole group.
 
 Reason: Browser-owned bytes describe source geometry more reliably than stale HTML attributes, while a single final DOM swap preserves scroll continuity and avoids mixed temporary/enhanced strips.
 
-Consequence: The original image remains visible during processing, full renders keep responsive width and automatic height, segment failure rolls back without disturbing the reader, and real-browser geometry assertions use responsive percentages plus measured positions rather than fixed pixel style values.
+Consequence: The original image remains visible until the raw wrapper is ready and registered, full renders keep responsive width and automatic height, enhanced segment results no longer delay the main swap, segment failure rolls back without disturbing the reader, and real-browser geometry assertions use responsive percentages plus measured positions rather than fixed pixel style values.
+
+## 2026-07-20 - Drain one canonical-source snapshot after page load
+
+Context: A bounded lookahead that stopped after its first batch left later images in the same loaded page unprocessed, while identical URLs rendered at different sizes could create duplicate backend work.
+
+Decision: On `window.load`, snapshot all eligible `seen` images once, sort by viewport distance and page order, assign one page-lifetime owner per canonical source URL, and drain the snapshot with the configured active-owner limit. New images discovered after the snapshot remain on normal viewport/prefetch promotion.
+
+Consequence: Every loaded page gets one bounded, eventually draining ahead pass; duplicate source nodes are skipped even when their DOM render sizes differ, and settlement paths release capacity for the next unique snapshot entry.
 
 ## 2026-07-19 - Browser-owned bytes are authoritative request input
 

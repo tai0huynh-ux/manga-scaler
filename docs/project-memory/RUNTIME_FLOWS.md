@@ -20,9 +20,9 @@ DOM discovery
   -> fixed/cache
 ```
 
-Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. After initial DOM discovery, each page runs one ahead-processing pass limited by `aheadProcessingImageLimit` and selects the nearest eligible offscreen images. That pass never repeats for later mutations, intersections, scrolls, resizes, or settings refreshes. Any image not selected by the initial pass remains `seen` until it enters the normal prefetch margin; operation and completed-key guards suppress duplicate work.
+Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. After `window.load`, each page takes one snapshot of eligible `seen` images, sorts by viewport distance and page order, canonicalizes the source URL, and keeps only the nearest owner for each source. The snapshot queue drains through a bounded number of active ahead owners (`aheadProcessingImageLimit`); it does not stop after the first batch. The snapshot is never rebuilt for later mutations, intersections, scrolls, resizes, or settings refreshes. Images discovered after the snapshot remain `seen` until normal viewport/prefetch promotion; operation, source-owner, and completed-key guards suppress duplicate work.
 
-When disabled, discovery and load callbacks remain dormant. Re-enabling detaches and re-registers existing observers once, preserves completed-key suppression, and runs the initial ahead pass only when the page has not already consumed it. `IntersectionObserver` promotes later images; scroll/resize work only reprioritizes currently queued preprocessing waiters and never scans the full discovered-image registry.
+When disabled, discovery and load callbacks remain dormant and the pending snapshot queue is discarded. Re-enabling detaches and re-registers existing observers once, preserves completed/source-owner suppression, and runs the page-load snapshot only when the page has not already consumed it. `IntersectionObserver` promotes later images; scroll/resize work only reprioritizes currently queued preprocessing waiters and never scans the full discovered-image registry.
 
 ## Identity model
 
@@ -99,12 +99,12 @@ read parent bytes
   -> prepare wrapper transaction
   -> commit hidden wrapper while keeping parent visible
   -> register every segment job
+  -> activate wrapper and hide parent after registration succeeds
   -> remove parent registry job
-  -> render enhanced segments inside the hidden wrapper
-  -> activate wrapper and hide parent once every segment is ready
+  -> render enhanced segments inside the active wrapper progressively
 ```
 
-Failure before, during, or after commit rolls back owned DOM state and Blob URLs. Depending on the stage, the operation either enqueues the full image exactly once or records a terminal preprocessing error. One segment failure rolls back the entire committed group and cancels sibling jobs. The parent remains readable during processing, so partial segment completion never causes repeated page reflow or visible mixed-quality strips.
+Failure before, during, or after commit rolls back owned DOM state and Blob URLs. Depending on the stage, the operation either enqueues the full image exactly once or records a terminal preprocessing error. One segment failure rolls back the entire committed group and cancels sibling jobs. The original page remains visible until raw slices and every segment job are registered; the responsive wrapper then replaces it once, and enhanced segment results commit in place without repeated parent reflow.
 
 The wrapper owns responsive geometry: source tile coordinates are converted to percentages inside one aspect-ratio box, and CSS containment limits layout/paint invalidation. Raw segment nodes retain wrapper-owned percentages when their enhanced Blob replaces the temporary crop. Full images use the measured rendered rectangle rather than stale HTML width/height attributes and never lock both axes to fixed pixels.
 

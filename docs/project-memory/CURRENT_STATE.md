@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-20, Asia/Bangkok.
-- Current green feature checkpoint: source-verified slicing and atomic responsive image rendering, implemented and pushed in `249e9f55b7e9f334c243560fb9227195cd31708d`.
+- Current green feature checkpoint: page-load ahead draining, canonical duplicate suppression, and early responsive slice activation are verified locally and queued for repository auto-sync; the previous source-verified rendering checkpoint is `249e9f55b7e9f334c243560fb9227195cd31708d`.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -13,10 +13,10 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the source-verified slicing and atomic-render change set:
+Full `scripts/verify.ps1` result on the page-load ahead and early-slice-activation change set:
 
 - Backend: 59 tests passed, including O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
-- Extension: 204 tests passed, including decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, atomic slice activation, coalesced monitor persistence, bounded scroll work, one-shot lookahead, and geometry regressions.
+- Extension: 208 tests passed, including `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -27,7 +27,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 ## Implemented capabilities
 
 - Viewport-aware `<img>` discovery and preprocessing.
-- User-configurable one-shot ahead-of-viewport processing: each page performs one bounded nearest-image pass after initial discovery, then newly discovered or unprocessed images wait for normal viewport/prefetch promotion; duplicate suppression skips work already queued or completed.
+- User-configurable page-load ahead processing: after `window.load`, each page snapshots eligible images once, sorts by viewport distance/page order, keeps one owner per canonical source URL, and drains every unique source through the bounded active-owner limit; later dynamic images wait for normal viewport/prefetch promotion.
 - Disabled content scripts stay dormant. Enable notifications are idempotent, detach/re-observe existing images without duplicate load listeners, run the initial ahead pass only if it has not already run for that page, and continue skipping completed image keys.
 - `IntersectionObserver` owns viewport promotion. Scroll/resize refreshes only the bounded preprocessing waiters instead of traversing every discovered image and forcing layout reads.
 - Background settings are loaded once, updated through `storage.onChanged`, and protected against an older in-flight read overwriting a newer enable change. `IMAGE_SEEN` and `ENQUEUE_IMAGE` no longer read extension settings once per image.
@@ -39,7 +39,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - A source-header geometry check promotes constrained or stale-DOM PNG/JPEG/WebP/GIF images into slicing before a full-image request can collapse an extreme page to the backend output-height cap.
 - User-configurable two-dimensional slicing with exact source X/Y/width/height identity and positioned DOM tile reconstruction; the default `8192` width preserves normal vertical manga slicing.
 - Full-image Blob rendering uses the actual rendered rectangle, responsive width, automatic height, and preserved aspect ratio instead of stale HTML width/height attributes.
-- Slice crop/encode work yields between segments to keep browser input and scrolling responsive. Wrappers use percentage geometry and CSS containment; the original page stays visible while enhanced segments load in a hidden wrapper, then one atomic activation swaps the completed group into the reader. Any segment failure still rolls back the entire group.
+- Slice crop/encode work yields between segments to keep browser input and scrolling responsive. Wrappers use percentage geometry and CSS containment; the original page stays visible while raw slices and segment jobs register, then one activation swaps in the wrapper before enhanced results arrive. Exact raw nodes are replaced progressively, and any segment failure still rolls back the entire group.
 - Browser byte reads using cache, credentials, host permissions, and temporary Referer rules.
 - Background memory plus IndexedDB caching and deterministic cache variants.
 - Bounded retries, deferred work, cancellation, tab-generation cleanup, and statistics.
@@ -105,3 +105,8 @@ Live-reader checkpoint (2026-07-19): TruyenQQ Manga passed `22/22`, Manhwa `75/7
 2. Run longer reliability soak and production-quality benchmarks before release claims.
 
 Update this file whenever a completed change alters the verified baseline, capabilities, limitations, or next priorities.
+## Latest verified delta (2026-07-20)
+
+- Page-load ahead processing now waits for `window.load`, snapshots eligible images once, assigns one owner per canonical source URL, and drains every unique snapshot source through the configured active-owner limit. Later dynamic images use normal viewport/prefetch promotion; duplicate source nodes stay suppressed even when rendered dimensions differ.
+- Slice wrappers activate after raw slices and all segment jobs register successfully, before enhanced results arrive. Enhanced results replace exact raw nodes progressively; rollback remains group-atomic and releases the next ahead slot on success, failure, cancellation, fallback, slice completion, disable, and page hide.
+- Verification is green: focused and full gates now cover `59` backend tests and `208` extension tests, plus Ruff, JavaScript syntax, and `73%` backend coverage; Edge E2E has zero browser exceptions, `55/55` tall slices, two responsive wide tiles, and settled queue/Referer/worker/navigation/reload state.

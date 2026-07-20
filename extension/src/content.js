@@ -723,7 +723,12 @@ class ViewportImageProvider {
     this.aheadProcessingImageLimit = AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit;
     this.prefetchMarginPx = AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
     this.aheadProcessingKeys = new Map();
+    this.initialAheadQueue = [];
+    this.sourceOwners = new Map();
+    this.sourceOwnerKeysByImage = new WeakMap();
     this.aheadProcessingCompleted = false;
+    this.pageLoadHandled = false;
+    this.pageHidden = false;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
     this.imageSliceMaxWidth = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
@@ -742,7 +747,10 @@ class ViewportImageProvider {
       },
     );
     this.onScroll = this.throttle(() => this.refreshPriorities(), 250);
+    this.onWindowLoad = () => this.handlePageLoaded();
     this.onPageHide = () => {
+      this.pageHidden = true;
+      this.initialAheadQueue = [];
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
       this.aheadProcessingKeys.clear();
     };
@@ -780,17 +788,16 @@ class ViewportImageProvider {
     this.prefetchMarginPx = Number.isFinite(Number(stored.prefetchMarginPx))
       ? Number(stored.prefetchMarginPx)
       : AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
-    if (this.enabled) {
-      this.observeExistingImages();
-      this.runInitialAheadProcessing();
-    }
+    if (this.enabled && document.readyState !== "complete") this.observeExistingImages();
     this.mutationObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
     });
     window.addEventListener("scroll", this.onScroll, { passive: true });
     window.addEventListener("resize", this.onScroll, { passive: true });
+    window.addEventListener("load", this.onWindowLoad, { once: true });
     window.addEventListener("pagehide", this.onPageHide, { once: true });
+    if (document.readyState === "complete") this.handlePageLoaded();
   }
 
   setEnabled(enabled) {
@@ -798,9 +805,10 @@ class ViewportImageProvider {
     if (this.enabled === nextEnabled) return false;
     this.enabled = nextEnabled;
     if (nextEnabled) {
-      this.observeExistingImages();
-      this.runInitialAheadProcessing();
+      if (document.readyState === "complete") this.handlePageLoaded();
+      else this.observeExistingImages();
     } else {
+      this.initialAheadQueue = [];
       [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "disabled"));
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
       document.querySelectorAll("img[data-ai-manga-upscaler-observed]")
@@ -816,6 +824,9 @@ class ViewportImageProvider {
     trackedImages.clear();
     completedImageKeys.clear();
     this.aheadProcessingKeys.clear();
+    this.initialAheadQueue = [];
+    this.sourceOwners.clear();
+    this.sourceOwnerKeysByImage = new WeakMap();
     document.querySelectorAll("img").forEach((image) => this.schedule(image));
   }
 
@@ -1020,8 +1031,7 @@ class ViewportImageProvider {
     }
     const existingByKey = trackedImageKeys.get(baseKey);
     if (existingByKey?.image === image && options.aheadProcessing !== true) {
-      existingByKey.aheadProcessing = false;
-      this.aheadProcessingKeys.delete(baseKey);
+      this.releaseAheadProcessing(existingByKey);
     }
     if (existingByKey && existingByKey.image !== image && document.documentElement.contains(existingByKey.image)) {
       return;
@@ -1057,6 +1067,10 @@ class ViewportImageProvider {
       pageOrder,
       aheadProcessing: options.aheadProcessing === true,
     };
+    if (!this.claimSourceOwner(operationEntry)) {
+      trackedImageKeys.set(baseKey, operationEntry);
+      return;
+    }
     if (operationEntry.aheadProcessing) this.aheadProcessingKeys.set(baseKey, image);
     trackedImageKeys.set(baseKey, operationEntry);
     trackedImages.set(imageId, operationEntry);
@@ -1471,6 +1485,17 @@ class ViewportImageProvider {
       this.rollbackSliceGroup(group, "segment-registration-failed");
       return;
     }
+    if (group.transaction?.activate?.() === false) {
+      this.logSliceFailure("slice-activate-error", {
+        imageUrl: metadata.imageUrl,
+        operationId,
+        imageWidth: metadata.width,
+        imageHeight: metadata.height,
+        segmentCount: segments.length,
+      });
+      this.rollbackSliceGroup(group, "slice-activate-error");
+      return;
+    }
     chrome.runtime.sendMessage({ type: "REMOVE_IMAGE", imageId, operationId }).catch(() => {});
     emitTrace({
       event: "content.slicing.completed",
@@ -1507,6 +1532,7 @@ class ViewportImageProvider {
       trackedImageKeys.delete(entry.baseKey);
       removed = true;
     }
+    this.releaseAheadProcessing(entry);
     return removed;
   }
 
@@ -1603,6 +1629,8 @@ class ViewportImageProvider {
       baseKey,
       isSegment: false,
       pageOrder,
+      aheadProcessing: operation.aheadProcessing === true,
+      sourceKey: operation.sourceKey || this.processingKey(metadata.imageUrl),
     };
     trackedImageKeys.set(baseKey, fallbackEntry);
     trackedImages.set(imageId, fallbackEntry);
@@ -1731,8 +1759,7 @@ class ViewportImageProvider {
     if (waiter) this.cancelPreprocessingWaiter(waiter, reason);
     if (!this.isCurrentImageEntry(operation)) return true;
     operation.state = "seen";
-    operation.aheadProcessing = false;
-    if (operation.baseKey) this.aheadProcessingKeys.delete(operation.baseKey);
+    this.releaseAheadProcessing(operation);
     operation.preprocessingSignal = null;
     this.sendPreprocessingStatus(operation, "PREPROCESSING_DEFERRED", "seen", reason);
     return true;
@@ -2269,6 +2296,42 @@ class ViewportImageProvider {
     }
   }
 
+  claimSourceOwner(entry) {
+    const sourceKey = entry?.sourceKey || this.processingKey(entry?.metadata?.imageUrl || "");
+    if (!entry || !sourceKey) return true;
+    const owner = this.sourceOwners.get(sourceKey);
+    const ownerAttached = !owner?.image || !document.documentElement?.contains || document.documentElement.contains(owner.image);
+    if (!owner || owner.image === entry.image || !ownerAttached) {
+      const previousSourceKey = this.sourceOwnerKeysByImage.get(entry.image);
+      if (previousSourceKey && previousSourceKey !== sourceKey && this.sourceOwners.get(previousSourceKey)?.image === entry.image) {
+        this.sourceOwners.delete(previousSourceKey);
+      }
+      entry.sourceKey = sourceKey;
+      entry.duplicateSource = false;
+      delete entry.duplicateOwnerBaseKey;
+      this.sourceOwners.set(sourceKey, { image: entry.image, baseKey: entry.baseKey });
+      this.sourceOwnerKeysByImage.set(entry.image, sourceKey);
+      return true;
+    }
+    entry.sourceKey = sourceKey;
+    entry.duplicateSource = true;
+    entry.duplicateOwnerBaseKey = owner.baseKey;
+    entry.aheadProcessing = false;
+    entry.state = "duplicate";
+    return false;
+  }
+
+  releaseAheadProcessing(entry, { pump = true } = {}) {
+    if (!entry) return false;
+    const baseKey = entry.baseKey;
+    const ownedImage = baseKey ? this.aheadProcessingKeys.get(baseKey) : null;
+    const released = entry.aheadProcessing === true || ownedImage === entry.image;
+    entry.aheadProcessing = false;
+    if (baseKey && ownedImage === entry.image) this.aheadProcessingKeys.delete(baseKey);
+    if (released && pump) this.scheduleAheadProcessing();
+    return released;
+  }
+
   imageKey(metadata, image) {
     const normalizedUrl = this.processingKey(metadata.imageUrl);
     const rect = image.getBoundingClientRect();
@@ -2459,8 +2522,7 @@ class ViewportImageProvider {
       waiter.priorityTier = this.preprocessingPriorityTier(entry, distance);
       this.updateImagePriority(entry.image, entry.imageId);
       if (distance <= this.prefetchMarginPx && entry.aheadProcessing === true) {
-        entry.aheadProcessing = false;
-        if (entry.baseKey) this.aheadProcessingKeys.delete(entry.baseKey);
+        this.releaseAheadProcessing(entry);
       }
       if (entry.aheadProcessing !== true && distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx) {
         this.deferPreprocessingOperation(entry, "cancelled-outside-prefetch");
@@ -2470,44 +2532,59 @@ class ViewportImageProvider {
   }
 
   runInitialAheadProcessing() {
-    if (this.aheadProcessingCompleted) return false;
-    this.scheduleAheadProcessing();
+    return this.handlePageLoaded();
+  }
+
+  handlePageLoaded() {
+    if (this.pageLoadHandled || this.pageHidden || !this.enabled || !isActiveContentInstance()) return false;
+    this.observeExistingImages();
+    this.pageLoadHandled = true;
     this.aheadProcessingCompleted = true;
+    this.initialAheadQueue = [];
+    if (this.aheadProcessingEnabled && this.aheadProcessingImageLimit > 0) {
+      const candidates = [...trackedImageKeys.values()]
+        .filter((entry) => (
+          entry.state === "seen" &&
+          entry.image &&
+          this.canProcessCandidate(entry.image, { allowPrefetch: true })
+        ))
+        .map((entry) => ({
+          entry,
+          distance: this.viewportDistance(entry.image),
+          pageOrder: Number(entry.pageOrder || 0),
+        }))
+        .sort((left, right) => left.distance - right.distance || left.pageOrder - right.pageOrder);
+      for (const candidate of candidates) {
+        const entry = candidate.entry;
+        if (!this.claimSourceOwner(entry)) continue;
+        this.initialAheadQueue.push({
+          image: entry.image,
+          baseKey: entry.baseKey,
+          sourceKey: entry.sourceKey,
+        });
+      }
+    }
+    this.scheduleAheadProcessing();
     return true;
   }
 
   scheduleAheadProcessing() {
-    if (this.aheadProcessingCompleted) return;
-    for (const [baseKey, image] of this.aheadProcessingKeys.entries()) {
-      const isCurrent = image?.dataset?.aiEnhancerKey === baseKey;
-      const isAttached = !document.documentElement?.contains || document.documentElement.contains(image);
-      if (!isCurrent || !isAttached) {
-        this.aheadProcessingKeys.delete(baseKey);
+    if (this.pageHidden || !this.enabled || !this.aheadProcessingEnabled || this.aheadProcessingImageLimit <= 0) return;
+
+    while (this.aheadProcessingKeys.size < this.aheadProcessingImageLimit && this.initialAheadQueue.length) {
+      const queued = this.initialAheadQueue.shift();
+      const entry = trackedImageKeys.get(queued.baseKey);
+      const isAttached = !document.documentElement?.contains || document.documentElement.contains(queued.image);
+      if (
+        !entry ||
+        entry.image !== queued.image ||
+        entry.state !== "seen" ||
+        entry.sourceKey !== queued.sourceKey ||
+        !isAttached ||
+        !this.claimSourceOwner(entry)
+      ) {
         continue;
       }
-      if (this.isWithinPrefetch(image)) {
-        this.aheadProcessingKeys.delete(baseKey);
-        const entry = trackedImageKeys.get(baseKey);
-        if (entry) entry.aheadProcessing = false;
-      }
-    }
-    if (!this.enabled || !this.aheadProcessingEnabled || this.aheadProcessingImageLimit <= 0) return;
-
-    const candidates = [...trackedImageKeys.values()]
-      .filter((entry) => (
-        entry.state === "seen" &&
-        entry.image &&
-        !this.isWithinPrefetch(entry.image) &&
-        !this.aheadProcessingKeys.has(entry.baseKey) &&
-        this.canProcessCandidate(entry.image, { allowPrefetch: true })
-      ))
-      .sort((left, right) => (
-        this.viewportDistance(left.image) - this.viewportDistance(right.image) ||
-        Number(left.pageOrder || 0) - Number(right.pageOrder || 0)
-      ));
-
-    for (const entry of candidates) {
-      if (this.aheadProcessingKeys.size >= this.aheadProcessingImageLimit) break;
       this.schedule(entry.image, true, { allowPrefetch: true, aheadProcessing: true });
     }
   }
@@ -2588,20 +2665,7 @@ class ViewportImageProvider {
     if (entry.sliceGroup) {
       const group = entry.sliceGroup;
       group.completed.add(entry.segmentRecord);
-      if (group.completed.size === group.records.length && group.transaction?.activate?.() === false) {
-        this.rollbackSliceGroup(group, "slice-activate-error");
-        this.sendMonitorMessage({
-          type: "RENDER_FAILED",
-          imageId: entry.imageId,
-          operationId: entry.operationId,
-          sourceRevision: entry.sourceRevision,
-          sourceFingerprint: entry.sourceFingerprint || null,
-          traceId: entry.traceId || message.traceId,
-          imageUrl: entry.metadata?.imageUrl || message.imageUrl || "",
-          outcome: "load-error",
-        });
-        return "load-error";
-      }
+      if (group.completed.size === group.records.length) this.releaseAheadProcessing(group.parentEntry);
     }
     this.removeTrackedEntry(entry);
     if (entry.baseKey) {
@@ -2658,13 +2722,8 @@ class ViewportImageProvider {
       status: permanent ? "failed" : "retrying",
       metadata: { permanent },
     });
-    if (entry && !permanent) {
-      if (trackedImageKeys.get(entry.baseKey || this.processingKey(entry.metadata.imageUrl)) === entry) {
-        trackedImageKeys.delete(entry.baseKey || this.processingKey(entry.metadata.imageUrl));
-      }
-    }
     if (entry && permanent && entry.baseKey) completedImageKeys.add(entry.baseKey);
-    if (trackedImages.get(imageId) === entry) trackedImages.delete(imageId);
+    this.removeTrackedEntry(entry);
   }
 
   cancel(entry) {
@@ -2679,7 +2738,6 @@ class ViewportImageProvider {
       return;
     }
     if (entry.preprocessingWaiter) this.cancelPreprocessingWaiter(entry.preprocessingWaiter, "cancelled");
-    if (entry.baseKey) this.aheadProcessingKeys.delete(entry.baseKey);
     chrome.runtime.sendMessage({
       type: "CANCEL_IMAGE",
       imageId: entry.imageId,
@@ -2871,12 +2929,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       viewportProvider.aheadProcessingImageLimit = Math.max(1, Number(settings.aheadProcessingImageLimit) || AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit);
       viewportProvider.prefetchMarginPx = Math.max(0, Number(settings.prefetchMarginPx) || 0);
       if (!viewportProvider.aheadProcessingEnabled) {
+        viewportProvider.initialAheadQueue = [];
         [...trackedImages.values()]
           .filter((entry) => entry.aheadProcessing === true)
           .forEach((entry) => viewportProvider.cancel(entry));
         viewportProvider.aheadProcessingKeys.clear();
       }
       viewportProvider.refreshPriorities();
+      viewportProvider.scheduleAheadProcessing();
     });
   }
   if (areaName === "local" && (changes.imageSlicingEnabled || changes.imageSliceMaxWidth || changes.imageSliceMaxHeight)) {
