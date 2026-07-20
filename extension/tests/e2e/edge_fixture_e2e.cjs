@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { startReaderFixture } = require("../fixtures/reader/server.cjs");
 
-const BACKEND_URL = process.env.AI_MANGA_E2E_BACKEND || "http://127.0.0.1:8765";
+const BACKEND_URL = process.env.AI_MANGA_E2E_BACKEND || "http://127.0.0.1:8766";
 const WAIT_TIMEOUT_MS = Number(process.env.AI_MANGA_E2E_TIMEOUT_MS) || 180000;
 
 function browserCandidates() {
@@ -386,6 +386,9 @@ async function main() {
         return cancelBackendJob(jobId);
       };
       scheduler.active.set(cancelJob.queueKey, { ...cancelJob, abortController: new AbortController() });
+      // Keep the synthetic Dashboard cancellation row from blocking the real retry job.
+      globalThis.__dashboardOriginalConcurrency = scheduler.maxConcurrentRequests;
+      scheduler.maxConcurrentRequests = Math.max(2, scheduler.maxConcurrentRequests);
       pageImageRegistry.update(tabId, cancelJob.imageId, { operationId: cancelJob.operationId, status: 'waiting' });
       await persistProcessingMonitor();
       return processingMonitor.snapshot();
@@ -537,6 +540,7 @@ async function main() {
       const worker = await initialWorkerClient.evaluate("({ queue: scheduler.snapshot(), active: scheduler.active.size, pending: scheduler.pending.size })");
       return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 && worker.active === 1 && worker.pending === 0 ? true : null;
     }, 30000);
+    await initialWorkerClient.evaluate("scheduler.maxConcurrentRequests = globalThis.__dashboardOriginalConcurrency || 1");
     const retryDomState = await pageClient.evaluate(`(() => ({
       matches: document.querySelectorAll('#eligible-static').length,
       ready: document.querySelector('#eligible-static')?.classList.contains('ai-manga-upscaler-ready') || false,

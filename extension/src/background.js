@@ -48,7 +48,7 @@ const DEFAULT_STATE = Object.freeze({
   blacklistRules: [],
 });
 
-const STORAGE_SCHEMA_VERSION = 3;
+const STORAGE_SCHEMA_VERSION = 4;
 const STORAGE_BOOLEAN_KEYS = new Set([
   "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
   "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
@@ -78,15 +78,21 @@ const STORAGE_STRING_LIMITS = {
 
 function migratePersistedSettings(rawState = {}) {
   const source = rawState && typeof rawState === "object" && !Array.isArray(rawState) ? rawState : {};
+  const sourceSchemaVersion = Number(source.storageSchemaVersion) || 0;
   const migrated = { ...DEFAULT_STATE, storageSchemaVersion: STORAGE_SCHEMA_VERSION };
   for (const key of Object.keys(DEFAULT_STATE)) {
     if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
     const value = source[key];
     if (STORAGE_BOOLEAN_KEYS.has(key)) {
+      if (key === "aheadProcessingEnabled" && sourceSchemaVersion < STORAGE_SCHEMA_VERSION) continue;
       if (typeof value === "boolean") migrated[key] = value;
       continue;
     }
     if (Object.prototype.hasOwnProperty.call(STORAGE_NUMERIC_BOUNDS, key)) {
+      if (
+        sourceSchemaVersion < STORAGE_SCHEMA_VERSION &&
+        key === "aheadProcessingImageLimit"
+      ) continue;
       const [minimum, maximum] = STORAGE_NUMERIC_BOUNDS[key];
       const number = Number(value);
       if (Number.isFinite(number)) migrated[key] = Math.min(Math.max(number, minimum), maximum);
@@ -124,6 +130,14 @@ async function loadMigratedSettings(storage = chrome.storage.local) {
     || JSON.stringify(Object.fromEntries(Object.keys(comparable).map((key) => [key, current[key]]))) !== JSON.stringify(comparable);
   if (changed) await storage.set(migrated);
   return migrated;
+}
+
+function isCompatibleBackendHealth(payload) {
+  return Boolean(
+    payload &&
+    payload.status === "ok" &&
+    String(payload.pipelineVersion || "") === AI_MANGA_UPSCALER_CONFIG.backend.requiredPipelineVersion
+  );
 }
 
 let runtimeSettingsCache = null;
@@ -1556,7 +1570,7 @@ class QueueScheduler {
       const textVariant = job.textProcessing?.enabled
         ? `text:${job.textProcessing.cleanup ? "c1" : "c0"}:${job.textProcessing.translate ? "tr1" : "tr0"}:${job.textProcessing.sourceLanguage || "auto"}>${job.textProcessing.targetLanguage || "vi"}`
         : "text:off";
-      const cacheIdentity = `pipeline:v2-resize-safe|${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
+      const cacheIdentity = `pipeline:v3-strength-blend|${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (!this.isCurrentJob(job)) {
         return;
@@ -2009,7 +2023,8 @@ async function backendHealthy() {
   const timeout = setTimeout(() => controller.abort(), 1500);
   try {
     const response = await fetch(`${AI_MANGA_UPSCALER_CONFIG.backend.baseUrl}/health`, { signal: controller.signal });
-    return response.ok;
+    if (!response.ok) return false;
+    return isCompatibleBackendHealth(await response.json());
   } catch {
     return false;
   } finally {
@@ -2030,8 +2045,12 @@ async function startBackendIfNeeded() {
       { command: "start" },
       async (response) => {
         const runtimeError = chrome.runtime.lastError?.message;
-        const error = runtimeError || response?.error || null;
-        const ok = Boolean(response?.ok) && !error;
+        let error = runtimeError || response?.error || null;
+        let ok = Boolean(response?.ok) && !error;
+        if (ok && !(await backendHealthy())) {
+          ok = false;
+          error = `Backend pipeline ${AI_MANGA_UPSCALER_CONFIG.backend.requiredPipelineVersion} did not become available.`;
+        }
         await chrome.storage.local.set({
           backendLaunchStatus: ok ? response.status || "started" : "error",
           backendLaunchError: error,

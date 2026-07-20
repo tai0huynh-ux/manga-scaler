@@ -30,7 +30,7 @@
       </section>
       <section class="settings card">
         <label>Mode<select id="mode"><option value="auto">Auto</option><option value="manga">Manga</option><option value="artwork">Anime / Artwork</option><option value="photo">Photo</option></select></label>
-        <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"></label>
+        <label>Strength <output id="levelValue">35%</output><input id="level" type="range" min="0" max="100" step="5"><small>0% preserves resize geometry; higher values blend in more AI reconstruction.</small></label>
         <label>Maximum seconds per image<input id="timeout" type="number" min="5" max="300" step="5" value="60"></label>
         <label>Size mode<select id="sizingMode"><option value="auto">Auto</option><option value="pixel">Manual pixels</option><option value="screen">Screen preset</option></select></label>
         <div id="autoSizePanel" class="setting-mode-panel"><strong>Automatic sizing</strong><small>Uses image position, margins, viewport, screen size and DPR.</small></div>

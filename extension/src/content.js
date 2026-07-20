@@ -774,6 +774,7 @@ class ViewportImageProvider {
       aheadProcessingEnabled: AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingEnabled,
       aheadProcessingImageLimit: AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit,
       prefetchMarginPx: AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx,
+      storageSchemaVersion: 0,
     });
     if (!isActiveContentInstance()) return;
     this.enabled = stored.enabled;
@@ -783,7 +784,9 @@ class ViewportImageProvider {
     this.imageSliceMaxWidth = Number(stored.imageSliceMaxWidth) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = Number(stored.imageSliceMaxHeight) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
     this.preprocessingConcurrency = Number(stored.preprocessingConcurrency) || AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
-    this.aheadProcessingEnabled = stored.aheadProcessingEnabled !== false;
+    this.aheadProcessingEnabled = Number(stored.storageSchemaVersion) < 4
+      ? true
+      : stored.aheadProcessingEnabled !== false;
     this.aheadProcessingImageLimit = Number(stored.aheadProcessingImageLimit) || AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit;
     this.prefetchMarginPx = Number.isFinite(Number(stored.prefetchMarginPx))
       ? Number(stored.prefetchMarginPx)

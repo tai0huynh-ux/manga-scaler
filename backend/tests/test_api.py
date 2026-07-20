@@ -22,6 +22,7 @@ def test_health_is_available_without_model_artifacts() -> None:
     assert payload["status"] == "ok"
     assert payload["provider"] in payload["gpu"]["availableProviders"]
     assert payload["model"] == "anime_x4"
+    assert payload["pipelineVersion"] == "3"
     assert {"queue", "cache", "uptime"} <= payload.keys()
 
 

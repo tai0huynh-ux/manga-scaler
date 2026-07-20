@@ -73,7 +73,7 @@ The extension runtime and `shared/config/defaults.json` use a 300 px minimum for
 
 Persisted settings schema version 2 adds bounded `imageSliceMaxWidth` ownership. The internal default is `8192`, accepted values are `512` through `8192`, and migration must remain idempotent before the width setting is exposed through slicing behavior or UI.
 
-Persisted settings schema version 3 adds `aheadProcessingEnabled`, `aheadProcessingImageLimit` (1 through 50, default 8), and `prefetchMarginPx` (0 through 12000, default 1800). Migration is bounded and idempotent. After `window.load`, ahead processing snapshots every eligible current-page `seen` image, keeps the nearest owner for each canonical source URL, and drains the snapshot through at most `aheadProcessingImageLimit` active owners. It does not rebuild the snapshot or enqueue duplicate sources; images discovered later use normal viewport/prefetch promotion.
+Persisted settings schema version 4 preserves `aheadProcessingEnabled`, `aheadProcessingImageLimit` (1 through 50, default 3), and `prefetchMarginPx` (0 through 12000, default 1800). Migration is bounded and idempotent; pre-v4 data restores the one-shot ahead default instead of retaining a stale disabled value. After `window.load`, ahead processing snapshots every eligible current-page `seen` image, keeps the nearest owner for each canonical source URL, and drains the snapshot through at most `aheadProcessingImageLimit` active owners. It does not rebuild the snapshot or enqueue duplicate sources; images discovered later use normal viewport/prefetch promotion.
 
 Preprocessing priority is strict: visible work outranks normal prefetch, which outranks ahead work. A queued ahead waiter may be promoted when it enters the prefetch margin; distant normal-prefetch waiters may be deferred, but ahead waiters are not cancelled solely for being beyond `cancelDistancePx`. Navigation, pagehide, disable, source replacement, duplicate suppression, completion, fallback, rollback, and cancellation clear or release owned ahead keys through the existing guarded settlement paths.
 
@@ -86,7 +86,7 @@ Browser-owned encoded dimensions are authoritative when DOM geometry is absent, 
 - `screenOrientation=auto` follows source image geometry, not the physical monitor orientation.
 - Automatic output sizing caps the effective device-pixel ratio at `1.5` and uses a bounded `1.15` detail multiplier.
 - A requested target scale at or below `1.5x` must not downsample the source and then feed it to an `x4` neural model. It uses aspect-safe Lanczos resize and reports `lanczos`/`Pillow`/zero GPU time instead.
-- Neural and resize-only results use distinct backend keys and the extension `pipeline:v2-resize-safe` cache namespace. A stale pre-fix cache entry must never replace a current resize-safe result.
+- Neural and resize-only results use distinct backend keys and the extension `pipeline:v3-strength-blend` cache namespace. A stale pre-fix cache entry must never replace a current result. Neural output is blended with a same-size Lanczos baseline using `enhanceLevel`; resize-only output never resolves an ONNX model.
 
 ## Discovery support boundary
 

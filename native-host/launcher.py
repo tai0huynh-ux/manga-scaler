@@ -10,7 +10,9 @@ from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BACKEND_URL = "http://127.0.0.1:8765/health"
+BACKEND_PORT = 8766
+BACKEND_URL = f"http://127.0.0.1:{BACKEND_PORT}/health"
+REQUIRED_PIPELINE_VERSION = "3"
 
 
 def read_message() -> dict:
@@ -31,7 +33,10 @@ def send_message(payload: dict) -> None:
 def healthy() -> bool:
     try:
         with urlopen(BACKEND_URL, timeout=1) as response:
-            return response.status == 200
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read().decode("utf-8"))
+            return payload.get("status") == "ok" and str(payload.get("pipelineVersion")) == REQUIRED_PIPELINE_VERSION
     except Exception:
         return False
 
@@ -47,7 +52,7 @@ def start_backend() -> dict:
         return {"ok": False, "error": f"Virtual environment not found: {executable}"}
     flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
     subprocess.Popen(
-        [str(executable), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8765"],
+        [str(executable), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(BACKEND_PORT)],
         cwd=ROOT / "backend",
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -62,7 +67,12 @@ def start_backend() -> dict:
     return {"ok": False, "error": "Backend did not become healthy within 7.5 seconds."}
 
 
-if read_message().get("command") == "start":
-    send_message(start_backend())
-else:
-    send_message({"ok": False, "error": "Unsupported native command."})
+def main() -> None:
+    if read_message().get("command") == "start":
+        send_message(start_backend())
+    else:
+        send_message({"ok": False, "error": "Unsupported native command."})
+
+
+if __name__ == "__main__":
+    main()

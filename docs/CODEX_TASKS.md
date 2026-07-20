@@ -20,6 +20,7 @@
 - [x] Prove exact Referer rule ownership, startup barrier settlement, active-ID collision avoidance, URL normalization, redirect handling, cancellation, and timeout cleanup.
 - [x] Stop and reactivate the actual Edge MV3 worker during a stalled protected read while preserving unrelated rules.
 - [x] Prove full same-tab navigation cleanup and automatic unpacked-extension reload recovery without duplicate replacements.
+- [x] Fix whole-page ahead migration, strength-controlled neural blending, stale backend selection, byte-preserving PNG caching, and resize-safe HD/FHD/2K routing; verify with full gates and Edge fixture E2E.
 
 ## Manual follow-up
 

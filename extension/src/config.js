@@ -1,6 +1,7 @@
 var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
   backend: {
-    baseUrl: "http://127.0.0.1:8765",
+    baseUrl: "http://127.0.0.1:8766",
+    requiredPipelineVersion: "3",
     requestTimeoutMs: 20000,
     defaultProcessingTimeoutSeconds: 60,
   },
@@ -25,7 +26,7 @@ var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
     prefetchMarginPx: 1800,
     cancelDistancePx: 3600,
     aheadProcessingEnabled: true,
-    aheadProcessingImageLimit: 8,
+    aheadProcessingImageLimit: 3,
     preprocessingQueueTimeoutMs: 30000,
     sliceDecodeTimeoutMs: 10000,
     sliceCropTimeoutMs: 15000,

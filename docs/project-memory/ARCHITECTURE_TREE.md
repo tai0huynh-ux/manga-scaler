@@ -14,14 +14,14 @@ MV3 background service worker
 ├─ reads protected image bytes with browser credentials/cache
 ├─ starts the local backend through Native Messaging
 └─ maintains page registry and extension statistics
-      ↓ HTTP on 127.0.0.1:8765
+      ↓ HTTP on 127.0.0.1:8766
 FastAPI backend
 ├─ validates browser-compatible request aliases
 ├─ queues inference work and propagates trace identity
 ├─ decodes, classifies, optionally cleans/translates text
 ├─ loads ONNX models and selects DirectML/CUDA/CPU
 ├─ runs tiled inference, enhancement, quality analysis, and WebP encoding
-└─ publishes deterministic cache artifacts
+└─ publishes deterministic cache artifacts with pipeline-versioned identities
 ```
 
 ## Repository ownership tree

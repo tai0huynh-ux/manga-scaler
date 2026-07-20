@@ -19,6 +19,7 @@ def test_project_config_is_valid() -> None:
     assert settings.inference.default_model in settings.inference.models
     assert settings.inference.max_concurrent_inferences == 1
     assert settings.inference.worker_count == 1
+    assert settings.app.port == 8766
 
 
 def test_default_model_must_be_configured() -> None:

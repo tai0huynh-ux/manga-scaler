@@ -126,14 +126,15 @@ Removing only the hidden parent DOM node must preserve an already committed slic
   -> neural source fit to output bounds
   -> deterministic output cache key
   -> cache hit OR tiled inference
-  -> enhancement and grayscale policy
+  -> resize-only post-processing OR baseline/neural blend by enhanceLevel
+  -> grayscale policy
   -> WebP encode and atomic save
   -> quality metrics and response
 ```
 
 DirectML device-loss signatures may trigger one model reload on the next provider. Other inference errors propagate unchanged.
 
-Resize-only jobs preserve the source aspect ratio and remain distinct in backend and extension cache identities. They still run configured post-processing, grayscale policy, WebP encoding, quality analysis, cancellation checks, and renderer commit. Screen-preset `auto` orientation follows source geometry; automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier to bound high-DPI work.
+Resize-only jobs preserve the source aspect ratio and remain distinct in backend and extension cache identities. They still run configured post-processing, grayscale policy, WebP encoding, quality analysis, cancellation checks, and renderer commit. Screen-preset `auto` orientation follows source geometry; automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier to bound high-DPI work. Neural jobs create a same-size Lanczos baseline and blend the model result by `enhanceLevel`; `0` is baseline, low values are low AI contribution, and `1` is full neural output. Browser-owned PNG originals reuse submitted bytes without a second encode.
 
 ## Trace flow
 

@@ -61,6 +61,24 @@ class ImagePipeline:
         """Apply configurable, bounded post-processing at the requested strength."""
         return await asyncio.to_thread(self._enhance_sync, image, level)
 
+    async def blend_neural_result(
+        self, baseline: Image.Image, neural: Image.Image, strength: float
+    ) -> Image.Image:
+        """Blend geometry-preserving resize output with neural reconstruction."""
+        return await asyncio.to_thread(self._blend_neural_result_sync, baseline, neural, strength)
+
+    def _blend_neural_result_sync(
+        self, baseline: Image.Image, neural: Image.Image, strength: float
+    ) -> Image.Image:
+        level = min(max(float(strength), 0.0), 1.0)
+        if baseline.size != neural.size:
+            baseline = baseline.resize(neural.size, Image.Resampling.LANCZOS)
+        if level <= 0:
+            return baseline
+        if level >= 1:
+            return neural
+        return Image.blend(baseline, neural, level)
+
     async def fit_for_model_scale(
         self, image: Image.Image, scale: int, max_output_width: int | None = None, max_output_height: int | None = None
     ) -> Image.Image:

@@ -1,8 +1,8 @@
 {
   "backend": {
     "host": "127.0.0.1",
-    "port": 8765,
-    "baseUrl": "http://127.0.0.1:8765",
+    "port": 8766,
+    "baseUrl": "http://127.0.0.1:8766",
     "requestTimeoutMs": 20000
   },
   "cache": {
@@ -16,7 +16,7 @@
     "prefetchMarginPx": 1800,
     "cancelDistancePx": 3600,
     "aheadProcessingEnabled": true,
-    "aheadProcessingImageLimit": 8,
+    "aheadProcessingImageLimit": 3,
     "maxConcurrentRequests": 2,
     "retryMaxAttempts": 3,
     "retryBaseDelayMs": 750,

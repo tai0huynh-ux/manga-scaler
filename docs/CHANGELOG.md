@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Added an accessible `Hide details` / `Show details` control to Processing Monitor; collapsing the detail pane expands the jobs table while preserving the selected job and timeline for immediate restoration.
+- Added backend pipeline compatibility `3` and moved the active local service to `127.0.0.1:8766`; stale HTTP-healthy processes on the old port are no longer accepted by the extension or Native Messaging launcher.
+- Changed enhancement strength to control neural contribution: `0%` is geometry-preserving Lanczos, low values blend only a small AI contribution, and `100%` uses the full neural result. Browser-owned PNG originals are cached byte-for-byte, and the output cache namespace is `pipeline:v3-strength-blend`.
+- Restored one whole-page `window.load` ahead snapshot for migrated settings, with safe defaults of three ahead owners and canonical duplicate suppression; later dynamic images still promote only through viewport/prefetch observers.
 - Fixed screen/automatic sizing corrupting manga text by avoiding neural inference when the requested target is at or below `1.5x` the source; these jobs now use a truthful Lanczos/Pillow resize path, keep aspect ratio, and report zero GPU time.
 - Changed screen-preset automatic orientation to follow source-image geometry instead of the desktop monitor, bounded automatic DPR at `1.5`, reduced the detail multiplier to `1.15`, and versioned the extension cache identity so malformed legacy results are not reused.
 - Fixed extreme manga pages becoming narrow or malformed by promoting source-verified tall/wide images into slicing and preserving responsive aspect ratio during Blob rendering.

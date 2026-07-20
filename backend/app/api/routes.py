@@ -7,6 +7,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.tracing import duration_ms, emit_trace_event, new_trace_id, trace_include_stack
+from app.core.version import PIPELINE_VERSION
 from app.models.schemas import (
     HealthResponse,
     ModelStatusResponse,
@@ -69,6 +70,7 @@ async def health(request: Request) -> HealthResponse:
 
     return HealthResponse(
         status="ok",
+        pipelineVersion=PIPELINE_VERSION,
         provider=provider_selection.provider,
         model=str(model_status["activeModel"]),
         gpu={**provider_selection.gpu, "loadedProviders": model_status.get("loadedProviders", {})},

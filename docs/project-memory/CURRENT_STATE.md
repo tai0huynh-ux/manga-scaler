@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-21, Asia/Bangkok.
-- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation; the Dashboard implementation, tests, E2E contract, product docs, and project memory were committed and pushed as `63fe9449b884e7aad71f9c85706530db51dec749`.
+- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, strength-controlled neural blending, stale-backend rejection, byte-preserving PNG caching, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation. The prior Dashboard checkpoint was committed and pushed as `63fe9449b884e7aad71f9c85706530db51dec749`; this change set is verified locally and awaits the mandatory repository auto-sync.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -46,7 +46,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - FastAPI health, upscale, cancel, model status/switch/reload, comparison, and text endpoints.
 - Auto manga/artwork/photo classification.
 - Resize-only Lanczos/Pillow output for targets at or below `1.5x`, avoiding destructive neural undersampling while preserving post-processing, cache, quality, cancellation, and renderer contracts.
-- Source-oriented screen presets plus bounded automatic DPR/detail sizing; extension cache namespace `pipeline:v2-resize-safe` excludes malformed pre-fix results.
+- Source-oriented screen presets plus bounded automatic DPR/detail sizing; extension cache namespace `pipeline:v3-strength-blend` excludes malformed pre-fix results.
 - ONNX model download/checksum/load/warmup/hot reload and provider fallback.
 - Tiled inference, post-enhancement, WebP output, original cache, and quality metrics.
 - Conservative text cleanup, optional Tesseract OCR, online translation, rendering, and local translation memory.
@@ -73,7 +73,7 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - FastAPI validation failures preserve sanitized field/type/message and trace ID; the extension carries them to Dashboard and does not retry HTTP 422.
 - Clean Edge live acceptance passed TruyenQQ Manga, Manhwa, Manhua, and hentaivnx with 100% eligible-image replacement and zero duplicate/stale work, false positives, failures, residual Referer rules, or unsettled queues.
 - The deterministic geometry matrix covers eight minimum/boundary inputs, row-complete vertical slicing for `512x16384` and `768x32768`, and safe non-slicing rejection for `16384x512` and `32768x768`; fixture PNG dimensions are verified without tracked binary assets.
-- Settings schema version 3 persists `aheadProcessingEnabled`, `aheadProcessingImageLimit`, and `prefetchMarginPx` with bounded migration and Popup/Dashboard controls.
+- Settings schema version 4 persists `aheadProcessingEnabled`, `aheadProcessingImageLimit` (default 3), and `prefetchMarginPx` with bounded migration and Popup/Dashboard controls; pre-v4 false values restore the one-shot page-load default once.
 - Real Edge one-shot lookahead acceptance committed an offscreen image at `rectTop=3200` and `viewportDistance=2715` with `scrollY=0`; queue/rules settled and browser exceptions remained zero.
 - Upscale requests are normalized once before dispatch. The reproduced `maxOutputWidth=128` drift clamps to the backend minimum `256`, while non-finite/unsafe fields fail locally without retry.
 - Persisted processing settings use an idempotent schema-version-1 migration with bounded known fields and no unknown-key carryover.
@@ -125,3 +125,10 @@ Update this file whenever a completed change alters the verified baseline, capab
 - The Processing Monitor header now exposes a semantic `Hide details` / `Show details` control with `aria-controls` and synchronized `aria-expanded` state.
 - Collapsing hides only the detail aside, expands the jobs table to the full monitor width, and preserves the selected job, timeline, and sanitized diagnostics for immediate restoration.
 - Focused Dashboard regression passed `5/5`; fast verification passed `60` backend and `211` extension tests. A clean Edge E2E rerun clicked both states, preserved detail content, reported zero browser exceptions, rendered `55/55` tall slices and two responsive wide tiles, and settled queue, Referer, worker, navigation, and reload state.
+
+## Latest strength and stale-runtime delta (2026-07-21)
+
+- `/health` now exposes `pipelineVersion=3`; the extension and Native Messaging launcher require it and use the dedicated `127.0.0.1:8766` endpoint, so the pre-fix `8765` process is not accepted.
+- Neural requests build a same-size Lanczos baseline and blend by `enhanceLevel`; `0%`, `5%`, and `100%` behavior is covered by unit tests. Browser-owned PNG originals reuse submitted bytes and output cache identities use `pipeline:v3-strength-blend`.
+- Schema-4 settings migration restores whole-page ahead processing for old persisted settings, defaults to three active ahead owners, preserves later explicit disables, and keeps the existing one-shot snapshot/canonical duplicate contract.
+- Fast verification passed `64` backend tests, `214` extension tests, JavaScript checks, Ruff, and coverage gates. The reproduced `800x1741 -> 884x1920` API benchmark returned `lanczos`/`Pillow`, zero GPU time, `882x1920`, `3.28 ms` input-cache work, and `354.21 ms` total latency. Edge fixture E2E passed with `55/55` tall slices, two wide tiles, zero browser exceptions, and settled queues; one earlier run hit the fixture's known worker-stop timing race.

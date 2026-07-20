@@ -7,6 +7,7 @@ import threading
 import numpy as np
 from app.core.config import EncodingConfig, EnhancementConfig, TraceConfig
 from app.core.tracing import configure_tracing
+from app.services import upscaler as upscaler_module
 from app.services.image_pipeline import ImagePipeline
 from app.services.model_manager import LoadedModel
 from PIL import Image
@@ -57,6 +58,34 @@ def test_enhancement_level_zero_is_identity() -> None:
         EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
     )
     assert pipeline._enhance_sync(source, 0) is source
+
+
+def test_enhancement_strength_controls_neural_contribution() -> None:
+    pipeline = ImagePipeline(
+        EncodingConfig(format="WEBP", quality=95, lossless=False, method=6),
+        EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
+    )
+    baseline = Image.new("RGB", (4, 4), color=(0, 0, 0))
+    neural = Image.new("RGB", (4, 4), color=(200, 100, 50))
+
+    zero = pipeline._blend_neural_result_sync(baseline, neural, 0.0)
+    low = pipeline._blend_neural_result_sync(baseline, neural, 0.05)
+    full = pipeline._blend_neural_result_sync(baseline, neural, 1.0)
+
+    assert np.array_equal(np.asarray(zero), np.asarray(baseline))
+    assert tuple(np.asarray(low)[0, 0]) == (10, 5, 2)
+    assert np.array_equal(np.asarray(full), np.asarray(neural))
+
+
+def test_reported_portrait_target_uses_resize_only_without_model_resolution() -> None:
+    source = Image.new("RGB", (800, 1741))
+    pipeline = ImagePipeline(
+        EncodingConfig(format="WEBP", quality=90, lossless=False, method=4),
+        EnhancementConfig(defaultLevel=0.35, sharpness=1.35, contrast=1.08, color=1.0, denoise=0.12),
+    )
+
+    assert upscaler_module.is_resize_only_output(pipeline, source, 884, 1920) is True
+    assert upscaler_module.is_resize_only_output(pipeline, source, 2160, 3840) is False
 
 
 def test_fit_for_model_scale_respects_independent_output_bounds() -> None:

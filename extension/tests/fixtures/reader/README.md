@@ -10,7 +10,7 @@ npm.cmd run fixture:reader
 
 The command prints the random loopback URL. The automated HTTP contract is covered by `extension/tests/reader_fixture.test.cjs`.
 
-With the backend running on `127.0.0.1:8765` and a compatible model installed, run the real Edge/Chrome unpacked-extension gate:
+With the backend running on `127.0.0.1:8766` and pipeline version `3` available, run the real Edge/Chrome unpacked-extension gate:
 
 ```powershell
 npm.cmd run test:e2e:edge-fixture

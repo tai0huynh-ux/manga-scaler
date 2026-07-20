@@ -10,6 +10,7 @@ class HealthResponse(BaseModel):
     """Response returned by the health endpoint."""
 
     status: str = Field(description="Current backend health state.")
+    pipeline_version: str = Field(alias="pipelineVersion", description="Image pipeline compatibility version.")
     provider: str | None = Field(default=None, description="Selected ONNX Runtime provider.")
     model: str | None = Field(default=None, description="Active model name.")
     gpu: dict[str, Any] = Field(default_factory=dict, description="GPU/provider diagnostics.")
@@ -46,7 +47,7 @@ class UpscaleRequest(BaseModel):
         alias="enhanceLevel",
         ge=0.0,
         le=1.0,
-        description="Post-processing strength from 0 (off) to 1 (configured maximum).",
+        description="Overall strength: neural contribution for AI output, or bounded post-processing for resize-only output.",
     )
     max_output_width: int | None = Field(default=None, alias="maxOutputWidth", ge=256, le=16383)
     max_output_height: int | None = Field(default=None, alias="maxOutputHeight", ge=256, le=16383)

@@ -89,3 +89,23 @@ Decision: When the requested target scale is at or below `1.5x` the decoded sour
 Reason: Small upscales and downscales do not need neural super-resolution. Avoiding destructive pre-model reduction preserves text and line geometry while removing GPU inference cost.
 
 Consequence: Resize-only responses truthfully report `model=lanczos`, `provider=Pillow`, `scale=1`, and no tile size. Screen auto-orientation follows source geometry, automatic DPR is capped at `1.5`, and the extension cache namespace is versioned to prevent old malformed AI outputs from surviving the fix.
+
+## 2026-07-21 - Blend neural reconstruction by the user strength control
+
+Context: A 5% setting previously changed only post-processing after the full neural model had already reconstructed the page, so HD/FHD/2K text could still merge or become malformed.
+
+Decision: Build a same-size Lanczos baseline for neural jobs and blend the model result into it using `enhanceLevel`; resize-only jobs never load a neural model and keep only bounded post-processing. Version the backend and extension cache identities together.
+
+Reason: The slider now controls the expensive and visually destructive operation the user expects. A low setting stays close to source geometry, while 100% remains an explicit full-neural choice.
+
+Consequence: `0%` is baseline, `5%` is a measured low neural contribution, and `100%` is the full model result. Browser-owned PNG bytes are written directly to the original cache, avoiding an extra decode/encode cycle.
+
+## 2026-07-21 - Reject stale local backends by pipeline identity
+
+Context: A disconnected process on the former `8765` port returned HTTP 200 and made the extension appear healthy while still running the pre-resize code.
+
+Decision: Run the active backend on `127.0.0.1:8766`, expose `pipelineVersion=3` through `/health`, and require that identity in both the MV3 worker and Native Messaging launcher.
+
+Reason: HTTP reachability alone cannot prove that the process implements the current image and cache contracts.
+
+Consequence: Old processes are ignored, new cache artifacts cannot collide with pre-fix results, and startup failures become explicit instead of silently routing work to stale code.

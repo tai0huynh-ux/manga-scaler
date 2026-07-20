@@ -2,8 +2,8 @@
   "app": {
     "name": "AI Manga Upscaler",
     "host": "127.0.0.1",
-    "port": 8765,
-    "publicBaseUrl": "http://127.0.0.1:8765"
+    "port": 8766,
+    "publicBaseUrl": "http://127.0.0.1:8766"
   },
   "paths": {
     "cacheDir": "./cache/images",

@@ -18,7 +18,7 @@ const {
 
 const LIVE_URL = process.env.AI_MANGA_LIVE_URL;
 const READER_KIND = process.env.AI_MANGA_LIVE_KIND || "unknown";
-const BACKEND_URL = process.env.AI_MANGA_E2E_BACKEND || "http://127.0.0.1:8765";
+const BACKEND_URL = process.env.AI_MANGA_E2E_BACKEND || "http://127.0.0.1:8766";
 const WAIT_TIMEOUT_MS = Number(process.env.AI_MANGA_LIVE_TIMEOUT_MS) || 300000;
 const READER_SELECTOR = process.env.AI_MANGA_LIVE_SELECTOR || ".page-chapter img";
 

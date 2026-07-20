@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.core.config import Settings
 from app.core.tracing import duration_ms, emit_trace_event, safe_prefix
+from app.core.version import PIPELINE_VERSION
 from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
@@ -21,6 +22,16 @@ from app.utils.hashing import sha256_bytes
 
 LOGGER = logging.getLogger(__name__)
 RESIZE_ONLY_MAX_SCALE = 1.5
+
+
+def is_resize_only_output(
+    pipeline: ImagePipeline,
+    image,
+    max_output_width: int | None,
+    max_output_height: int | None,
+) -> bool:
+    """Return whether output bounds are safer and faster with direct Lanczos resizing."""
+    return pipeline.output_scale_for_bounds(image, max_output_width, max_output_height) <= RESIZE_ONLY_MAX_SCALE
 
 
 class UpscalerService:
@@ -150,8 +161,10 @@ class UpscalerService:
             )
             original_path = self.settings.cache_dir / f"{source_key}-original.png"
             if not original_path.exists():
-                original_png = await self.pipeline.encode_png(image)
+                input_cache_started = time.perf_counter()
+                original_png = await self._original_cache_bytes(image_content, image)
                 original_path, _ = await self.cache.save_named(f"{source_key}-original", original_png, ".png")
+                timings.set("input_cache", input_cache_started)
                 emit_trace_event(
                     event="backend.upscale.input.saved",
                     trace_id=job.trace_id,
@@ -164,6 +177,7 @@ class UpscalerService:
                     backend_job_id=job.client_job_id,
                     source_fingerprint=job.source_fingerprint,
                     cache_key=f"{source_key}-original",
+                    duration_ms=timings.values.get("input_cache"),
                 )
 
             text_options = TextProcessingOptions.from_payload(getattr(job, "text_processing", None))
@@ -181,7 +195,9 @@ class UpscalerService:
             output_scale = self.pipeline.output_scale_for_bounds(
                 image, job.max_output_width, job.max_output_height
             )
-            resize_only = output_scale <= RESIZE_ONLY_MAX_SCALE
+            resize_only = is_resize_only_output(
+                self.pipeline, image, job.max_output_width, job.max_output_height
+            )
             model_started = time.perf_counter()
             model = (
                 SimpleNamespace(name="lanczos", provider="Pillow", scale=1, fixed_tile_size=None)
@@ -215,6 +231,9 @@ class UpscalerService:
                     image, model.scale, job.max_output_width, job.max_output_height
                 )
             )
+            neural_baseline = None if resize_only else await self.pipeline.resize_for_output(
+                image, job.max_output_width, job.max_output_height
+            )
             requested_tile_size = None if resize_only else self._resolve_tile_size(job.tile_size)
             tile_size = None if resize_only else (model.fixed_tile_size or requested_tile_size)
             overlap = 0 if resize_only else min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
@@ -225,7 +244,7 @@ class UpscalerService:
             output_height = job.max_output_height or self.settings.encoding.max_output_dimension
             tile_key = tile_size if tile_size is not None else "resize"
             output_key = (
-                f"{source_key}-{classification.mode}-{model.name}-x{model.scale}-t{tile_key}-e{enhancement_key}"
+                f"{source_key}-p{PIPELINE_VERSION}-{classification.mode}-{model.name}-x{model.scale}-t{tile_key}-e{enhancement_key}"
                 f"-w{output_width}-h{output_height}-q{output_quality}-text{self._text_key(text_options)}-webp"
             )
 
@@ -378,7 +397,11 @@ class UpscalerService:
             )
 
             enhance_started = time.perf_counter()
-            enhanced_image = await self.pipeline.enhance(output.image, enhance_level)
+            enhanced_image = (
+                await self.pipeline.enhance(output.image, enhance_level)
+                if resize_only
+                else await self.pipeline.blend_neural_result(neural_baseline, output.image, enhance_level)
+            )
             self._ensure_active(job)
             if profile.preserve_grayscale:
                 enhanced_image = enhanced_image.convert("L").convert("RGB")
@@ -482,6 +505,12 @@ class UpscalerService:
         except Exception as exc:
             self._emit_upscale_terminal(job, "backend.upscale.failed", "failed", total_started, self._error_code(exc), exc)
             raise
+
+    async def _original_cache_bytes(self, image_content: bytes, image) -> bytes:
+        """Keep submitted PNG bytes intact and avoid an expensive lossless re-encode."""
+        if image_content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return image_content
+        return await self.pipeline.encode_png(image)
 
     def _response(
         self,

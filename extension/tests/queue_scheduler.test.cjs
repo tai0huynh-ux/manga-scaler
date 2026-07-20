@@ -129,7 +129,7 @@ function loadBackgroundClasses(options = {}) {
   });
   vm.runInContext(configSource, context);
   vm.runInContext(monitorSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider; globalThis.__StatisticsTracker = StatisticsTracker; globalThis.__normalizeUpscaleRequest = typeof normalizeUpscaleRequest === "function" ? normalizeUpscaleRequest : null; globalThis.__sanitizeUpscaleRequestMetadata = typeof sanitizeUpscaleRequestMetadata === "function" ? sanitizeUpscaleRequestMetadata : null; globalThis.__migratePersistedSettings = typeof migratePersistedSettings === "function" ? migratePersistedSettings : null;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__QueueScheduler = QueueScheduler; globalThis.__PageImageRegistry = PageImageRegistry; globalThis.__BackendUpscaleProvider = BackendUpscaleProvider; globalThis.__StatisticsTracker = StatisticsTracker; globalThis.__normalizeUpscaleRequest = typeof normalizeUpscaleRequest === "function" ? normalizeUpscaleRequest : null; globalThis.__sanitizeUpscaleRequestMetadata = typeof sanitizeUpscaleRequestMetadata === "function" ? sanitizeUpscaleRequestMetadata : null; globalThis.__migratePersistedSettings = typeof migratePersistedSettings === "function" ? migratePersistedSettings : null; globalThis.__isCompatibleBackendHealth = typeof isCompatibleBackendHealth === "function" ? isCompatibleBackendHealth : null;`, context);
   return {
     QueueScheduler: context.__QueueScheduler,
     PageImageRegistry: context.__PageImageRegistry,
@@ -138,6 +138,7 @@ function loadBackgroundClasses(options = {}) {
     normalizeUpscaleRequest: context.__normalizeUpscaleRequest,
     sanitizeUpscaleRequestMetadata: context.__sanitizeUpscaleRequestMetadata,
     migratePersistedSettings: context.__migratePersistedSettings,
+    isCompatibleBackendHealth: context.__isCompatibleBackendHealth,
   };
 }
 
@@ -738,7 +739,11 @@ test("enabling the extension performs only one backend health check", async () =
   const { dispatch } = loadBackgroundMessageHarness({
     fetch: async (url) => {
       if (String(url).endsWith("/health")) healthChecks += 1;
-      return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+      return {
+        ok: true,
+        json: async () => ({ status: "ok", pipelineVersion: "3" }),
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
     },
   });
 
@@ -1384,7 +1389,7 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
     unknownSecret: "should-be-dropped",
   };
   const migrated = migratePersistedSettings(raw);
-  assert.equal(migrated.storageSchemaVersion, 3);
+  assert.equal(migrated.storageSchemaVersion, 4);
   assert.equal(migrated.mode, "auto");
   assert.equal(migrated.enhanceLevel, 1);
   assert.equal(migrated.maxOutputWidth, 256);
@@ -1392,13 +1397,44 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
   assert.equal(migrated.outputQuality, 100);
   assert.equal(migrated.imageSliceMaxWidth, 8192);
   assert.equal(migrated.aheadProcessingEnabled, true);
-  assert.equal(migrated.aheadProcessingImageLimit, 8);
+  assert.equal(migrated.aheadProcessingImageLimit, 3);
   assert.equal(migrated.prefetchMarginPx, 1800);
   assert.equal(migrated.maxInputWidth, 300);
   assert.equal(migrated.textCleanupEnabled, false);
   assert.equal(migrated.textTargetLanguage, "vi");
   assert.equal(Object.prototype.hasOwnProperty.call(migrated, "unknownSecret"), false);
   assert.deepEqual(migratePersistedSettings(migrated), migrated);
+});
+
+test("schema 4 migration restores whole-page ahead processing once without overriding later choices", () => {
+  const { migratePersistedSettings } = loadBackgroundClasses();
+  const upgraded = migratePersistedSettings({
+    storageSchemaVersion: 3,
+    aheadProcessingEnabled: false,
+    aheadProcessingImageLimit: 8,
+    upscaleConcurrency: 2,
+  });
+  const current = migratePersistedSettings({
+    storageSchemaVersion: 4,
+    aheadProcessingEnabled: false,
+    aheadProcessingImageLimit: 7,
+    upscaleConcurrency: 2,
+  });
+
+  assert.equal(upgraded.aheadProcessingEnabled, true);
+  assert.equal(upgraded.aheadProcessingImageLimit, 3);
+  assert.equal(upgraded.upscaleConcurrency, 2);
+  assert.equal(current.aheadProcessingEnabled, false);
+  assert.equal(current.aheadProcessingImageLimit, 7);
+  assert.equal(current.upscaleConcurrency, 2);
+});
+
+test("backend health requires the current image pipeline version", () => {
+  const { isCompatibleBackendHealth } = loadBackgroundClasses();
+
+  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "3" }), true);
+  assert.equal(isCompatibleBackendHealth({ status: "ok" }), false);
+  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "2" }), false);
 });
 
 test("background retry keeps trace id and increments attempt", async () => {
@@ -2475,7 +2511,7 @@ test("cache identity prefers source fingerprint for different bytes under same u
 
   assert.equal(keys.length, 2);
   assert.notEqual(keys[0], keys[1]);
-  assert.ok(keys[0].startsWith("pipeline:v2-resize-safe|"));
+  assert.ok(keys[0].startsWith("pipeline:v3-strength-blend|"));
   assert.ok(keys[0].includes("sha256-a"));
   assert.ok(keys[1].includes("sha256-b"));
 });
@@ -4859,6 +4895,33 @@ test("screen auto orientation follows portrait source geometry", () => {
 
   assert.equal(limits.width, 1080);
   assert.equal(limits.height, 1920);
+});
+
+test("portrait HD FHD and 2K presets stay resize-safe while 4K may use neural inference", () => {
+  const resolveOutputLimits = loadBackgroundHelpers();
+  const source = { sourceWidth: 800, sourceHeight: 1741, renderedWidth: 800, renderedHeight: 1741 };
+  const scales = {};
+
+  for (const preset of ["hd", "fhd", "2k", "4k"]) {
+    const limits = resolveOutputLimits(
+      {
+        sizingMode: "screen",
+        resolutionPreset: preset,
+        screenOrientation: "auto",
+        maxOutputWidthEnabled: true,
+        maxOutputHeightEnabled: true,
+        maxOutputWidth: 4096,
+        maxOutputHeight: 8192,
+      },
+      source,
+    );
+    scales[preset] = Math.min(limits.width / source.sourceWidth, limits.height / source.sourceHeight);
+  }
+
+  assert.ok(scales.hd <= 1.5);
+  assert.ok(scales.fhd <= 1.5);
+  assert.ok(scales["2k"] <= 1.5);
+  assert.ok(scales["4k"] > 1.5);
 });
 
 test("auto output limits bound high-DPR work while retaining a quality floor", () => {

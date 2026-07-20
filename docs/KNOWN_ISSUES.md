@@ -21,6 +21,8 @@
 - **The initial ahead pass stopped after its first batch:** resolved by taking one `window.load` snapshot and draining every unique source through the bounded active-owner limit.
 - **Identical source URLs at different DOM sizes could enqueue duplicate work:** resolved with page-lifetime canonical source ownership and duplicate-node suppression.
 - **Screen presets fed severely downsampled manga into the anime model and corrupted text at 5% strength:** resolved by source-oriented presets, bounded automatic sizing, a Lanczos/Pillow path for targets up to `1.5x`, and a cache-identity bump that excludes stale malformed results.
+- **An older backend could report HTTP 200 while serving the pre-fix image pipeline:** resolved with health `pipelineVersion=3`, a dedicated `8766` endpoint, and strict extension/Native Messaging compatibility checks.
+- **Whole-page ahead processing could be silently disabled by persisted pre-v3 settings:** resolved with an idempotent schema-4 migration that restores the one-shot page-load default while preserving later explicit user choices.
 
 ## Remaining limitations
 
