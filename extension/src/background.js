@@ -2193,6 +2193,16 @@ function hasMessageOperationIdentity(message, sender) {
   );
 }
 
+function imageContentTypeFromBase64(imageData) {
+  const prefix = String(imageData || "").slice(0, 24);
+  if (prefix.startsWith("/9j/")) return "image/jpeg";
+  if (prefix.startsWith("iVBOR")) return "image/png";
+  if (prefix.startsWith("R0lGOD")) return "image/gif";
+  if (prefix.startsWith("UklGR")) return "image/webp";
+  if (prefix.includes("ZnR5cGF2aWY") || prefix.includes("ZnR5cGF2aXM")) return "image/avif";
+  return "application/octet-stream";
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "PREPROCESSING_QUEUED") {
     if (!hasMessageOperationIdentity(message, sender)) {
@@ -2322,6 +2332,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message: error?.message || "Unable to read image for slicing.",
       }),
     ).finally(() => clearTimeout(timeout));
+    return true;
+  }
+
+  if (message.type === "GET_ORIGINAL_PREVIEW") {
+    const tabId = Number(message.tabId);
+    const record = Number.isInteger(tabId) ? pageImageRegistry.page(tabId).get(message.imageId) : null;
+    if (!record || record.operationId !== message.operationId || !record.imageUrl || !record.pageUrl) {
+      sendResponse({ ok: false, reason: "preview-stale" });
+      return false;
+    }
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(record.imageUrl);
+    } catch {
+      sendResponse({ ok: false, reason: "preview-invalid-url" });
+      return false;
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      sendResponse({ ok: false, reason: "preview-unsupported-url" });
+      return false;
+    }
+    upscaleProvider.readBrowserImage(parsedUrl.href, record.pageUrl).then(
+      (imageData) => sendResponse({ ok: true, imageData, contentType: imageContentTypeFromBase64(imageData) }),
+      (error) => sendResponse({ ok: false, reason: "preview-read-error", message: error?.message || "Unable to read original image." }),
+    );
     return true;
   }
 

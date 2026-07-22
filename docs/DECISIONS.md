@@ -1,5 +1,15 @@
 # Engineering decisions
 
+## 2026-07-22 - Show original previews before enhancement completes
+
+Context: Dashboard rows were showing the original image only after the backend populated a local `originalImageUrl`. Images that were merely detected or waiting for preprocessing had a remote `imageUrl` but displayed a placeholder, so users could not compare the pending source with its eventual result.
+
+Decision: Use the registry's original `imageUrl` immediately for a lazy, low-priority Dashboard `<img>`. If a CDN rejects the extension request, request the same current operation through the existing background browser-reader/temporary-Referer path and render the returned bytes as a transient data URL. Cache one fallback promise per row and suppress repeated failed URL requests for 30 seconds.
+
+Reason: The common path does not copy image bytes through the service worker or start preprocessing, while protected readers still receive the page's exact Referer when needed. Operation identity validation prevents an old preview response from appearing in a replacement row.
+
+Consequence: Origin and enhanced images can coexist from the first detected state through completion. A source that remains unavailable after both paths shows the existing placeholder and open-source link; canvas/background/WebGL sources remain outside the registry contract.
+
 ## 2026-07-20 - Activate registered slice wrappers before enhanced results arrive
 
 Context: A stale or constrained DOM size could send an extreme manga page through full-image inference, producing a very narrow output at the backend height cap. Waiting for every backend segment result before replacing the main image made long pages appear stuck, while inserting each enhanced segment into the reader caused visible layout/paint churn.

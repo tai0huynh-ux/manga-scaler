@@ -451,9 +451,18 @@ function updateImageRow(row, item, index) {
     parts.aiActions.replaceChildren();
   }
 
-  const previewUrl = isStablePreviewUrl(item.originalImageUrl) ? item.originalImageUrl : null;
+  const fallbackPreview = parts.originalMedia.__originalPreviewFallback;
+  const previewUrl = fallbackPreview?.key === imageRowKey(item) && fallbackPreview.resolvedSource
+    ? fallbackPreview.resolvedSource
+    : originalPreviewUrl(item);
   if (previewUrl) {
-    updateMediaImage(parts.originalMedia, previewUrl, `Original image ${index + 1}`, "Original preview is not available yet");
+    updateMediaImage(
+      parts.originalMedia,
+      previewUrl,
+      `Original image ${index + 1}`,
+      "Original preview is not available yet",
+      () => requestOriginalPreview(item, parts.originalMedia),
+    );
   } else {
     updateMediaPlaceholder(parts.originalMedia, "Original preview is not available yet", "Open the original image to view the website source.", true);
   }
@@ -482,20 +491,49 @@ function formatImageError(item, fallback) {
   ].filter(Boolean).join("\n");
 }
 
-function updateMediaImage(host, source, alt, failureText) {
+function updateMediaImage(host, source, alt, failureText, onError = null) {
   const current = host.firstElementChild;
   if (current?.tagName === "IMG" && current.dataset.source === source) {
     current.alt = alt;
     return current;
   }
+  if (current?.dataset?.previewLoadingSource === source) return current;
+  if (current?.dataset?.previewFailedSource === source && Date.now() - Number(current.dataset.previewFailedAt || 0) < 30000) return current;
   const image = createImage(source, alt);
   image.dataset.source = source;
   image.addEventListener("error", () => {
     if (host.firstElementChild !== image) return;
-    updateMediaPlaceholder(host, failureText, "The preview URL could not be loaded.", true);
+    const fallback = typeof onError === "function" ? onError() : null;
+    if (!fallback || typeof fallback.then !== "function") {
+      markPreviewFailure(updateMediaPlaceholder(host, failureText, "The preview URL could not be loaded.", true), source);
+      return;
+    }
+    const loadingPlaceholder = updateMediaPlaceholder(host, "Loading original", "Reading the image through the page connection.");
+    loadingPlaceholder.dataset.previewLoadingSource = source;
+    delete loadingPlaceholder.dataset.previewFailedSource;
+    delete loadingPlaceholder.dataset.previewFailedAt;
+    fallback.then((fallbackSource) => {
+      if (host.firstElementChild !== loadingPlaceholder) return;
+      if (fallbackSource) {
+        updateMediaImage(host, fallbackSource, alt, failureText);
+      } else {
+        markPreviewFailure(updateMediaPlaceholder(host, failureText, "The preview URL could not be loaded.", true), source);
+      }
+    }).catch(() => {
+      if (host.firstElementChild === loadingPlaceholder) {
+        markPreviewFailure(updateMediaPlaceholder(host, failureText, "The preview URL could not be loaded.", true), source);
+      }
+    });
   }, { once: true });
   host.replaceChildren(image);
   return image;
+}
+
+function markPreviewFailure(placeholder, source) {
+  delete placeholder.dataset.previewLoadingSource;
+  placeholder.dataset.previewFailedSource = source;
+  placeholder.dataset.previewFailedAt = String(Date.now());
+  return placeholder;
 }
 
 function updateMediaPlaceholder(host, titleText, detailText, withoutSpinner = false) {
@@ -515,6 +553,7 @@ function updateMediaPlaceholder(host, titleText, detailText, withoutSpinner = fa
   spinner.hidden = withoutSpinner;
   title.textContent = titleText;
   detail.textContent = detailText;
+  return placeholder;
 }
 
 function updateSingleOpenButton(host, source, text) {
@@ -536,6 +575,40 @@ function isStablePreviewUrl(source) {
   } catch {
     return false;
   }
+}
+
+function requestOriginalPreview(item, host) {
+  if (!Number.isInteger(item?.tabId) || !item.imageId || !item.operationId || !item.pageUrl) return null;
+  const key = imageRowKey(item);
+  if (host.__originalPreviewFallback?.key === key) return host.__originalPreviewFallback.promise;
+  const entry = { key, resolvedSource: null, promise: null };
+  entry.promise = chrome.runtime.sendMessage({
+    type: "GET_ORIGINAL_PREVIEW",
+    tabId: item.tabId,
+    imageId: item.imageId,
+    operationId: item.operationId,
+  }).then((response) => {
+    if (!response?.ok || !response.imageData) return null;
+    entry.resolvedSource = String(response.imageData).startsWith("data:")
+      ? response.imageData
+      : `data:${response.contentType || "image/png"};base64,${response.imageData}`;
+    return entry.resolvedSource;
+  }).catch(() => null);
+  host.__originalPreviewFallback = entry;
+  return entry.promise;
+}
+
+function originalPreviewUrl(item) {
+  for (const source of [item?.originalImageUrl, item?.imageUrl]) {
+    if (!source) continue;
+    try {
+      const url = new URL(source);
+      if (["blob:", "data:", "chrome-extension:", "http:", "https:"].includes(url.protocol)) return source;
+    } catch {
+      // Invalid registry data must not become a Dashboard resource request.
+    }
+  }
+  return null;
 }
 
 function createBlockButton(source) {
@@ -578,6 +651,8 @@ function createOpenButton(source, text) {
 function createImage(source, alt) {
   const image = document.createElement("img");
   image.loading = "lazy";
+  image.decoding = "async";
+  image.fetchPriority = "low";
   image.src = source;
   image.alt = alt;
   return image;

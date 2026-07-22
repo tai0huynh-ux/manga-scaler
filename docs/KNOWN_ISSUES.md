@@ -6,7 +6,7 @@
 - **Distant images filled the preprocessing queue on discovery:** resolved with prefetch-only scheduling and viewport priority.
 - **Long-image operations could leave ambiguous preprocessing records:** resolved with stage-specific timeout reasons, guarded release, rollback, fallback, and terminal registry updates.
 - **Dashboard reloaded image nodes every poll:** resolved with keyed row updates.
-- **Remote original previews displayed broken-image icons:** resolved by showing a placeholder unless a stable local preview URL exists.
+- **Remote original previews were hidden until completion:** resolved by showing the registry URL immediately, lazy-loading it, and using the protected browser-reader fallback when the CDN requires the page Referer.
 - **Current-page Dashboard mixed tabs:** already resolved before this change; regression coverage confirms `PageImageRegistry.list(tabId)` is used.
 - **Live reader chrome was processed as chapter content:** resolved for readers that expose `reading-detail box_doc` with explicit `.page-chapter` containers; direct chrome outside those containers is rejected.
 - **A non-cooperative CDN response body could retain preprocessing forever:** resolved by racing both browser fetch and body reads against abort.
@@ -35,7 +35,7 @@
 - Trace Artifact Capture and reproduction packages are not implemented yet.
 - Per-tile trace events are intentionally not emitted in default mode.
 - GPU/VRAM trace sampling is not implemented.
-- Website anti-hotlink rules can still prevent the background reader from obtaining source bytes. The Dashboard link may work in a normal tab while preprocessing reports `browser-read-error`.
+- Website anti-hotlink rules beyond the captured page Referer can still prevent the background reader from obtaining source bytes. The Dashboard will retain its bounded placeholder/link fallback instead of retrying the same failed URL on every poll.
 - Canvas, CSS `background-image`, and custom WebGL readers are outside the `<img>` discovery path.
 - Natural long-duration MV3 suspension/soak timing is not yet characterized, although deterministic Edge worker stop/reactivation is green.
 - The four-site live gate is point-in-time and may drift with public markup, advertisements, CDN policy, or anti-bot changes.

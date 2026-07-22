@@ -633,6 +633,46 @@ test("background READ_IMAGE_FOR_SLICING uses the existing browser image reader f
   assert.ok(ruleUpdates.some((update) => update.addRules?.[0]?.action?.requestHeaders?.[0]?.value === "https://reader.example.test/chapter/1"));
 });
 
+test("Dashboard original preview reads protected bytes only for the current registry operation", async () => {
+  const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const ruleUpdates = [];
+  const responses = [];
+  const { dispatch, pageImageRegistry } = loadBackgroundMessageHarness({
+    fetch: async () => ({ ok: true, arrayBuffer: async () => pngBytes.buffer }),
+    updateSessionRules: async (update) => ruleUpdates.push(update),
+  });
+  await pageImageRegistry.seen(7, {
+    imageId: "preview-image",
+    operationId: "preview-op",
+    imageUrl: "https://cdn.example.test/chapter/page.png",
+    pageUrl: "https://reader.example.test/chapter/1",
+    pageOrder: 1,
+  });
+
+  assert.equal(dispatch({
+    type: "GET_ORIGINAL_PREVIEW",
+    tabId: 7,
+    imageId: "preview-image",
+    operationId: "preview-op",
+  }, {}, (response) => responses.push(response)), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(responses.at(-1).ok, true);
+  assert.equal(responses.at(-1).contentType, "image/png");
+  assert.equal(responses.at(-1).imageData, Buffer.from(pngBytes).toString("base64"));
+  assert.ok(ruleUpdates.some((update) => update.addRules?.[0]?.action?.requestHeaders?.[0]?.value === "https://reader.example.test/chapter/1"));
+
+  dispatch({
+    type: "GET_ORIGINAL_PREVIEW",
+    tabId: 7,
+    imageId: "preview-image",
+    operationId: "stale-preview-op",
+  }, {}, (response) => responses.push(response));
+  assert.equal(responses.at(-1).ok, false);
+  assert.equal(responses.at(-1).reason, "preview-stale");
+});
+
 test("background READ_IMAGE_FOR_SLICING rejects unsupported URLs", () => {
   const responses = [];
   const { dispatch } = loadBackgroundMessageHarness();

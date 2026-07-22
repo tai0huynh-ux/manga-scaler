@@ -548,6 +548,16 @@ async function main() {
       globalThis.__dashboardOriginalConcurrency = scheduler.maxConcurrentRequests;
       scheduler.maxConcurrentRequests = Math.max(2, scheduler.maxConcurrentRequests);
       pageImageRegistry.update(tabId, cancelJob.imageId, { operationId: cancelJob.operationId, status: 'waiting' });
+      await pageImageRegistry.seen(tabId, {
+        imageId: 'dash-origin-pending',
+        operationId: 'dash-origin-pending-op',
+        sourceRevision: 'dash-origin-pending-revision',
+        imageUrl: ${JSON.stringify(`${fixture.origin}/protected/referer.png`)},
+        pageUrl: ${JSON.stringify(`${fixture.origin}/chapter/a`)},
+        width: 300,
+        height: 301,
+        pageOrder: 100,
+      });
       await persistProcessingMonitor();
       return processingMonitor.snapshot();
     })()`);
@@ -570,6 +580,16 @@ async function main() {
     await waitFor("Dashboard monitor render", async () => dashboardClient.evaluate(
       "document.readyState === 'complete' && document.querySelectorAll('#monitorSummary article').length === 13 && document.getElementById('monitorListPanel').hidden === true && document.querySelectorAll('#monitorJobs tr').length === 0",
     ), 20000);
+    const pendingOriginalPreview = await waitFor("Dashboard pending original preview", async () => dashboardClient.evaluate(`(() => {
+      const row = document.querySelector('[data-image-key="${retrySource.tabId}:dash-origin-pending:dash-origin-pending-op"]');
+      row?.scrollIntoView({ block: 'center' });
+      const image = row?.querySelector('.original-media img');
+      return image?.complete && image.naturalWidth > 0
+        ? { sourceKind: String(image.currentSrc || image.src).startsWith('data:image/png;base64,') ? 'data:image/png' : 'remote', status: row.querySelector('.state')?.textContent || null }
+        : null;
+    })()`), 20000);
+    assert.equal(pendingOriginalPreview.status, "seen");
+    assert.equal(pendingOriginalPreview.sourceKind, "data:image/png");
     const defaultMonitorListState = await dashboardClient.evaluate(`(() => {
       const toggle = document.getElementById('toggleMonitorList');
       const collapsedByDefault = toggle.getAttribute('aria-expanded') === 'false';
@@ -807,6 +827,7 @@ async function main() {
     dashboardEvidence.reloadRecovered = true;
     dashboardEvidence.detailToggle = detailToggleState;
     dashboardEvidence.listToggle = { ...defaultMonitorListState, expandedOnDemand: true };
+    dashboardEvidence.pendingOriginalPreview = pendingOriginalPreview;
     dashboardEvidence.load = { syntheticJobs: 500, renderedRows: dashboardLoad.rows, renderMs: Math.round(dashboardLoad.renderMs), filterMs: Math.round(dashboardLoad.filterMs), detailMs: Math.round(dashboardLoad.detailMs), heapGrowthBytes: heapBefore && heapAfter ? heapAfter - heapBefore : null };
 
     dashboardClient.close();

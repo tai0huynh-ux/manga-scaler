@@ -345,3 +345,12 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: Full `scripts/verify.ps1` passed `69` backend tests, `224` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. The live pipeline-v4 backend at `127.0.0.1:8766` reported DirectML, `waiting=0`, `processing=0`, and no failed jobs. `main`, `HEAD`, and `origin/main` matched `7b70090d956d2b0eafd874da2dff1836f9b15358` with a clean tree before this documentation correction.
 - Documentation: Corrected the stale top-level feature checkpoint in `CURRENT_STATE.md`; no runtime source or behavior changed.
 - Git: This documentation-only verification record is ready for the mandatory repository auto-sync.
+
+## 2026-07-22 - Dashboard origin preview before processing
+
+- Request: Show the origin image for both processed and unprocessed Dashboard rows instead of waiting for the enhanced result to populate a local original URL.
+- Reproduction: `IMAGE_SEEN` already stored the source `imageUrl`, but `dashboard.js` rejected all remote HTTP/HTTPS previews and rendered only a placeholder until `originalImageUrl` became a local cache URL.
+- Changes: Dashboard now renders the source URL immediately with lazy/low-priority image loading. If a protected CDN rejects that request, the Dashboard asks the background for the exact current operation; the existing browser reader applies temporary Referer rules and returns transient bytes. Failed preview URLs are cooldown-bounded to avoid a 3-second polling request loop.
+- Invariant/decision: Origin display must not depend on backend completion, must never use a stale operation's bytes, and must not transfer or persist all page images eagerly.
+- Verification: Regression tests were red before the source-preview change, then passed. Full `scripts/verify.ps1` passed `69` backend tests, `226` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. Real Edge fixture passed the protected pending-origin preview, `0` browser exceptions, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/worker/navigation/reload state.
+- Git: Source, tests, E2E contract, product docs, and project memory are ready for the mandatory repository auto-sync.

@@ -68,7 +68,7 @@ class FakeElement {
   }
 }
 
-function loadDashboard() {
+function loadDashboard(options = {}) {
   const root = path.resolve(__dirname, "..", "..");
   const source = fs.readFileSync(path.join(root, "extension", "src", "dashboard.js"), "utf8");
   const prefix = source.slice(0, source.indexOf('document.getElementById("mode").addEventListener'));
@@ -98,7 +98,7 @@ function loadDashboard() {
     document,
     window: { location: { search: "?tabId=7" } },
     chrome: {
-      runtime: { sendMessage: async () => ({}) },
+      runtime: { sendMessage: options.sendMessage || (async () => ({})) },
       storage: { local: { get: async () => ({ blacklistRules: [] }), set: async () => undefined } },
     },
   });
@@ -212,20 +212,55 @@ test("dashboard keyed rendering preserves image nodes when URLs do not change", 
   assert.equal(row.__parts.state.textContent, "cache");
 });
 
-test("dashboard uses a placeholder for remote-only originals and failed local previews", () => {
+test("dashboard shows remote originals before processing and falls back only after preview failure", () => {
   const { renderImages, imageRows } = loadDashboard();
   renderImages([imageRecord()]);
   const row = [...imageRows.values()][0];
 
-  assert.equal(row.__parts.originalMedia.firstElementChild.dataset.placeholder, "true");
-  assert.equal(row.__parts.originalMedia.querySelector("img"), null);
+  const remotePreview = row.__parts.originalMedia.firstElementChild;
+  assert.equal(remotePreview.tagName, "IMG");
+  assert.equal(remotePreview.src, "https://protected.example/page-1.jpg");
+  assert.equal(remotePreview.loading, "lazy");
   assert.equal(row.__parts.aiMedia.firstElementChild.children[1].textContent, "Waiting for preprocessing slot");
+
+  remotePreview.dispatch("error");
+  const failedPreview = row.__parts.originalMedia.firstElementChild;
+  assert.equal(failedPreview.dataset.placeholder, "true");
+  renderImages([imageRecord()]);
+  assert.equal(row.__parts.originalMedia.firstElementChild, failedPreview);
 
   renderImages([imageRecord({ originalImageUrl: "http://localhost:8765/cache/images/original.webp" })]);
   const preview = row.__parts.originalMedia.firstElementChild;
   assert.equal(preview.tagName, "IMG");
   preview.dispatch("error");
   assert.equal(row.__parts.originalMedia.firstElementChild.dataset.placeholder, "true");
+});
+
+test("dashboard recovers a protected pending original through the background preview reader", async () => {
+  const messages = [];
+  const { renderImages, imageRows } = loadDashboard({
+    sendMessage: async (message) => {
+      messages.push(message);
+      return { ok: true, contentType: "image/png", imageData: "iVBORw0KGgoAAAANSUhEUg==" };
+    },
+  });
+  renderImages([imageRecord({ pageUrl: "https://reader.example/chapter/1" })]);
+  const row = [...imageRows.values()][0];
+  row.__parts.originalMedia.firstElementChild.dispatch("error");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, "GET_ORIGINAL_PREVIEW");
+  assert.equal(messages[0].tabId, 7);
+  assert.equal(messages[0].imageId, "image-1");
+  assert.equal(messages[0].operationId, "operation-1");
+  const fallback = row.__parts.originalMedia.firstElementChild;
+  assert.equal(fallback.tagName, "IMG");
+  assert.equal(fallback.src, "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==");
+
+  renderImages([imageRecord({ pageUrl: "https://reader.example/chapter/1" })]);
+  assert.equal(row.__parts.originalMedia.firstElementChild, fallback);
+  assert.equal(messages.length, 1);
 });
 
 test("ERR-422-001 dashboard renders validation field and trace separately from preview state", () => {
@@ -244,15 +279,15 @@ test("ERR-422-001 dashboard renders validation field and trace separately from p
   })]);
   const row = [...imageRows.values()][0];
   const aiPlaceholder = row.__parts.aiMedia.firstElementChild;
-  const originalPlaceholder = row.__parts.originalMedia.firstElementChild;
+  const originalPreview = row.__parts.originalMedia.firstElementChild;
 
   assert.equal(aiPlaceholder.children[1].textContent, "Processing failed");
   assert.match(aiPlaceholder.children[2].textContent, /Request validation failed/);
   assert.match(aiPlaceholder.children[2].textContent, /Field: maxOutputWidth/);
   assert.match(aiPlaceholder.children[2].textContent, /Input should be greater than or equal to 256/);
   assert.match(aiPlaceholder.children[2].textContent, /Trace: trace-valida/);
-  assert.equal(originalPlaceholder.children[1].textContent, "Original preview is not available yet");
-  assert.doesNotMatch(originalPlaceholder.children[2].textContent, /validation/i);
+  assert.equal(originalPreview.tagName, "IMG");
+  assert.equal(originalPreview.src, "https://protected.example/page-1.jpg");
 });
 
 test("dashboard removes keyed rows only when their records disappear", () => {

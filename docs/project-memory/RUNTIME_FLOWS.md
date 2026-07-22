@@ -88,6 +88,8 @@ processing events
 
 When the Dashboard Processing Monitor is collapsed, its summary request uses `includeJobs=false` and returns only counts/status cards. Opening the list requests the selected tab's job records and renders the detailed table; polling is single-flight and skipped while the Dashboard document is hidden. A terminal monitor record also blocks a delayed `ENQUEUE_IMAGE` with the same operation identity after a worker restart.
 
+Dashboard image rows render the registry's original `imageUrl` as a lazy, low-priority preview from `IMAGE_SEEN` onward. If the direct remote image fails, one current-operation `GET_ORIGINAL_PREVIEW` request reuses the background browser reader and exact temporary Referer rules; the returned bytes are transient and never enter monitor/storage snapshots. Failed sources are cooldown-bounded so Dashboard polling cannot create a request loop.
+
 ## Long-image transaction
 
 ```text

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed Dashboard image rows so an original preview appears as soon as an image is detected, before preprocessing or AI completion. Remote previews use lazy/low-priority loading; protected CDN failures fall back to a one-shot, operation-checked browser read without retrying the same failed URL every poll.
 - Fixed extension/browser lag from monitor persistence and Dashboard rendering: monitor recovery snapshots are compact and bounded, summary-only reads avoid transferring timelines while the list is closed, polling is single-flight/visibility-aware, and the Processing Monitor job list is collapsed by default until opened.
 - Prevented delayed content messages from resurrecting an operation cancelled during service-worker restart; retries continue to use a new operation identity.
 - Fixed Screen preset output being silently capped by hidden Manual Pixel limits; HD/FHD/2K/4K now send the selected dimensions exactly. Changing output sizing, quality, mode, Strength, or text settings reprocesses existing discovered images with a distinct cache identity, and focused Strength controls are no longer overwritten by polling.
@@ -22,5 +23,5 @@
 - Added viewport-aware discovery/scheduling and a cancellable metadata priority queue.
 - Added stage-specific slicing timeouts, guarded slot release, atomic rollback, and terminal registry updates.
 - Changed Dashboard polling to keyed rendering and added explicit state descriptions.
-- Replaced broken remote original previews with a placeholder and load-error fallback.
+- Added a safe placeholder and load-error fallback for original previews that remain unavailable after the direct URL and protected browser-read paths.
 - Added regression coverage for current-tab registry isolation, 23-image concurrency, waiter priority/cancellation, slice cleanup, and stable Dashboard nodes.
