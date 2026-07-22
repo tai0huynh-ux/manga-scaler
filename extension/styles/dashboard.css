@@ -18,8 +18,14 @@ h1, h2, h3, p { margin-top: 0; }
 .monitor-heading-actions { display: flex; align-items: center; gap: 8px; }
 .monitor-heading-actions button { padding: 8px 11px; border: 1px solid #274e59; border-radius: 7px; background: #274e59; color: #fff; font-weight: 700; cursor: pointer; }
 .monitor-heading-actions button:focus-visible { outline: 3px solid #8fc8bd; outline-offset: 2px; }
-.monitor-heading-actions .monitor-detail-toggle { border-color: #9abdb6; background: #edf5f3; color: #204b51; }
-.monitor-heading-actions .monitor-detail-toggle[aria-expanded="false"] { border-color: #5f9d92; background: #dceeea; }
+.monitor-heading-actions .monitor-list-toggle { border-color: #5f9d92; background: #dceeea; color: #204b51; }
+.monitor-heading-actions .monitor-list-toggle[aria-expanded="true"] { background: #274e59; color: #fff; }
+.monitor-list-panel { padding-top: 14px; border-top: 1px solid #d8e5e1; }
+.monitor-list-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 12px; }
+.monitor-list-toolbar p { margin: 0; }
+.monitor-detail-toggle { padding: 8px 11px; border: 1px solid #9abdb6; border-radius: 7px; background: #edf5f3; color: #204b51; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.monitor-detail-toggle[aria-expanded="false"] { border-color: #5f9d92; background: #dceeea; }
+.monitor-detail-toggle:focus-visible { outline: 3px solid #8fc8bd; outline-offset: 2px; }
 .monitor-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .8fr); gap: 14px; }
 .monitor-layout[data-detail-collapsed="true"] { grid-template-columns: minmax(0, 1fr); }
 .monitor-table-wrap { overflow-x: auto; }
@@ -92,4 +98,4 @@ dl { margin: 0; }
 dl div { display: flex; justify-content: space-between; padding: 5px 0; }
 dd { margin: 0; font-weight: 750; }
 @media (max-width: 1000px) { .monitor-layout { grid-template-columns: 1fr; } .monitor-summary { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 800px) { .comparison, .image-row, .scope-cards, .metrics, .monitor-summary { grid-template-columns: 1fr; } .settings { flex-direction: column; } .section-heading { align-items: flex-start; gap: 12px; } .monitor-heading-actions { flex-wrap: wrap; justify-content: flex-end; } }
+@media (max-width: 800px) { .comparison, .image-row, .scope-cards, .metrics, .monitor-summary { grid-template-columns: 1fr; } .settings { flex-direction: column; } .section-heading { align-items: flex-start; gap: 12px; } .monitor-heading-actions { flex-wrap: wrap; justify-content: flex-end; } .monitor-list-toolbar { align-items: flex-start; flex-direction: column; } }

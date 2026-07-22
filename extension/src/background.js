@@ -1852,6 +1852,9 @@ const PROCESSING_MONITOR_HISTORY_KEY = "processingMonitorHistoryV1";
 const PROCESSING_MONITOR_SESSION_DEBOUNCE_MS = 100;
 const PROCESSING_MONITOR_LOCAL_CHECKPOINT_MS = 5000;
 const PROCESSING_MONITOR_TERMINAL_DEBOUNCE_MS = 250;
+const PROCESSING_MONITOR_PERSISTED_DETECTED_LIMIT = 40;
+const PROCESSING_MONITOR_PERSISTED_COMPLETED_LIMIT = 80;
+const PROCESSING_MONITOR_PERSISTED_ERROR_LIMIT = 80;
 let processingMonitorWrite = Promise.resolve();
 let processingMonitorEventQueue = Promise.resolve();
 let processingMonitorSessionTimer = null;
@@ -1877,7 +1880,12 @@ async function restoreProcessingMonitor() {
 }
 
 function queueProcessingMonitorWrite({ session, durable }) {
-  const snapshot = processingMonitor.snapshot();
+  const snapshot = processingMonitor.snapshot({
+    persistence: true,
+    maxDetectedJobs: PROCESSING_MONITOR_PERSISTED_DETECTED_LIMIT,
+    maxCompletedJobs: PROCESSING_MONITOR_PERSISTED_COMPLETED_LIMIT,
+    maxErrorJobs: PROCESSING_MONITOR_PERSISTED_ERROR_LIMIT,
+  });
   const sessionArea = chrome.storage.session || chrome.storage.local;
   processingMonitorWrite = processingMonitorWrite.catch(() => {}).then(() => {
     const writes = [];
@@ -2394,7 +2402,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const tabId = sender.tab.id;
     const generation = scheduler.tabGenerations.get(tabId) || 0;
-    getRuntimeSettings().then((settings) => {
+    Promise.all([getRuntimeSettings(), processingMonitorReady]).then(([settings]) => {
       if (generation !== (scheduler.tabGenerations.get(tabId) || 0)) {
         emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "stale_generation" } });
         sendResponse({ accepted: false, stale: true, reason: "Stale tab generation." });
@@ -2403,6 +2411,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!settings.enabled) {
         emitTrace({ event: "background.job.rejected", traceId: message.traceId, status: "rejected", metadata: { reason: "disabled" } });
         sendResponse({ accepted: false, reason: "Extension disabled." });
+        return;
+      }
+      const monitorRecord = processingMonitor.get(tabId, message.imageId, message.operationId);
+      if (monitorRecord && AI_PROCESSING_MONITOR.isTerminal(monitorRecord.stage)) {
+        sendResponse({ accepted: false, terminal: true, reason: "Operation is already terminal." });
         return;
       }
       lastContentTabId = tabId;
@@ -2681,10 +2694,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "GET_PROCESSING_MONITOR") {
     processingMonitorReady.then(() => {
-      const snapshot = processingMonitor.snapshot();
-      if (Number.isInteger(message.tabId)) {
-        snapshot.jobs = snapshot.jobs.filter((job) => job.tabId === message.tabId);
-      }
+      const snapshot = processingMonitor.snapshot({
+        includeJobs: message.includeJobs !== false,
+        tabId: Number.isInteger(message.tabId) ? message.tabId : null,
+      });
       sendResponse(snapshot);
     });
     return true;

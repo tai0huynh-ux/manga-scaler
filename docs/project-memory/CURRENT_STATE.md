@@ -3,8 +3,8 @@
 ## Baseline
 
 - Verified date: 2026-07-22, Asia/Bangkok.
-- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and the collapsible Processing Monitor. The starting committed baseline is `6d4c1b50cc6ba0cd2b6c6c702f042932547b33f0`; this verified change set awaits the mandatory repository auto-sync.
-- Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
+- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and a lazy, collapsible Processing Monitor. The starting committed baseline is `3485023f6964b76cf225729c525179c1d8b521dd`; this verified change set awaits the mandatory repository auto-sync.
+- Branch: `main`; current source/origin baseline: `3485023f6964b76cf225729c525179c1d8b521dd`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
@@ -16,7 +16,7 @@
 Full `scripts/verify.ps1` result on the pipeline-v4 strength-compute change set:
 
 - Backend: 69 tests passed, including model-free 5% routing, monotonic and hard-capped neural input compute, exact-size neural composition, aggressive 100% finishing, fast WebP encoding, O(1) health cache accounting, and queue/lifecycle races.
-- Extension: 216 tests passed, including exact slider payload persistence, pipeline-v4 rejection, cache isolation, Processing Monitor interactions, whole-page ahead behavior, canonical duplicate ownership, responsive slicing, protected reads, and operation identity.
+- Extension: 224 tests passed, including exact slider payload persistence, pipeline-v4 rejection, cache isolation, lazy Processing Monitor reads/persistence, whole-page ahead behavior, canonical duplicate ownership, responsive slicing, protected reads, worker lifecycle, and operation identity.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 77%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -146,3 +146,10 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Changes: Screen mode now sends exact HD/FHD/2K/4K dimensions; pixel limits remain local to Manual pixels mode. Content reprocessing covers output sizing/quality, mode/Strength, performance, and text changes while leaving scheduling-only changes bounded. Popup and Dashboard preserve focused controls during refresh. Added an isolated Edge settings matrix command.
 - Regression evidence: Unit coverage passes 220 extension tests, including Auto/Pixel/Screen matrices, 5/35/100% normalization, cache identity isolation, settings-triggered reprocessing, and focused-control polling. `npm.cmd run test:e2e:edge-settings` passes with zero browser exceptions: Auto 768x768, HD 5% -> 720x720, FHD 35% -> 1080x1080, and 2K 100% -> 1440x1440; backend payloads were 1280x720, 1920x1080, and 2560x1440.
 - Full Edge fixture also passes with zero browser exceptions, 55/55 tall slices, two responsive wide tiles, ahead processing, Dashboard, worker/navigation/reload lifecycle, and settled queues/rules.
+
+## Latest monitor-lag delta (2026-07-22)
+
+- Root cause: every accepted monitor event scheduled a full snapshot clone and storage write of up to 500 jobs with complete timelines; the Dashboard also requested the full snapshot and rebuilt every monitor row on each poll, even when the list was not being viewed. A delayed content enqueue could also resurrect an operation cancelled during a worker restart.
+- Changes: monitor persistence now uses a bounded compact snapshot (40 idle `DETECTED`, 80 completed, 80 error records, plus started work) while retaining the full in-memory monitor; summary-only Dashboard reads omit job payloads; the Processing Monitor job list is collapsed by default and loaded only on demand; polling is single-flight, visibility-aware, and 3 seconds when visible; terminal monitor identities reject delayed re-enqueue after worker recovery.
+- Measured effect: a synthetic 505-job persistence snapshot is about 53 KB (about 0.51 MiB/s at the 100 ms coalescing cadence), versus about 2.7 MB for the previous full active snapshot. Real Edge Dashboard evidence rendered 503 rows on demand in 44 ms, filter 5 ms, detail 4 ms, and heap growth about 1.5 MB.
+- Verification: Full `scripts/verify.ps1` passed 69 backend tests, 224 extension tests, JavaScript checks, Ruff, and 77% backend coverage. `npm.cmd run test:e2e:edge-settings` passed with zero browser exceptions. Real Edge fixture passed with the list collapsed by default, 55/55 tall slices, two responsive wide tiles, old-worker image suppression after restart, zero browser exceptions, and settled queue/rule/navigation/reload state.

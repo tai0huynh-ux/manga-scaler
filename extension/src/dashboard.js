@@ -24,6 +24,8 @@ const contentTabId = Number.isInteger(requestedTabId) && requestedTabId >= 0 ? r
 const imageRows = new Map();
 let monitorSnapshot = null;
 let selectedMonitorKey = null;
+let monitorListExpanded = false;
+let refreshInFlight = null;
 const statusPresentation = {
   seen: ["Detected", "Detected, not queued for preprocessing."],
   preprocessing_queued: ["Waiting for preprocessing slot", "This image is queued behind images closer to the viewport."],
@@ -51,10 +53,22 @@ function refreshEnhancementControls(stats) {
 }
 
 async function refresh() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = performRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+async function performRefresh() {
   const [stats, page, monitor] = await Promise.all([
     chrome.runtime.sendMessage({ type: "GET_STATS", tabId: contentTabId }),
     chrome.runtime.sendMessage({ type: "GET_PAGE_IMAGES", tabId: contentTabId }),
-    chrome.runtime.sendMessage({ type: "GET_PROCESSING_MONITOR", tabId: contentTabId }),
+    chrome.runtime.sendMessage({
+      type: "GET_PROCESSING_MONITOR",
+      tabId: contentTabId,
+      includeJobs: monitorListExpanded,
+    }),
   ]);
   monitorSnapshot = monitor || { jobs: [], summary: {} };
   refreshEnhancementControls(stats);
@@ -116,6 +130,7 @@ function renderMonitor(snapshot, pageImages = [], stats = {}) {
     card.append(strong, caption);
     summaryTarget.appendChild(card);
   });
+  if (!monitorListExpanded) return;
   const stageValues = [...new Set(jobs.map((job) => job.stage).filter(Boolean))].sort();
   const modeValues = [...new Set(jobs.map((job) => job.mode).filter(Boolean))].sort();
   const providerValues = [...new Set(jobs.map((job) => job.provider).filter(Boolean))].sort();
@@ -277,6 +292,29 @@ function renderMonitorDetail(job) {
     timeline.appendChild(item);
   });
   target.appendChild(timeline);
+}
+
+function initializeMonitorListToggle(onExpanded = null) {
+  const panel = document.getElementById("monitorListPanel");
+  const toggle = document.getElementById("toggleMonitorList");
+  if (!panel || !toggle) return;
+
+  const setCollapsed = (collapsed) => {
+    panel.hidden = collapsed;
+    panel.dataset.collapsed = String(collapsed);
+    monitorListExpanded = !collapsed;
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.textContent = collapsed ? "Show processing list" : "Hide processing list";
+    if (collapsed) {
+      document.getElementById("monitorJobs")?.replaceChildren();
+      monitorSnapshot = monitorSnapshot ? { ...monitorSnapshot, jobs: [], returnedJobCount: 0 } : null;
+    } else if (typeof onExpanded === "function") {
+      onExpanded();
+    }
+  };
+
+  setCollapsed(panel.hidden);
+  toggle.addEventListener("click", () => setCollapsed(!panel.hidden));
 }
 
 function initializeMonitorDetailToggle() {
@@ -621,6 +659,7 @@ imageSettingIds.forEach((id) => {
   "monitorSiteFilter", "monitorTabFilter",
 ].forEach((id) => document.getElementById(id).addEventListener("change", () => renderMonitor(monitorSnapshot || { jobs: [] })));
 document.getElementById("monitorSearchFilter").addEventListener("input", () => renderMonitor(monitorSnapshot || { jobs: [] }));
+initializeMonitorListToggle(() => refresh());
 initializeMonitorDetailToggle();
 document.getElementById("refreshMonitor").addEventListener("click", refresh);
 [["clearMonitorCompleted", "COMPLETED"], ["clearMonitorFailed", "FAILED"]].forEach(([id, stage]) => {
@@ -640,4 +679,9 @@ document.getElementById("exportMonitor").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 });
 refresh();
-setInterval(refresh, 2000);
+setInterval(() => {
+  if (document.visibilityState !== "hidden") refresh();
+}, 3000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refresh();
+});

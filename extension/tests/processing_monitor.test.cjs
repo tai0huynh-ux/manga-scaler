@@ -158,6 +158,40 @@ test("MON-001 records a detected job with one timeline event", () => {
   assert.equal(store.snapshot().jobs[0].timeline.length, 1);
 });
 
+test("MON-021 supports summary-only reads and bounded persistence of idle detections", () => {
+  const monitor = loadMonitor();
+  const store = new monitor.ProcessingMonitorStore();
+  for (let index = 0; index < 80; index += 1) {
+    store.ingest(storeEvent(monitor, {
+      imageId: `idle-${index}`,
+      operationId: `idle-op-${index}`,
+      eventId: `idle-event-${index}`,
+      timestamp: new Date(Date.UTC(2026, 6, 19, 0, 0, 0, index)).toISOString(),
+    }));
+  }
+  store.ingest(storeEvent(monitor, {
+    imageId: "started",
+    operationId: "started-op",
+    eventId: "started-detected",
+  }));
+  store.ingest(storeEvent(monitor, {
+    imageId: "started",
+    operationId: "started-op",
+    eventId: "started-reading",
+    stage: "READING_SOURCE",
+  }));
+
+  const summaryOnly = store.snapshot({ includeJobs: false });
+  assert.equal(summaryOnly.jobs.length, 0);
+  assert.equal(summaryOnly.jobCount, 81);
+  assert.equal(summaryOnly.summary.active, 81);
+
+  const persisted = store.snapshot({ persistence: true, maxDetectedJobs: 12 });
+  assert.equal(persisted.jobs.length, 13);
+  assert.equal(persisted.jobs.filter((job) => job.stage === "DETECTED").length, 12);
+  assert.equal(persisted.jobs.some((job) => job.imageId === "started"), true);
+});
+
 test("MON-005 ignores stale operation events after a replacement begins", () => {
   const monitor = loadMonitor();
   const store = new monitor.ProcessingMonitorStore();

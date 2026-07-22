@@ -568,7 +568,16 @@ async function main() {
     dashboardClient = await connectTarget(dashboardTarget);
     await dashboardClient.send("Page.enable");
     await waitFor("Dashboard monitor render", async () => dashboardClient.evaluate(
-      "document.readyState === 'complete' && document.querySelectorAll('#monitorSummary article').length === 13 && document.querySelectorAll('#monitorJobs tr').length >= 7",
+      "document.readyState === 'complete' && document.querySelectorAll('#monitorSummary article').length === 13 && document.getElementById('monitorListPanel').hidden === true && document.querySelectorAll('#monitorJobs tr').length === 0",
+    ), 20000);
+    const defaultMonitorListState = await dashboardClient.evaluate(`(() => {
+      const toggle = document.getElementById('toggleMonitorList');
+      const collapsedByDefault = toggle.getAttribute('aria-expanded') === 'false';
+      toggle.click();
+      return { collapsedByDefault };
+    })()`);
+    await waitFor("Dashboard monitor list expansion", async () => dashboardClient.evaluate(
+      "document.getElementById('monitorListPanel').hidden === false && document.querySelectorAll('#monitorJobs tr').length >= 7",
     ), 20000);
 
     const dashboardObservedSnapshot = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
@@ -747,7 +756,11 @@ async function main() {
 
     await dashboardClient.send("Page.reload");
     await waitFor("Dashboard reload recovery", async () => dashboardClient.evaluate(
-      "document.readyState === 'complete' && document.querySelectorAll('#monitorJobs tr').length >= 5 && !document.body.textContent.includes('dash-completed')",
+      "document.readyState === 'complete' && document.getElementById('monitorListPanel').hidden === true && document.querySelectorAll('#monitorJobs tr').length === 0 && !document.body.textContent.includes('dash-completed')",
+    ), 20000);
+    await dashboardClient.evaluate("document.getElementById('toggleMonitorList').click()");
+    await waitFor("Dashboard reload list expansion", async () => dashboardClient.evaluate(
+      "document.querySelectorAll('#monitorJobs tr').length >= 5",
     ), 20000);
 
     const heapBefore = await dashboardClient.evaluate("performance.memory?.usedJSHeapSize || 0");
@@ -793,6 +806,7 @@ async function main() {
     dashboardEvidence.exportSanitized = true;
     dashboardEvidence.reloadRecovered = true;
     dashboardEvidence.detailToggle = detailToggleState;
+    dashboardEvidence.listToggle = { ...defaultMonitorListState, expandedOnDemand: true };
     dashboardEvidence.load = { syntheticJobs: 500, renderedRows: dashboardLoad.rows, renderMs: Math.round(dashboardLoad.renderMs), filterMs: Math.round(dashboardLoad.filterMs), detailMs: Math.round(dashboardLoad.detailMs), heapGrowthBytes: heapBefore && heapAfter ? heapAfter - heapBefore : null };
 
     dashboardClient.close();

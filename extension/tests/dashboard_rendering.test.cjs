@@ -79,7 +79,9 @@ function loadDashboard() {
     level: new FakeElement("input"),
     levelValue: new FakeElement("output"),
     monitorLayout: new FakeElement("div"),
+    monitorListPanel: new FakeElement("div"),
     monitorDetail: new FakeElement("aside"),
+    toggleMonitorList: new FakeElement("button"),
     toggleMonitorDetail: new FakeElement("button"),
   };
   Object.entries(elements).forEach(([id, element]) => { element.id = id; });
@@ -100,10 +102,11 @@ function loadDashboard() {
       storage: { local: { get: async () => ({ blacklistRules: [] }), set: async () => undefined } },
     },
   });
-  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle; globalThis.__refreshEnhancementControls = refreshEnhancementControls;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorListToggle = initializeMonitorListToggle; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle; globalThis.__refreshEnhancementControls = refreshEnhancementControls;`, context);
   return {
     renderImages: context.__renderImages,
     imageRows: context.__imageRows,
+    initializeMonitorListToggle: context.__initializeMonitorListToggle,
     initializeMonitorDetailToggle: context.__initializeMonitorDetailToggle,
     refreshEnhancementControls: context.__refreshEnhancementControls,
     elements,
@@ -121,6 +124,26 @@ function imageRecord(overrides = {}) {
     ...overrides,
   };
 }
+
+test("monitor job list is collapsed by default and expands on demand", () => {
+  const html = fs.readFileSync(path.resolve(__dirname, "..", "dashboard.html"), "utf8");
+  assert.match(html, /id="toggleMonitorList"[^>]*aria-expanded="false"/);
+  assert.match(html, /id="monitorListPanel"[^>]*hidden/);
+
+  const { initializeMonitorListToggle, elements } = loadDashboard();
+  elements.monitorListPanel.hidden = true;
+  initializeMonitorListToggle();
+  assert.equal(elements.monitorListPanel.hidden, true);
+  assert.equal(elements.monitorListPanel.dataset.collapsed, "true");
+  assert.equal(elements.toggleMonitorList.getAttribute("aria-expanded"), "false");
+  assert.equal(elements.toggleMonitorList.textContent, "Show processing list");
+
+  elements.toggleMonitorList.dispatch("click");
+  assert.equal(elements.monitorListPanel.hidden, false);
+  assert.equal(elements.monitorListPanel.dataset.collapsed, "false");
+  assert.equal(elements.toggleMonitorList.getAttribute("aria-expanded"), "true");
+  assert.equal(elements.toggleMonitorList.textContent, "Hide processing list");
+});
 
 test("monitor detail toggle collapses and restores the panel without losing its contents", () => {
   const { initializeMonitorDetailToggle, elements } = loadDashboard();

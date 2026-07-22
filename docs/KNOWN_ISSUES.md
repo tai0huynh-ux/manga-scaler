@@ -26,6 +26,7 @@
 - **Whole-page ahead processing could be silently disabled by persisted pre-v3 settings:** resolved with an idempotent schema-4 migration that restores the one-shot page-load default while preserving later explicit user choices.
 - **Changing Screen preset appeared ineffective below 4K:** resolved by reprocessing existing page images on output-setting changes and by preventing hidden Manual Pixel caps from limiting Screen presets.
 - **Strength slider could snap back during Popup/Dashboard polling:** resolved by preserving focused mode and Strength controls until the user leaves them.
+- **Processing Monitor could saturate the service worker and Dashboard while inference was idle:** resolved with compact bounded persistence, summary-only reads, default-collapsed lazy job rendering, single-flight visible polling, and a terminal-operation guard for delayed post-restart enqueue.
 
 ## Remaining limitations
 

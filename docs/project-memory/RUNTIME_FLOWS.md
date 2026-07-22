@@ -75,15 +75,18 @@ ENQUEUE_IMAGE
 ```text
 processing events
   -> in-memory monitor ingest/prune
-  -> 100 ms coalesced storage.session snapshot
+  -> 100 ms coalesced compact storage.session snapshot
   -> 5 s storage.local checkpoint
   -> terminal event shortens durable checkpoint to 250 ms
 ```
 
 - Explicit recovery, retry-link creation, and history clearing flush session and local state immediately.
 - Active monitor records are deterministically capped at 500; completed and error histories retain their independent limits.
+- Persisted snapshots keep all started work but cap idle `DETECTED` records at 40, completed records at 80, and error records at 80; the full monitor remains available in memory for the open Dashboard.
 - Seen counters batch burst increments before touching local storage.
 - Backend cache artifact names are indexed once at `ImageCache` startup and updated on save/hit, so `/health` reports the file count without a request-time directory traversal.
+
+When the Dashboard Processing Monitor is collapsed, its summary request uses `includeJobs=false` and returns only counts/status cards. Opening the list requests the selected tab's job records and renders the detailed table; polling is single-flight and skipped while the Dashboard document is hidden. A terminal monitor record also blocks a delayed `ENQUEUE_IMAGE` with the same operation identity after a worker restart.
 
 ## Long-image transaction
 

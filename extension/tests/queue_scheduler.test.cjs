@@ -704,6 +704,49 @@ test("processing monitor coalesces burst events before writing storage snapshots
   assert.equal(localWrites[0].processingMonitorHistoryV1.jobs.length, 20);
 });
 
+test("processing monitor persistence caps idle detections but retains started work", async () => {
+  const fakeTimers = makeFakeTimers();
+  const sessionWrites = [];
+  const harness = loadBackgroundMessageHarness({
+    timers: fakeTimers.api,
+    monitorSessionSet: async (value) => sessionWrites.push(value),
+  });
+  await harness.processingMonitorReady;
+  const detected = Array.from({ length: 100 }, (_, index) => ({
+    tabId: 21,
+    imageId: `idle-image-${index}`,
+    operationId: `idle-operation-${index}`,
+    eventId: `idle-event-${index}`,
+    stage: "DETECTED",
+    timestamp: new Date(Date.now() + index).toISOString(),
+  }));
+  await harness.recordProcessingEvents([
+    ...detected,
+    {
+      tabId: 21,
+      imageId: "started-image",
+      operationId: "started-operation",
+      eventId: "started-detected",
+      stage: "DETECTED",
+    },
+    {
+      tabId: 21,
+      imageId: "started-image",
+      operationId: "started-operation",
+      eventId: "started-reading",
+      stage: "READING_SOURCE",
+    },
+  ]);
+
+  fakeTimers.runNext();
+  await new Promise((resolve) => setImmediate(resolve));
+  const snapshot = sessionWrites[0].processingMonitorSessionV1;
+  assert.equal(snapshot.jobCount, 101);
+  assert.equal(snapshot.jobs.filter((job) => job.stage === "DETECTED").length, 40);
+  assert.equal(snapshot.jobs.some((job) => job.imageId === "started-image"), true);
+  assert.equal(snapshot.jobs.length, 41);
+});
+
 test("seen statistics batch burst increments into one storage update", async () => {
   const fakeTimers = makeFakeTimers();
   let storedSeen = 0;
@@ -5729,6 +5772,52 @@ test("delayed enqueue storage read cannot resurrect a pre-navigation job", async
   assert.equal([...scheduler.pending.values()].some((job) => job.imageId === message.imageId), false);
   assert.equal([...scheduler.active.values()].some((job) => job.imageId === message.imageId), false);
   assert.equal(responses.at(-1)?.accepted, false);
+});
+
+test("a worker-recovered terminal operation cannot be resurrected by delayed content enqueue", async () => {
+  const responses = [];
+  const harness = loadBackgroundMessageHarness();
+  await harness.processingMonitorReady;
+  harness.scheduler.maxConcurrentRequests = 0;
+  await harness.recordProcessingEvents([
+    {
+      tabId: 7,
+      imageId: "recovered-image",
+      operationId: "recovered-op",
+      eventId: "recovered-detected",
+      stage: "DETECTED",
+    },
+    {
+      tabId: 7,
+      imageId: "recovered-image",
+      operationId: "recovered-op",
+      eventId: "recovered-cancelled",
+      stage: "CANCELLED",
+      error: {
+        errorCode: "WORKER_INTERRUPTED",
+        category: "CANCELLATION",
+        message: "Worker restarted.",
+        retryable: true,
+      },
+    },
+  ]);
+
+  harness.dispatch({
+    type: "ENQUEUE_IMAGE",
+    imageId: "recovered-image",
+    operationId: "recovered-op",
+    sourceRevision: "recovered-revision",
+    imageUrl: "https://example.com/recovered.png",
+    pageOrder: 1,
+    viewportDistance: 0,
+    displayMetrics: {},
+  }, { tab: { id: 7, url: "https://example.com/page" } }, (response) => responses.push(response));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(responses.at(-1)?.accepted, false);
+  assert.equal(responses.at(-1)?.terminal, true);
+  assert.equal([...harness.scheduler.pending.values()].some((job) => job.imageId === "recovered-image"), false);
 });
 
 test("delayed image-seen storage read cannot resurrect a pre-navigation registry entry", async () => {

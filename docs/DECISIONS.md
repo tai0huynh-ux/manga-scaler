@@ -123,3 +123,25 @@ Decision: `0-10%` is a strict model-free fast path. Starting at `15%`, every pre
 Reason: One control now changes both latency and visible intensity. Five percent remains fast and geometry-safe, normal strengths remain bounded for whole-page use, and the user can deliberately choose a slow, extreme `100%` result.
 
 Consequence: Pipeline/cache compatibility advances to `4` / `pipeline:v4-strength-compute`. On reproduced `800x1741 -> 882x1920` slices, `5%` completed model-free in about `197 ms`, while `100%` used DirectML in about `2.60 s` and visibly produced the requested aggressive, potentially distorted result.
+
+## 2026-07-22 - Keep monitor diagnostics lazy and persistence bounded
+
+Context: The Processing Monitor recorded every detected image and rewrote a full 500-job timeline snapshot to extension storage at a 100 ms cadence. The Dashboard simultaneously transferred and rebuilt the complete table during polling, so browser UI and service-worker work could saturate while the inference backend remained idle.
+
+Options considered: remove monitor history; persist every full snapshot less often; keep the full monitor only in memory and persist a bounded recovery snapshot; render the Dashboard table only when requested.
+
+Decision: keep the full monitor in memory, persist a compact recovery snapshot (all started work, 40 idle detections, 80 completed records, and 80 error records), expose summary-only monitor reads, and collapse the Dashboard job list by default. Polling is single-flight and skipped for hidden Dashboard documents.
+
+Reason: This preserves actionable recovery and on-demand diagnostics while eliminating unnecessary timeline cloning, storage transfer, DOM construction, and overlapping polls. The real Edge path still renders the complete list when the user opens it.
+
+Consequence: The monitor retains its in-memory 500 active-record cap, but idle detection history may be shortened across a worker restart. A 505-job realistic persisted snapshot measured about 53 KB instead of the previous multi-megabyte full snapshot.
+
+## 2026-07-22 - Reject delayed enqueue for recovered terminal operations
+
+Context: A service-worker stop can leave a content-side read promise completing after restart. Without an operation-state check, that delayed message could enqueue and render an operation already cancelled by worker recovery.
+
+Decision: wait for monitor recovery before accepting `ENQUEUE_IMAGE`, and reject any exact `(tabId, imageId, operationId)` whose monitor record is terminal.
+
+Reason: Operation identity is already the authoritative stale-work boundary; applying it at the post-restart enqueue boundary prevents old bytes from resurrecting without affecting new operation IDs created by navigation or reprocessing.
+
+Consequence: Retries must use a new operation identity, and the worker/navigation/reload lifecycle remains settled with no stale render.

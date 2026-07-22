@@ -518,10 +518,34 @@ var AI_PROCESSING_MONITOR = (() => {
       for (const event of record.timeline) this.eventIds.delete(event.eventId);
     }
 
-    snapshot() {
-      const jobs = [...this.records.values()]
-        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.key.localeCompare(right.key))
-        .map((record) => this.clone(record));
+    snapshot(options = {}) {
+      const includeJobs = options?.includeJobs !== false;
+      const tabId = Number.isInteger(options?.tabId) ? options.tabId : null;
+      const limit = (value, fallback) => Number.isInteger(value) && value >= 0 ? value : fallback;
+      const sortedRecords = [...this.records.values()]
+        .filter((record) => tabId === null || record.tabId === tabId)
+        .sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.key.localeCompare(right.key));
+      let selectedRecords = sortedRecords;
+      if (options?.persistence === true) {
+        // Storage recovery stays bounded; the live Dashboard still sees the full in-memory store.
+        const detected = [];
+        const completed = [];
+        const errors = [];
+        const activeStarted = [];
+        for (const record of sortedRecords) {
+          if (record.stage === "DETECTED") detected.push(record);
+          else if (["COMPLETED", "SKIPPED"].includes(record.stage)) completed.push(record);
+          else if (isTerminal(record.stage)) errors.push(record);
+          else activeStarted.push(record);
+        }
+        selectedRecords = [
+          ...activeStarted,
+          ...detected.slice(0, limit(options.maxDetectedJobs, 40)),
+          ...completed.slice(0, limit(options.maxCompletedJobs, 80)),
+          ...errors.slice(0, limit(options.maxErrorJobs, 80)),
+        ].sort((left, right) => right.updatedAtMs - left.updatedAtMs || left.key.localeCompare(right.key));
+      }
+      const jobs = includeJobs ? selectedRecords.map((record) => this.clone(record)) : [];
       return {
         schemaVersion: SCHEMA_VERSION,
         generatedAt: new Date().toISOString(),
@@ -532,6 +556,8 @@ var AI_PROCESSING_MONITOR = (() => {
           retentionHours: this.retentionHours,
         },
         summary: this.summary(),
+        jobCount: sortedRecords.length,
+        returnedJobCount: jobs.length,
         jobs,
       };
     }

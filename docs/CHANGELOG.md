@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed extension/browser lag from monitor persistence and Dashboard rendering: monitor recovery snapshots are compact and bounded, summary-only reads avoid transferring timelines while the list is closed, polling is single-flight/visibility-aware, and the Processing Monitor job list is collapsed by default until opened.
+- Prevented delayed content messages from resurrecting an operation cancelled during service-worker restart; retries continue to use a new operation identity.
 - Fixed Screen preset output being silently capped by hidden Manual Pixel limits; HD/FHD/2K/4K now send the selected dimensions exactly. Changing output sizing, quality, mode, Strength, or text settings reprocesses existing discovered images with a distinct cache identity, and focused Strength controls are no longer overwritten by polling.
 - Added a real Edge settings matrix gate (`npm.cmd run test:e2e:edge-settings`) covering Auto, HD 5%, Full HD 35%, and 2K 100% request/output behavior with zero browser exceptions.
 - Added an accessible `Hide details` / `Show details` control to Processing Monitor; collapsing the detail pane expands the jobs table while preserving the selected job and timeline for immediate restoration.
