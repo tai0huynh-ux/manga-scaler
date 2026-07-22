@@ -359,6 +359,7 @@ function loadContentClasses(options = {}) {
     console,
     performance,
     crypto: options.crypto || webcrypto,
+    fetch: options.fetch,
     MutationObserver: FakeObserver,
     IntersectionObserver: FakeObserver,
     window: fakeWindow,
@@ -2406,6 +2407,47 @@ test("renderer success returns rendered and removes fading ownership class", asy
   assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
   assert.equal(image.classList.contains("ai-manga-upscaler-ready"), true);
   assert.equal(renderer.activeObjectUrls.get(image), "blob:render-success");
+});
+
+test("renderer prepares and preloads the result before the visible source commit", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = (blob) => blob.objectUrl;
+  let fetchUrl = null;
+  let preloaded = false;
+  const { Renderer, trackedImages } = loadContentClasses({
+    urlApi,
+    fetch: async (url) => {
+      fetchUrl = url;
+      return { ok: true, blob: async () => ({ objectUrl: "blob:async-render" }) };
+    },
+  });
+  const renderer = new Renderer();
+  renderer.preloadObjectUrl = async () => { preloaded = true; };
+  renderer.waitForVisualCommit = async () => undefined;
+  const image = makeRenderElement({ src: "https://example.com/original-async.png" });
+  const entry = {
+    imageId: "async-render-image",
+    operationId: "async-render-op",
+    sourceRevision: "async-render-rev",
+    metadata: { width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+  };
+  trackedImages.set(entry.imageId, entry);
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("async-render").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  for (let index = 0; index < 6 && image.src !== "blob:async-render"; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.match(fetchUrl, /^data:image\/png;base64,/);
+  assert.equal(preloaded, true);
+  assert.equal(image.src, "blob:async-render");
+  image.complete = true;
+  image.dispatch("load");
+  assert.equal(await rendering, "rendered");
 });
 
 test("renderer restores the exact original DOM state after a committed AI result is banned", async () => {

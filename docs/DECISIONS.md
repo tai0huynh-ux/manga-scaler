@@ -1,5 +1,15 @@
 # Engineering decisions
 
+## 2026-07-22 - Preload result images before an idle DOM commit
+
+Context: Replacing an image during reading could compete with scrolling because the content script decoded the result base64 synchronously, waited a fixed fade interval, and then made the visible image decode the new Blob in the same replacement frame.
+
+Decision: Prefer asynchronous browser conversion of result data into a Blob, preload and decode the Blob URL in a detached image, remove the fixed pre-swap delay, and commit the visible `src` only at `requestIdleCallback` or a frame-safe fallback. Keep the existing frozen dimensions, exact operation checks, and transactional rollback.
+
+Reason: Decode work and the first visible paint should not be coupled to the scroll target. A detached preload lets the browser populate its image decode cache before the DOM swap, while an idle/frame boundary yields to active input without changing output geometry or operation identity.
+
+Consequence: Replacement can be delayed by at most the idle timeout when the page is busy, but it no longer blocks the main scroll frame with base64 conversion and first decode. If browser data-URL conversion is unavailable, the old local decoder remains a bounded fallback; stale and failed transactions still restore the original DOM exactly.
+
 ## 2026-07-22 - Queue all valid images but prioritize forward reading
 
 Context: Discovery emitted `IMAGE_SEEN` for the whole page, but only the active ahead batch emitted `PREPROCESSING_QUEUED`. Dashboard therefore showed a large `DETECTED` backlog even though those valid images were intended for eventual processing. Pure distance ordering could also choose a nearby image above the reader before the next image below.

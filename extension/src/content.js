@@ -233,11 +233,15 @@ class Renderer {
       previousTransaction.rollback();
     }
 
+    let blob;
+    try {
+      blob = await this.createRenderBlob(payload);
+    } catch {
+      return "load-error";
+    }
+    if (!isCurrent()) return "stale";
     let objectUrl;
     try {
-      const blob = new Blob([this.base64ToUint8Array(payload.imageBase64)], {
-        type: payload.contentType || "image/png",
-      });
       objectUrl = URL.createObjectURL(blob);
     } catch {
       return "load-error";
@@ -258,6 +262,17 @@ class Renderer {
     };
     this.renderTransactions.set(image, transaction);
 
+    try {
+      await this.preloadObjectUrl(objectUrl, transaction.abortController.signal);
+    } catch {
+      transaction.rollback();
+      return isCurrent() ? "load-error" : "stale";
+    }
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
+    }
+
     await this.fadeOut(image);
     if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
       transaction.rollback();
@@ -274,6 +289,18 @@ class Renderer {
 
     image.removeAttribute("srcset");
     image.removeAttribute("sizes");
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
+    }
+
+    try {
+      await this.waitForVisualCommit(transaction.abortController.signal);
+    } catch {
+      const stale = !isCurrent() || this.renderTransactions.get(image) !== transaction;
+      transaction.rollback();
+      return stale ? "stale" : "load-error";
+    }
     if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
       transaction.rollback();
       return "stale";
@@ -307,6 +334,65 @@ class Renderer {
       this.revokeObjectUrl(transaction.previousObjectUrl);
     }
     return "rendered";
+  }
+
+  async createRenderBlob(payload) {
+    const contentType = payload.contentType || "image/png";
+    if (typeof fetch === "function") {
+      try {
+        const response = await fetch(`data:${contentType};base64,${payload.imageBase64}`);
+        if (response.ok) return response.blob();
+      } catch {
+        // Fall back to the local decoder when data URLs are unavailable.
+      }
+    }
+    return new Blob([this.base64ToUint8Array(payload.imageBase64)], { type: contentType });
+  }
+
+  async preloadObjectUrl(objectUrl, signal = null) {
+    if (typeof Image !== "function" || typeof fetch !== "function") return;
+    const preview = new Image();
+    preview.decoding = "async";
+    preview.src = objectUrl;
+    try {
+      // Preloading is an optimization only; never hold a render slot on a browser-specific Blob event.
+      await this.waitForImageLoad(preview, signal, 250);
+      if (typeof preview.decode === "function") {
+        await Promise.race([
+          preview.decode(),
+          new Promise((resolve) => setTimeout(resolve, 250)),
+        ]);
+      }
+    } catch {
+      // The visible image still has its normal guarded load path as a fallback.
+    } finally {
+      preview.src = "";
+    }
+  }
+
+  waitForVisualCommit(signal = null) {
+    if (signal?.aborted) return Promise.reject(new Error("Render commit cancelled."));
+    const idleCallback = globalThis.requestIdleCallback;
+    const frameCallback = globalThis.requestAnimationFrame;
+    if (typeof idleCallback !== "function" && typeof frameCallback !== "function") return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => signal?.removeEventListener?.("abort", onAbort);
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+      const onAbort = () => settle(reject, new Error("Render commit cancelled."));
+      signal?.addEventListener?.("abort", onAbort, { once: true });
+      const commit = () => settle(resolve);
+      if (typeof idleCallback === "function") {
+        idleCallback(commit, { timeout: 120 });
+      } else {
+        frameCallback(() => frameCallback(commit));
+      }
+    });
   }
 
   prepareRawSlices(image, metadata, segments, identity = {}) {
@@ -711,10 +797,8 @@ class Renderer {
 
   fadeOut(image) {
     if (image?.dataset?.aiEnhancerRawSlice === "true") return Promise.resolve();
-    return new Promise((resolve) => {
-      image.classList.add("ai-manga-upscaler-fading");
-      setTimeout(resolve, AI_MANGA_UPSCALER_CONFIG.render.fadeMs);
-    });
+    image.classList.add("ai-manga-upscaler-fading");
+    return Promise.resolve();
   }
 
   waitForImageLoad(image, signal = null, timeoutMs = AI_MANGA_UPSCALER_CONFIG.images.browserReadTimeoutMs) {

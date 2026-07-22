@@ -71,6 +71,7 @@ Full verification runs:
 - Whole-page ahead queue: `window.load` admission of every valid image, dynamic/lazy-image admission after load, current/below/above priority, canonical-source ownership, duplicate URLs terminating as `SKIPPED`, bounded active pumping, backlog cancellation on disable, one queued report for sliced parents, and a real Edge Blob commit at `scrollY=0` beyond the legacy prefetch margin.
 - Public live-reader E2E (`test:e2e:edge-live-reader`) with sanitized URL diagnostics, backend restart detection, and Manga/Manhwa/Manhua category evidence.
 - Dashboard stable keyed rows, origin previews from detected state, protected-preview fallback, default-collapsed lazy monitor list, summary-only reads, and accessible detail-pane collapse/restore behavior verified through DOM regression and real Edge interaction.
+- Renderer commits preloaded Blob results at an idle/frame-safe point, preserves exact layout metadata, and rolls back stale or failed swaps without revoking the current operation's object URL.
 - Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.
 - Compact monitor persistence caps idle detection/completed/error history without dropping started work, and recovered terminal operations reject delayed content re-enqueue after worker restart.
 - Source-oriented screen presets, bounded high-DPI automatic output sizing, resize-safe cache versioning, and aspect-preserving Lanczos output for targets at or below `1.5x`.

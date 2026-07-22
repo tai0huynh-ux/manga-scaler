@@ -16,7 +16,9 @@ DOM discovery
   -> background processing
   -> browser cache hit OR backend /upscale
   -> UPSCALE_COMPLETE
-  -> transactional Blob render
+  -> asynchronous Blob conversion
+  -> detached image preload/decode
+  -> idle/frame-safe DOM commit with frozen layout
   -> fixed/cache
 ```
 

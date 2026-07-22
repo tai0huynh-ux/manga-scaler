@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduced scroll jank during image replacement: result bytes use asynchronous browser Blob conversion when available, are preloaded/decoded off the visible image, the fixed pre-swap fade wait is gone, and the final DOM swap is deferred to an idle/frame-safe point while layout dimensions stay frozen.
 - Fixed valid images remaining as `Detected, not queued for preprocessing`: every unique eligible image now enters a metadata-only page backlog immediately, including lazy/dynamic images discovered after load, while active preprocessing remains bounded.
 - Changed image priority to match reading direction: current viewport first, then images below from near to far, then images above. Duplicate sources now end as explicit `Skipped` records, and disabling/reprocessing/page exit settles unscheduled backlog state.
 - Added an exact `Ban wrong result` Dashboard action. It stores only the current AI result URL, never the original source URL, restores a committed image to its original DOM state, and skips the same result before base64/render delivery on future operations.

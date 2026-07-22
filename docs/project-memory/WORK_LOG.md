@@ -379,3 +379,11 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Invariant/decision: Every eligible unique source must leave `DETECTED`, but `aheadProcessingImageLimit` and preprocessing concurrency remain the only active resource bounds. Duplicate sources never read bytes or reach the backend. Scroll work must not traverse the full discovered page with layout reads.
 - Verification: Focused regressions and all `237/237` extension tests passed. Both `scripts/verify.ps1 -Fast` and full `scripts/verify.ps1` passed `69` backend tests and `237` extension tests with Ruff, JavaScript checks, and `77%` backend coverage. The final real Edge fixture rerun passed with zero browser exceptions, offscreen ahead replacement at `scrollY=0`, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/worker/navigation/reload state.
 - Git: Source, regression tests, product docs, and project memory are ready for the mandatory repository auto-sync.
+
+## 2026-07-22 - Non-blocking image replacement commit
+
+- Request: Prevent visible browser stutter when a processed image replaces the original while the reader is scrolling.
+- Reproduction: `Renderer.render()` converted every result with synchronous `atob`/`Uint8Array`, waited `180 ms` before changing `src`, and left the visible image to perform its first decode during the swap frame.
+- Changes: Prefer asynchronous data-URL-to-Blob conversion, preload/decode the Blob URL in a detached image, remove the fixed pre-swap delay, and schedule the visible source commit at idle or a two-frame fallback. Existing layout freezing, source metadata preservation, stale checks, and rollback remain authoritative.
+- Invariant/decision: The original image remains visible and dimension-stable until the replacement is decoded and the operation is still current; a busy scroll frame may defer the commit but must never be blocked by base64 conversion or first decode.
+- Verification: The new preload/commit regression and all `238/238` extension tests passed. Full `scripts/verify.ps1` passed `69` backend tests, `238` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. The final Edge fixture passed with zero browser exceptions, an offscreen Blob commit, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/lifecycle state.

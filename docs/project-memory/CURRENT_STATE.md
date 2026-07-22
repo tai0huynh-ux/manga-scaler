@@ -16,7 +16,7 @@
 Full `scripts/verify.ps1` result on the pipeline-v4 strength-compute change set:
 
 - Backend: 69 tests passed, including model-free 5% routing, monotonic and hard-capped neural input compute, exact-size neural composition, aggressive 100% finishing, fast WebP encoding, O(1) health cache accounting, and queue/lifecycle races.
-- Extension: 237 tests passed, including full-page queued-state coverage, current/below/above reading priority, dynamic-image ahead admission, duplicate-source terminal status, exact slider payload persistence, pipeline-v4 rejection, lazy Processing Monitor reads/persistence, responsive slicing, protected reads, worker lifecycle, and operation identity.
+- Extension: 238 tests passed, including preloaded idle render commits, full-page queued-state coverage, current/below/above reading priority, dynamic-image ahead admission, duplicate-source terminal status, exact slider payload persistence, pipeline-v4 rejection, lazy Processing Monitor reads/persistence, responsive slicing, protected reads, worker lifecycle, and operation identity.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 77%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -173,3 +173,9 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Root cause: `IMAGE_SEEN` created a `DETECTED` monitor record for every valid image, but the page-load pass emitted `PREPROCESSING_QUEUED` only for the bounded active-owner batch. The untouched backlog therefore appeared as `Detected, not queued`, and distance-only sorting could place a nearby image above the reader before the next image below.
 - Changes: every eligible unique source now reports queued status as soon as it enters the page backlog; dynamic/lazy images discovered after load join immediately; duplicate sources terminate as `SKIPPED` with reason `duplicate-source`; queued work sorts current viewport, below near-to-far, then above; stored document coordinates avoid full-page layout reads during scroll; active preprocessing and ahead-owner limits remain unchanged. Disabling, reprocessing, or leaving the page cancels unscheduled reported backlog entries so Monitor state settles.
 - Verification: `npm.cmd run test:extension` passed `237/237`; both `scripts/verify.ps1 -Fast` and full `scripts/verify.ps1` passed `69` backend and `237` extension tests with Ruff, JavaScript checks, and `77%` backend coverage; the final real `npm.cmd run test:e2e:edge-fixture` passed with zero browser exceptions, offscreen ahead replacement, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/worker/navigation/reload state.
+
+## Latest non-blocking render commit delta (2026-07-22)
+
+- Root cause: result rendering decoded large base64 payloads synchronously on the content-script main thread, waited a fixed `180 ms` fade before changing `src`, and let the visible image perform its first decode during the replacement frame.
+- Changes: result Blob creation now prefers asynchronous browser data-URL conversion, the Blob URL is preloaded/decoded in a detached image before commit, the fixed pre-replacement delay is removed, and the visible `src` swap waits for an idle callback or two animation frames when those APIs exist. Layout freezing and operation rollback remain unchanged.
+- Verification: the new renderer regression and all `238/238` extension tests passed. The full backend/extension gates remain green at `69` backend tests, `238` extension tests, JavaScript checks, Ruff, and `77%` backend coverage; the final Edge fixture rerun passed with zero browser exceptions, settled queue/rule/lifecycle state, an offscreen Blob commit, `55/55` tall slices, and two responsive wide tiles.
