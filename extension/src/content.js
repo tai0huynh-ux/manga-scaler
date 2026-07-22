@@ -845,7 +845,7 @@ class ViewportImageProvider {
     this.onWindowLoad = () => this.handlePageLoaded();
     this.onPageHide = () => {
       this.pageHidden = true;
-      this.initialAheadQueue = [];
+      this.clearAheadBacklog("page-hidden");
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
       this.aheadProcessingKeys.clear();
     };
@@ -907,7 +907,7 @@ class ViewportImageProvider {
       if (document.readyState === "complete") this.handlePageLoaded();
       else this.observeExistingImages();
     } else {
-      this.initialAheadQueue = [];
+      this.clearAheadBacklog("disabled");
       [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "disabled"));
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
       document.querySelectorAll("img[data-ai-manga-upscaler-observed]")
@@ -917,6 +917,7 @@ class ViewportImageProvider {
   }
 
   reprocessVisibleImages() {
+    this.clearAheadBacklog("reprocess");
     [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "reprocess"));
     [...trackedImages.values()].forEach((entry) => this.cancel(entry));
     trackedImageKeys.clear();
@@ -1062,7 +1063,9 @@ class ViewportImageProvider {
         height: metadata.height,
         pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
       });
-      if (event?.type === "load" && this.isWithinPrefetch(image)) {
+      if (this.pageLoadHandled && this.aheadProcessingEnabled) {
+        this.queueAheadImage(image);
+      } else if (event?.type === "load" && this.isWithinPrefetch(image)) {
         this.schedule(image, true, { allowPrefetch: true });
       }
     };
@@ -1165,9 +1168,11 @@ class ViewportImageProvider {
       isSegment: false,
       pageOrder,
       aheadProcessing: options.aheadProcessing === true,
+      queueStatusReported: Boolean(existing?.queueStatusReported || existingByKey?.queueStatusReported),
     };
     if (!this.claimSourceOwner(operationEntry)) {
       trackedImageKeys.set(baseKey, operationEntry);
+      this.markDuplicateSource(operationEntry);
       return;
     }
     if (operationEntry.aheadProcessing) this.aheadProcessingKeys.set(baseKey, image);
@@ -1187,7 +1192,10 @@ class ViewportImageProvider {
     const signal = this.createPreprocessingSignal();
     operationEntry.preprocessingSignal = signal;
     operationEntry.state = "preprocessing_queued";
-    this.sendPreprocessingStatus(operationEntry, "PREPROCESSING_QUEUED", "preprocessing_queued");
+    if (!operationEntry.queueStatusReported) {
+      operationEntry.queueStatusReported = true;
+      this.sendPreprocessingStatus(operationEntry, "PREPROCESSING_QUEUED", "preprocessing_queued");
+    }
     const release = await this.acquirePreprocessingSlot(operationEntry);
     if (!release) return;
     let readResult = { ok: false, imageData: null, reason: "read-fetch-error" };
@@ -1266,7 +1274,10 @@ class ViewportImageProvider {
     let release = prepared?.release || null;
     if (!release) {
       operation.state = "preprocessing_queued";
-      this.sendPreprocessingStatus(operation, "PREPROCESSING_QUEUED", "preprocessing_queued");
+      if (!operation.queueStatusReported) {
+        operation.queueStatusReported = true;
+        this.sendPreprocessingStatus(operation, "PREPROCESSING_QUEUED", "preprocessing_queued");
+      }
       release = await this.acquirePreprocessingSlot(operation);
     }
     if (!release) return;
@@ -1864,8 +1875,16 @@ class ViewportImageProvider {
     return true;
   }
 
+  markDuplicateSource(operation) {
+    if (!operation || operation.state === "skipped") return false;
+    operation.state = "skipped";
+    this.cancelPreprocessingSignal(operation.preprocessingSignal, "duplicate-source");
+    this.sendPreprocessingStatus(operation, "PREPROCESSING_SKIPPED", "skipped", "duplicate-source");
+    return true;
+  }
+
   logPreprocessing(state, operation, reason = null) {
-    if (!reason && globalThis.__AI_MANGA_UPSCALER_DEBUG__ !== true) return;
+    if ((state === "cancelled" || !reason || ["ahead-page-order", "duplicate-source"].includes(reason)) && globalThis.__AI_MANGA_UPSCALER_DEBUG__ !== true) return;
     console.debug("[AI Enhancer][preprocessing]", {
       imageId: operation?.imageId,
       operationId: operation?.operationId,
@@ -2431,6 +2450,21 @@ class ViewportImageProvider {
     return released;
   }
 
+  clearAheadBacklog(reason = "cancelled") {
+    const queued = this.initialAheadQueue;
+    this.initialAheadQueue = [];
+    let cleared = 0;
+    for (const item of queued) {
+      const entry = trackedImageKeys.get(item.baseKey);
+      if (!entry || entry.image !== item.image || entry.state !== "seen") continue;
+      entry.state = "cancelled";
+      this.sendPreprocessingStatus(entry, "PREPROCESSING_FAILED", "cancelled", reason);
+      this.removeTrackedEntry(entry);
+      cleared += 1;
+    }
+    return cleared;
+  }
+
   imageKey(metadata, image) {
     const normalizedUrl = this.processingKey(metadata.imageUrl);
     const rect = image.getBoundingClientRect();
@@ -2484,12 +2518,7 @@ class ViewportImageProvider {
   }
 
   drainPreprocessingQueue() {
-    this.preprocessingWaiters.sort((left, right) => (
-      left.priorityTier - right.priorityTier ||
-      left.viewportDistance - right.viewportDistance ||
-      left.pageOrder - right.pageOrder ||
-      left.queuedAt - right.queuedAt
-    ));
+    this.preprocessingWaiters.sort((left, right) => this.compareReadingPriority(left, right));
     while (this.preprocessingActive < this.preprocessingConcurrency && this.preprocessingWaiters.length) {
       const waiter = this.preprocessingWaiters.shift();
       if (!waiter || waiter.cancelled || !this.isCurrentImageEntry(waiter.operation)) {
@@ -2611,8 +2640,9 @@ class ViewportImageProvider {
       return;
     }
 
-    // IntersectionObserver promotes discovered images. Scroll work only
-    // reprioritizes the bounded preprocessing queue that is actually waiting.
+    // Stored page coordinates let the ahead backlog follow the reader without
+    // forcing layout reads across every discovered image on each scroll.
+    this.sortAheadQueue();
     for (const waiter of [...this.preprocessingWaiters]) {
       const entry = waiter?.operation;
       if (!entry || entry.state !== "preprocessing_queued" || !entry.image) continue;
@@ -2628,6 +2658,7 @@ class ViewportImageProvider {
       }
     }
     this.drainPreprocessingQueue();
+    this.scheduleAheadProcessing();
   }
 
   normalizeResultUrl(resultUrl) {
@@ -2700,27 +2731,13 @@ class ViewportImageProvider {
     this.aheadProcessingCompleted = true;
     this.initialAheadQueue = [];
     if (this.aheadProcessingEnabled && this.aheadProcessingImageLimit > 0) {
-      const candidates = [...trackedImageKeys.values()]
-        .filter((entry) => (
-          entry.state === "seen" &&
-          entry.image &&
-          this.canProcessCandidate(entry.image, { allowPrefetch: true })
-        ))
-        .map((entry) => ({
-          entry,
-          distance: this.viewportDistance(entry.image),
-          pageOrder: Number(entry.pageOrder || 0),
-        }))
-        .sort((left, right) => left.distance - right.distance || left.pageOrder - right.pageOrder);
-      for (const candidate of candidates) {
-        const entry = candidate.entry;
-        if (!this.claimSourceOwner(entry)) continue;
-        this.initialAheadQueue.push({
-          image: entry.image,
-          baseKey: entry.baseKey,
-          sourceKey: entry.sourceKey,
-        });
-      }
+      const candidates = [...trackedImageKeys.values()].filter((entry) => (
+        entry.state === "seen" &&
+        entry.image &&
+        this.canProcessCandidate(entry.image, { allowPrefetch: true })
+      ));
+      for (const entry of candidates) this.queueAheadImage(entry, { schedule: false, sort: false });
+      this.sortAheadQueue();
     }
     this.scheduleAheadProcessing();
     return true;
@@ -2741,16 +2758,77 @@ class ViewportImageProvider {
         !isAttached ||
         !this.claimSourceOwner(entry)
       ) {
+        if (entry && entry.state === "seen") this.markDuplicateSource(entry);
         continue;
       }
       this.schedule(entry.image, true, { allowPrefetch: true, aheadProcessing: true });
     }
   }
 
-  preprocessingPriorityTier(operation, distance = this.viewportDistance(operation.image)) {
+  preprocessingPriorityTier(operation, distance = operation?.image ? this.viewportDistance(operation.image) : Number.MAX_SAFE_INTEGER) {
+    const rect = operation?.image?.getBoundingClientRect?.();
+    if (rect && rect.bottom >= 0 && rect.top <= window.innerHeight) return 0;
+    if (rect && rect.top > window.innerHeight) return 1;
     if (distance === 0) return 0;
-    if (operation?.aheadProcessing === true && distance > this.prefetchMarginPx) return 2;
-    return 1;
+    return 2;
+  }
+
+  compareReadingPriority(left, right) {
+    return (
+      (left.priorityTier ?? 2) - (right.priorityTier ?? 2) ||
+      (left.viewportDistance ?? left.distance ?? Number.MAX_SAFE_INTEGER) - (right.viewportDistance ?? right.distance ?? Number.MAX_SAFE_INTEGER) ||
+      (left.pageOrder ?? Number.MAX_SAFE_INTEGER) - (right.pageOrder ?? Number.MAX_SAFE_INTEGER) ||
+      (left.queuedAt ?? 0) - (right.queuedAt ?? 0)
+    );
+  }
+
+  aheadQueuePriority(item) {
+    const viewportTop = Number(window.scrollY || 0);
+    const viewportBottom = viewportTop + Number(window.innerHeight || 0);
+    const documentTop = Number(item?.documentTop ?? Number.MAX_SAFE_INTEGER);
+    const documentBottom = Number(item?.documentBottom ?? documentTop);
+    if (documentBottom >= viewportTop && documentTop <= viewportBottom) {
+      return { priorityTier: 0, viewportDistance: 0, pageOrder: item?.pageOrder };
+    }
+    if (documentTop > viewportBottom) {
+      return { priorityTier: 1, viewportDistance: documentTop - viewportBottom, pageOrder: item?.pageOrder };
+    }
+    return { priorityTier: 2, viewportDistance: viewportTop - documentBottom, pageOrder: item?.pageOrder };
+  }
+
+  sortAheadQueue() {
+    this.initialAheadQueue.sort((left, right) => this.compareReadingPriority(
+      this.aheadQueuePriority(left),
+      this.aheadQueuePriority(right),
+    ));
+  }
+
+  queueAheadImage(imageOrEntry, { schedule = true, sort = true } = {}) {
+    const entry = imageOrEntry?.image
+      ? imageOrEntry
+      : this.findByImage(imageOrEntry) || this.findKeyEntryByImage(imageOrEntry)?.entry;
+    if (!entry || entry.state !== "seen" || !entry.image) return false;
+    if (!this.claimSourceOwner(entry)) {
+      this.markDuplicateSource(entry);
+      return false;
+    }
+    if (!this.initialAheadQueue.some((queued) => queued.baseKey === entry.baseKey)) {
+      const rect = entry.image.getBoundingClientRect();
+      const scrollY = Number(window.scrollY || 0);
+      this.initialAheadQueue.push({
+        image: entry.image,
+        baseKey: entry.baseKey,
+        sourceKey: entry.sourceKey,
+        pageOrder: Number(entry.pageOrder || 0),
+        documentTop: scrollY + Number(rect.top || 0),
+        documentBottom: scrollY + Number(rect.bottom || 0),
+      });
+      if (sort) this.sortAheadQueue();
+      entry.queueStatusReported = true;
+      this.sendPreprocessingStatus(entry, "PREPROCESSING_QUEUED", "preprocessing_queued", "ahead-page-order");
+    }
+    if (schedule) this.scheduleAheadProcessing();
+    return true;
   }
 
   updateImagePriority(image, imageId = null) {
@@ -3102,7 +3180,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       viewportProvider.aheadProcessingImageLimit = Math.max(1, Number(settings.aheadProcessingImageLimit) || AI_MANGA_UPSCALER_CONFIG.images.aheadProcessingImageLimit);
       viewportProvider.prefetchMarginPx = Math.max(0, Number(settings.prefetchMarginPx) || 0);
       if (!viewportProvider.aheadProcessingEnabled) {
-        viewportProvider.initialAheadQueue = [];
+        viewportProvider.clearAheadBacklog("ahead-processing-disabled");
         [...trackedImages.values()]
           .filter((entry) => entry.aheadProcessing === true)
           .forEach((entry) => viewportProvider.cancel(entry));

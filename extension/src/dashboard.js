@@ -28,7 +28,7 @@ let monitorListExpanded = false;
 let refreshInFlight = null;
 const statusPresentation = {
   seen: ["Detected", "Detected, not queued for preprocessing."],
-  preprocessing_queued: ["Waiting for preprocessing slot", "This image is queued behind images closer to the viewport."],
+  preprocessing_queued: ["Waiting for preprocessing slot", "Queued in reading order: current view, then images below, then images above."],
   preprocessing: ["Preparing image", "Reading and preparing the image before AI processing."],
   waiting: ["Waiting for AI worker", "Preprocessing completed and the backend job is queued."],
   processing: ["Processing with AI", "The backend is enhancing this image."],
@@ -37,7 +37,7 @@ const statusPresentation = {
   error: ["Processing failed", "The image could not be processed."],
   timeout: ["Timed out", "Processing exceeded the allowed stage timeout."],
   cancelled: ["Cancelled", "This operation was cancelled."],
-  skipped: ["Skipped", "This AI result was banned; the original image remains visible."],
+  skipped: ["Skipped", "This operation was intentionally skipped; the original image remains visible."],
   removed: ["No longer available", "The source image is no longer on the page."],
 };
 
@@ -497,6 +497,11 @@ function updateImageRow(row, item, index) {
 }
 
 function formatImageError(item, fallback) {
+  const reasonText = {
+    "ahead-page-order": "Queued for page-order processing from the current reading position toward the end.",
+    "duplicate-source": "Skipped because the same original source already has one processing owner.",
+  }[item?.reason];
+  if (reasonText) return reasonText;
   if (item.errorCode !== "REQUEST_VALIDATION_FAILED") return fallback;
   const validation = Array.isArray(item.validationFields) ? item.validationFields[0] : null;
   const field = typeof validation?.field === "string"

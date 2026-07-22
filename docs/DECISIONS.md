@@ -1,5 +1,15 @@
 # Engineering decisions
 
+## 2026-07-22 - Queue all valid images but prioritize forward reading
+
+Context: Discovery emitted `IMAGE_SEEN` for the whole page, but only the active ahead batch emitted `PREPROCESSING_QUEUED`. Dashboard therefore showed a large `DETECTED` backlog even though those valid images were intended for eventual processing. Pure distance ordering could also choose a nearby image above the reader before the next image below.
+
+Decision: Admission and execution are separate. Every eligible unique source reports `preprocessing_queued` when it enters a metadata-only backlog; only bounded owners acquire preprocessing/backend resources. Sort work as current viewport, below near-to-far, then above. Use stored document coordinates for backlog resorting, let dynamic/lazy images join after load, and terminate duplicate sources as `SKIPPED` rather than leaving them `DETECTED`.
+
+Reason: Honest queue state makes the Dashboard explain eventual work without increasing CPU/GPU concurrency. Forward-reading priority improves perceived latency, stored coordinates avoid scroll-time full-page layout reads, and explicit duplicate/cancellation terminals prevent monitor records from hanging.
+
+Consequence: `aheadProcessingImageLimit` remains a resource limit, not a visibility limit. A large chapter can show many queued records while only a small bounded set is active. This supersedes the 2026-07-20 clause that dynamic images must wait for viewport/prefetch promotion; it does not reopen or repeat the initial page scan.
+
 ## 2026-07-22 - Show original previews before enhancement completes
 
 Context: Dashboard rows were showing the original image only after the backend populated a local `originalImageUrl`. Images that were merely detected or waiting for preprocessing had a remote `imageUrl` but displayed a placeholder, so users could not compare the pending source with its eventual result.

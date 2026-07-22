@@ -3215,7 +3215,7 @@ test("initial discovery registers but does not preprocess images outside the pre
   assert.equal(sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE").length, 0);
 });
 
-test("initial ahead processing waits for window load and snapshots the page only once", async () => {
+test("initial ahead processing queues the full page once while bounding active work", async () => {
   const images = [];
   const reads = [];
   const { viewportProvider, sentMessages, HTMLImageElement, trackedImages, window } = makeContentProvider({
@@ -3249,7 +3249,8 @@ test("initial ahead processing waits for window load and snapshots the page only
 
   assert.equal(viewportProvider.pageLoadHandled, true);
   assert.equal(reads.length, 2);
-  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 3);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 2);
 
   viewportProvider.setEnabled(false);
   reads.forEach(({ pending }) => pending.resolve("image-data"));
@@ -3461,6 +3462,7 @@ test("initial discovery opens only a bounded number of nearest lookahead images 
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 8);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 8);
   assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_STARTED").length, 3);
   assert.equal([...trackedImages.values()].filter((entry) => entry.state === "preprocessing").length, 3);
   assert.equal(viewportProvider.preprocessingActive, 3);
@@ -3472,6 +3474,9 @@ test("initial discovery opens only a bounded number of nearest lookahead images 
   assert.equal(viewportProvider.preprocessingWaiters.length, 0);
   assert.equal(viewportProvider.aheadProcessingKeys.size, 0);
   assert.equal(sentMessages.filter((message) => message.type === "CANCEL_IMAGE").length, 3);
+  assert.equal(sentMessages.filter((message) => (
+    message.type === "PREPROCESSING_FAILED" && message.status === "cancelled" && message.reason === "disabled"
+  )).length, 5);
 });
 
 test("page-load ahead queue drains every unique source without exceeding its active limit", async () => {
@@ -3510,6 +3515,12 @@ test("page-load ahead queue drains every unique source without exceeding its act
   assert.equal(viewportProvider.runInitialAheadProcessing(), true);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 4);
+  const skippedDuplicates = sentMessages.filter((message) => message.type === "PREPROCESSING_SKIPPED");
+  assert.equal(skippedDuplicates.length, 1);
+  assert.equal(skippedDuplicates[0].imageUrl, "https://example.com/shared.png");
+  assert.equal(skippedDuplicates[0].reason, "duplicate-source");
 
   const completed = new Set();
   let maxAheadActive = viewportProvider.aheadProcessingKeys.size;
@@ -3625,6 +3636,7 @@ test("ahead ownership releases only after the final slice result", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   const segments = sentMessages.filter((message) => message.type === "ENQUEUE_IMAGE" && String(message.cacheVariant).startsWith("segment-"));
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
   assert.equal(segments.length, 2);
   assert.equal(viewportProvider.aheadProcessingKeys.size, 1);
 
@@ -3695,7 +3707,7 @@ test("the initial lookahead pass does not repeat on viewport refresh", async () 
   read.resolve("image-data");
 });
 
-test("images discovered after the initial lookahead wait for the viewport", async () => {
+test("eligible images discovered after the initial pass join the ahead queue immediately", async () => {
   const reads = [];
   const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
     preprocessingConcurrency: 2,
@@ -3728,6 +3740,7 @@ test("images discovered after the initial lookahead wait for the viewport", asyn
   viewportProvider.observeImage(later);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(reads.map(({ imageUrl }) => imageUrl), ["https://example.com/initial-ahead.png"]);
+  assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
 
   top = 0;
   viewportProvider.handleIntersections([{ target: later, isIntersecting: true }]);
@@ -3743,6 +3756,56 @@ test("images discovered after the initial lookahead wait for the viewport", asyn
   assert.equal(sentMessages.filter((message) => message.type === "PREPROCESSING_QUEUED").length, 2);
 
   reads.forEach(({ pending }) => pending.resolve("image-data"));
+});
+
+test("preprocessing prioritizes the current view, then images below, then images above", async () => {
+  const blockerRead = deferred();
+  const readOrder = [];
+  const { viewportProvider, HTMLImageElement, window } = makeContentProvider({
+    preprocessingConcurrency: 1,
+    aheadProcessingImageLimit: 4,
+    readDisplayedImage: (imageUrl) => {
+      readOrder.push(imageUrl);
+      return imageUrl.includes("priority-blocker") ? blockerRead.promise : "image-data";
+    },
+  });
+  viewportProvider.imageSlicingEnabled = false;
+  viewportProvider.sourceFingerprint = async (imageData) => `fingerprint:${imageData}`;
+  window.scrollY = 5000;
+
+  const makePriorityImage = (name, top, bottom = top + 900) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/${name}.png`;
+    image.currentSrc = image.src;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    image.getBoundingClientRect = () => ({ width: 900, height: bottom - top, top, bottom, left: 0, right: 900 });
+    return image;
+  };
+
+  const blocker = makePriorityImage("priority-blocker", 0, 900);
+  const above = makePriorityImage("priority-above", -1800, -900);
+  const current = makePriorityImage("priority-current", 100, 1000);
+  const belowNear = makePriorityImage("priority-below-near", 1200, 2100);
+  const belowFar = makePriorityImage("priority-below-far", 2400, 3300);
+
+  const blockerPromise = viewportProvider.schedule(blocker);
+  [above, current, belowFar, belowNear].forEach((image) => viewportProvider.observeImage(image));
+  viewportProvider.runInitialAheadProcessing();
+  await new Promise((resolve) => setImmediate(resolve));
+  blockerRead.resolve("blocker-data");
+  await blockerPromise;
+  for (let index = 0; index < 10 && readOrder.length < 5; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.deepEqual(readOrder, [
+    "https://example.com/priority-blocker.png",
+    "https://example.com/priority-current.png",
+    "https://example.com/priority-below-near.png",
+    "https://example.com/priority-below-far.png",
+    "https://example.com/priority-above.png",
+  ]);
 });
 
 test("lookahead selects the nearest eligible images by distance then page order", async () => {
@@ -6022,6 +6085,70 @@ test("GET_PAGE_IMAGES returns only the requested content tab", async () => {
 
   assert.equal(responses.at(-1).tabId, 7);
   assert.deepEqual(responses.at(-1).images.map((entry) => entry.imageId), ["tab-7-image"]);
+});
+
+test("preprocessing lifecycle messages replace detected status with queued or skipped", async () => {
+  const responses = [];
+  const { dispatch, pageImageRegistry, processingMonitor, processingMonitorReady, recordProcessingEvents } = loadBackgroundMessageHarness();
+  await processingMonitorReady;
+  const records = [
+    { imageId: "queued-image", operationId: "queued-op", source: "queued.png" },
+    { imageId: "duplicate-image", operationId: "duplicate-op", source: "duplicate.png" },
+  ];
+  for (const [pageOrder, record] of records.entries()) {
+    await pageImageRegistry.seen(7, {
+      imageId: record.imageId,
+      operationId: record.operationId,
+      sourceRevision: `${record.operationId}-revision`,
+      imageUrl: `https://example.com/${record.source}`,
+      pageUrl: "https://example.com/chapter",
+      pageOrder,
+    });
+  }
+  await recordProcessingEvents(records.map((record, pageOrder) => ({
+    tabId: 7,
+    imageId: record.imageId,
+    operationId: record.operationId,
+    eventId: `${record.operationId}-detected`,
+    sourceUrl: `https://example.com/${record.source}`,
+    stage: "DETECTED",
+    timestamp: new Date(Date.now() + pageOrder).toISOString(),
+  })));
+
+  const sender = { tab: { id: 7, url: "https://example.com/chapter" } };
+  assert.equal(dispatch({
+    type: "PREPROCESSING_QUEUED",
+    imageId: "queued-image",
+    operationId: "queued-op",
+    traceId: "queued-trace",
+    sourceRevision: "queued-op-revision",
+    imageUrl: "https://example.com/queued.png",
+    pageOrder: 0,
+    viewportDistance: 1200,
+    reason: "ahead-page-order",
+  }, sender, (response) => responses.push(response)), true);
+  assert.equal(dispatch({
+    type: "PREPROCESSING_SKIPPED",
+    imageId: "duplicate-image",
+    operationId: "duplicate-op",
+    traceId: "duplicate-trace",
+    sourceRevision: "duplicate-op-revision",
+    imageUrl: "https://example.com/duplicate.png",
+    pageOrder: 1,
+    viewportDistance: 1400,
+    reason: "duplicate-source",
+  }, sender, (response) => responses.push(response)), true);
+  for (let index = 0; index < 6 && responses.length < 2; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const registry = Object.fromEntries(pageImageRegistry.list(7).map((entry) => [entry.imageId, entry]));
+  assert.equal(registry["queued-image"].status, "preprocessing_queued");
+  assert.equal(registry["queued-image"].reason, "ahead-page-order");
+  assert.equal(registry["duplicate-image"].status, "skipped");
+  assert.equal(registry["duplicate-image"].reason, "duplicate-source");
+  assert.equal(processingMonitor.get(7, "queued-image", "queued-op").stage, "WAITING_FOR_VIEWPORT");
+  assert.equal(processingMonitor.get(7, "duplicate-image", "duplicate-op").stage, "SKIPPED");
 });
 
 test("DOM render commit is the only background completion authority", async () => {

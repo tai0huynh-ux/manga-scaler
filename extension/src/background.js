@@ -2276,12 +2276,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       operationId: message.operationId,
       sourceRevision: message.sourceRevision,
       status: "preprocessing_queued",
+      reason: message.reason || "preprocessing-queue",
       pageOrder: Number(message.pageOrder),
       viewportDistance: Number(message.viewportDistance),
       queuedAt: performance.now(),
     });
-    sendResponse({ recorded: true });
-    return false;
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: message.imageUrl,
+      stage: "WAITING_FOR_VIEWPORT",
+      metadata: { reason: message.reason || "preprocessing_queue" },
+    }).then((result) => sendResponse(result));
+    return true;
   }
 
   if (message.type === "PREPROCESSING_STARTED") {
@@ -2332,6 +2341,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     sendResponse({ recorded: true });
     return false;
+  }
+
+  if (message.type === "PREPROCESSING_SKIPPED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      sourceRevision: message.sourceRevision,
+      status: "skipped",
+      reason: message.reason || "duplicate-source",
+      pageOrder: Number(message.pageOrder),
+      viewportDistance: Number(message.viewportDistance),
+    });
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: message.imageUrl,
+      stage: "SKIPPED",
+      metadata: { reason: message.reason || "duplicate_source" },
+    }).then((result) => sendResponse(result));
+    return true;
   }
 
   if (message.type === "PREPROCESSING_FAILED") {

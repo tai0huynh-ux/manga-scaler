@@ -20,7 +20,7 @@ DOM discovery
   -> fixed/cache
 ```
 
-Terminal states are `error`, `timeout`, `cancelled`, `removed`, and `superseded`. After `window.load`, each page takes one snapshot of eligible `seen` images, sorts by viewport distance and page order, canonicalizes the source URL, and keeps only the nearest owner for each source. The snapshot queue drains through a bounded number of active ahead owners (`aheadProcessingImageLimit`); it does not stop after the first batch. The snapshot is never rebuilt for later mutations, intersections, scrolls, resizes, or settings refreshes. Images discovered after the snapshot remain `seen` until normal viewport/prefetch promotion; operation, source-owner, and completed-key guards suppress duplicate work.
+Terminal states are `error`, `timeout`, `cancelled`, `removed`, `skipped`, and `superseded`. After `window.load`, each page admits every eligible `seen` image to one metadata-only ahead backlog, canonicalizes the source URL, and keeps one owner for each source. Admission emits `PREPROCESSING_QUEUED` immediately, while `aheadProcessingImageLimit` still bounds the owners that can start real work. Eligible mutation/lazy-load images discovered later join the same backlog. Priority is current viewport, then images below from near to far, then images above; scroll sorting uses stored document coordinates rather than rereading the full page layout. Duplicate sources emit terminal `PREPROCESSING_SKIPPED`, and operation/source-owner/completed-key guards suppress repeated work.
 
 When an enhanced result is returned, the background checks the exact result URL against `blockedResultRules` before sending base64 bytes to the content script. A match is recorded as `SKIPPED`, keeps the original source in the registry, and sends only an operation-checked rejection message. A Dashboard ban stores that exact result URL after verifying the current operation; it never adds the original URL to `blacklistRules`. If the result has already committed, content restores the renderer's retained first-original snapshot and clears only that operation's completion ownership.
 
@@ -49,6 +49,7 @@ eligible candidate
 ```
 
 - Queued operations own no slot and use `preprocessing_queued`.
+- `preprocessing_queued` includes metadata-only page backlog entries; it does not mean image bytes, a preprocessing slot, or backend capacity have been acquired.
 - Detached, superseded, distant, timed-out, or cancelled waiters cannot later acquire a slot.
 - Slot release is idempotent and must settle on success, failure, cancellation, and fallback.
 

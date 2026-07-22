@@ -3,7 +3,7 @@
 ## Baseline
 
 - Verified date: 2026-07-22, Asia/Bangkok.
-- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and a lazy, collapsible Processing Monitor. The monitor-lag implementation checkpoint is `7b70090d956d2b0eafd874da2dff1836f9b15358`.
+- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while whole-page scheduling now queues every eligible unique source, prioritizes the current reading position then images below then images above, and keeps active work bounded. The last committed monitor-lag checkpoint before this change is `7b70090d956d2b0eafd874da2dff1836f9b15358`.
 - Branch: `main`; the verified feature implementation and `origin/main` matched `7b70090d956d2b0eafd874da2dff1836f9b15358` before this documentation-only baseline correction; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -16,7 +16,7 @@
 Full `scripts/verify.ps1` result on the pipeline-v4 strength-compute change set:
 
 - Backend: 69 tests passed, including model-free 5% routing, monotonic and hard-capped neural input compute, exact-size neural composition, aggressive 100% finishing, fast WebP encoding, O(1) health cache accounting, and queue/lifecycle races.
-- Extension: 224 tests passed, including exact slider payload persistence, pipeline-v4 rejection, cache isolation, lazy Processing Monitor reads/persistence, whole-page ahead behavior, canonical duplicate ownership, responsive slicing, protected reads, worker lifecycle, and operation identity.
+- Extension: 237 tests passed, including full-page queued-state coverage, current/below/above reading priority, dynamic-image ahead admission, duplicate-source terminal status, exact slider payload persistence, pipeline-v4 rejection, lazy Processing Monitor reads/persistence, responsive slicing, protected reads, worker lifecycle, and operation identity.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 77%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -27,9 +27,9 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 ## Implemented capabilities
 
 - Viewport-aware `<img>` discovery and preprocessing.
-- User-configurable page-load ahead processing: after `window.load`, each page snapshots eligible images once, sorts by viewport distance/page order, keeps one owner per canonical source URL, and drains every unique source through the bounded active-owner limit; later dynamic images wait for normal viewport/prefetch promotion.
+- User-configurable page-load ahead processing: after `window.load`, each page queues every eligible image once, keeps one owner per canonical source URL, and drains unique work through the bounded active-owner limit. Eligible lazy-loaded or dynamically inserted images join the same backlog immediately.
 - Disabled content scripts stay dormant. Enable notifications are idempotent, detach/re-observe existing images without duplicate load listeners, run the initial ahead pass only if it has not already run for that page, and continue skipping completed image keys.
-- `IntersectionObserver` owns viewport promotion. Scroll/resize refreshes only the bounded preprocessing waiters instead of traversing every discovered image and forcing layout reads.
+- Reading priority is current viewport first, then images below from near to far, then images above. Scroll/resize reorders stored document coordinates and bounded preprocessing waiters without traversing every discovered image or forcing full-page layout reads; `IntersectionObserver` can still promote visible work immediately.
 - Background settings are loaded once, updated through `storage.onChanged`, and protected against an older in-flight read overwriting a newer enable change. `IMAGE_SEEN` and `ENQUEUE_IMAGE` no longer read extension settings once per image.
 - Processing Monitor active history is capped at 500. Hot session snapshots are coalesced at 100 ms, local checkpoints at 5 seconds, and terminal events request a 250 ms durable checkpoint; explicit retry/clear/recovery operations flush immediately.
 - `IMAGE_SEEN` statistics increments are batched into one storage update per 100 ms burst.
@@ -167,3 +167,9 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Changes: discovery now rejects the known banner path, explicit branding/banner markers, and promotion text while keeping generic chapter images eligible. Persisted schema version 5 adds bounded exact `blockedResultRules`. Background rejects a blocked result before DOM/base64 delivery; Dashboard exposes `Ban wrong result`, verifies `imageId + operationId + enhancedImageUrl`, and keeps source blocking separate. Renderer retains the first original DOM snapshot and restores it, including responsive attributes and Blob ownership, after a committed result is banned.
 - Verification: Full `scripts/verify.ps1` passed `69` backend tests, `235` extension tests, JavaScript checks, Ruff, and `77%` coverage. Real Edge fixture E2E passed with `browserExceptions=0`, exact Dashboard result-ban storage, origin restoration, offscreen lookahead at `scrollY=0`, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/worker/navigation/reload state. Focused result-ban, renderer-restore, schema, HentaiVNX banner, and Dashboard interaction regressions passed. HTTP HTML inspection of the supplied chapter returned status `200` and confirmed `/images/bn.png`; Computer Use could not provide DOM evidence because its adult-site URL policy blocked window-state inspection.
 - Limitation: no new live Edge replacement run was claimed for the adult site; deterministic and unit gates are the acceptance evidence for this change.
+
+## Latest whole-page queue-order delta (2026-07-22)
+
+- Root cause: `IMAGE_SEEN` created a `DETECTED` monitor record for every valid image, but the page-load pass emitted `PREPROCESSING_QUEUED` only for the bounded active-owner batch. The untouched backlog therefore appeared as `Detected, not queued`, and distance-only sorting could place a nearby image above the reader before the next image below.
+- Changes: every eligible unique source now reports queued status as soon as it enters the page backlog; dynamic/lazy images discovered after load join immediately; duplicate sources terminate as `SKIPPED` with reason `duplicate-source`; queued work sorts current viewport, below near-to-far, then above; stored document coordinates avoid full-page layout reads during scroll; active preprocessing and ahead-owner limits remain unchanged. Disabling, reprocessing, or leaving the page cancels unscheduled reported backlog entries so Monitor state settles.
+- Verification: `npm.cmd run test:extension` passed `237/237`; both `scripts/verify.ps1 -Fast` and full `scripts/verify.ps1` passed `69` backend and `237` extension tests with Ruff, JavaScript checks, and `77%` backend coverage; the final real `npm.cmd run test:e2e:edge-fixture` passed with zero browser exceptions, offscreen ahead replacement, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/worker/navigation/reload state.
