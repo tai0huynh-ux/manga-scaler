@@ -179,3 +179,10 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Root cause: result rendering decoded large base64 payloads synchronously on the content-script main thread, waited a fixed `180 ms` fade before changing `src`, and let the visible image perform its first decode during the replacement frame.
 - Changes: result Blob creation now prefers asynchronous browser data-URL conversion, the Blob URL is preloaded/decoded in a detached image before commit, the fixed pre-replacement delay is removed, and the visible `src` swap waits for an idle callback or two animation frames when those APIs exist. Layout freezing and operation rollback remain unchanged.
 - Verification: the new renderer regression and all `238/238` extension tests passed. The full backend/extension gates remain green at `69` backend tests, `238` extension tests, JavaScript checks, Ruff, and `77%` backend coverage; the final Edge fixture rerun passed with zero browser exceptions, settled queue/rule/lifecycle state, an offscreen Blob commit, `55/55` tall slices, and two responsive wide tiles.
+
+## Perfect 1 checkpoint (2026-07-22)
+
+- The user-designated stable baseline is named `perfect-1`.
+- It includes the verified whole-page forward-reading queue, exact wrong-result ban and original restoration, bounded/collapsed monitoring, responsive slicing, effective resolution/Strength behavior, and non-blocking image replacement.
+- Acceptance baseline: `69` backend tests, `238` extension tests, JavaScript checks, Ruff, `77%` backend coverage, and the deterministic Edge fixture with zero browser exceptions and settled queue/rule/lifecycle state.
+- Recovery reference: use the pushed annotated Git tag `perfect-1`; preserve history and prefer a new branch or `git revert` for future recovery instead of destructive reset operations.

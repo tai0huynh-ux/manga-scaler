@@ -387,3 +387,10 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Changes: Prefer asynchronous data-URL-to-Blob conversion, preload/decode the Blob URL in a detached image, remove the fixed pre-swap delay, and schedule the visible source commit at idle or a two-frame fallback. Existing layout freezing, source metadata preservation, stale checks, and rollback remain authoritative.
 - Invariant/decision: The original image remains visible and dimension-stable until the replacement is decoded and the operation is still current; a busy scroll frame may defer the commit but must never be blocked by base64 conversion or first decode.
 - Verification: The new preload/commit regression and all `238/238` extension tests passed. Full `scripts/verify.ps1` passed `69` backend tests, `238` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. The final Edge fixture passed with zero browser exceptions, an offscreen Blob commit, `55/55` tall slices, two responsive wide tiles, and settled queue/rule/lifecycle state.
+
+## 2026-07-22 - Perfect 1 stable checkpoint
+
+- Request: Preserve the current verified system as the user-designated `perfect 1` baseline.
+- Change: Recorded the accepted capabilities and verification baseline in durable project memory; no runtime behavior changed.
+- Verification: Reused the immediately preceding green acceptance evidence: `69` backend tests, `238` extension tests, JavaScript checks, Ruff, `77%` backend coverage, and a passing deterministic Edge fixture with zero browser exceptions and settled queue/rule/lifecycle state.
+- Git: Auto-sync this documentation record, then create and push the annotated tag `perfect-1` on that clean synchronized commit.
