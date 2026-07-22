@@ -102,6 +102,14 @@ Browser-owned encoded dimensions are authoritative when DOM geometry is absent, 
 - CSS background images, canvas output, and WebGL sources are not discovered.
 - The deterministic fixture under `extension/tests/fixtures/reader/` must keep supported and unsupported cases explicit.
 
+## Result rejection and false-positive safety
+
+- `blockedResultRules` contains only bounded, exact HTTP/HTTPS AI-result URLs with fragments removed; query strings remain part of identity. It is separate from `blacklistRules`, which targets normalized original sources.
+- A result ban is authorized only by the current `tabId`, `imageId`, `operationId`, and registry `enhancedImageUrl`; stale or mismatched requests must not mutate the page or source blacklist.
+- A blocked result is rejected before the content renderer receives or serializes its image bytes. The page registry becomes `skipped`, the original remains visible, and content emits `IMAGE_RESULT_REJECTED` only to settle the exact operation.
+- If a result was already committed, the renderer retains the first successful original DOM snapshot and `restoreOriginal` must restore `src`, responsive attributes, picture sources, layout styles, classes, and owned Blob URL state without touching newer ownership.
+- HentaiVNX-style promotional assets such as `/images/bn.png`, explicit banner/branding markers, and promotion copy are excluded cheaply at discovery. Generic chapter images sharing an `alt` string remain eligible.
+
 ## Provider and model contract
 
 - Models accept float32 RGB NCHW and return float32 RGB NCHW.

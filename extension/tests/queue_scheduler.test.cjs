@@ -37,7 +37,13 @@ function loadQueueScheduler(options = {}) {
     console: options.console || console,
     importScripts() {},
     __pageImageRegistry: pageImageRegistry,
-    chrome: { tabs: { sendMessage: options.tabsSendMessage || (async () => undefined) } },
+    chrome: {
+      storage: {
+        local: { get: options.storageGet || (async (defaults) => defaults), set: async () => undefined },
+        onChanged: { addListener() {} },
+      },
+      tabs: { sendMessage: options.tabsSendMessage || (async () => undefined) },
+    },
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
     __AI_MANGA_UPSCALER_DEBUG__: options.debug === true,
@@ -192,7 +198,7 @@ function loadBackgroundMessageHarness(options = {}) {
         onChanged: { addListener() {} },
       },
       tabs: {
-        sendMessage: async () => undefined,
+        sendMessage: options.tabsSendMessage || (async () => undefined),
         query: async () => [],
       },
       declarativeNetRequest: { updateSessionRules: options.updateSessionRules || (async () => undefined) },
@@ -877,6 +883,51 @@ test("IMAGE_SEEN burst reuses the cached enabled setting", async () => {
   assert.equal(settingsReads, 1);
 });
 
+test("BAN_IMAGE_RESULT stores only the exact AI result and restores the current tab operation", async () => {
+  const stored = [];
+  const forwarded = [];
+  const responses = [];
+  const { dispatch, pageImageRegistry } = loadBackgroundMessageHarness({
+    storageGet: async (defaults) => defaults,
+    storageSet: async (value) => stored.push(value),
+    tabsSendMessage: async (tabId, message) => forwarded.push({ tabId, message }),
+  });
+  await pageImageRegistry.seen(7, {
+    imageId: "image-ban-1",
+    operationId: "operation-ban-1",
+    sourceRevision: "revision-ban-1",
+    imageUrl: "https://cdn.example.test/original.jpg",
+    pageUrl: "https://reader.example.test/chapter/1",
+    pageOrder: 0,
+  });
+  pageImageRegistry.update(7, "image-ban-1", {
+    operationId: "operation-ban-1",
+    enhancedImageUrl: "http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-ban-1",
+    status: "fixed",
+  });
+
+  assert.equal(dispatch({
+    type: "BAN_IMAGE_RESULT",
+    tabId: 7,
+    imageId: "image-ban-1",
+    operationId: "operation-ban-1",
+    resultUrl: "http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-ban-1",
+  }, {}, (response) => responses.push(response)), true);
+  for (let index = 0; index < 6 && responses.length === 0; index += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(responses[0]?.banned, true);
+  assert.equal(stored.length, 1);
+  assert.deepEqual([...stored[0].blockedResultRules], ["http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-ban-1"]);
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].tabId, 7);
+  assert.equal(forwarded[0].message.type, "REJECT_IMAGE_RESULT");
+  assert.equal(forwarded[0].message.imageId, "image-ban-1");
+  assert.equal(forwarded[0].message.operationId, "operation-ban-1");
+  assert.equal(forwarded[0].message.resultUrl, "http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-ban-1");
+});
+
 test("an enable change wins over an older in-flight settings read", async () => {
   const fakeTimers = makeFakeTimers();
   const initialSettings = deferred();
@@ -1470,10 +1521,15 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
     minInputWidth: 300,
     textCleanupEnabled: "yes",
     textTargetLanguage: "vietnamese-language-code-too-long",
+    blockedResultRules: [
+      "http://127.0.0.1:8766/cache/images/wrong.webp?key=1#preview",
+      "http://127.0.0.1:8766/cache/images/wrong.webp?key=1",
+      "data:image/webp;base64,blocked",
+    ],
     unknownSecret: "should-be-dropped",
   };
   const migrated = migratePersistedSettings(raw);
-  assert.equal(migrated.storageSchemaVersion, 4);
+  assert.equal(migrated.storageSchemaVersion, 5);
   assert.equal(migrated.mode, "auto");
   assert.equal(migrated.enhanceLevel, 1);
   assert.equal(migrated.maxOutputWidth, 256);
@@ -1486,6 +1542,7 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
   assert.equal(migrated.maxInputWidth, 300);
   assert.equal(migrated.textCleanupEnabled, false);
   assert.equal(migrated.textTargetLanguage, "vi");
+  assert.deepEqual([...migrated.blockedResultRules], ["http://127.0.0.1:8766/cache/images/wrong.webp?key=1"]);
   assert.equal(Object.prototype.hasOwnProperty.call(migrated, "unknownSecret"), false);
   assert.deepEqual(migratePersistedSettings(migrated), migrated);
 });
@@ -1663,6 +1720,48 @@ test("background cache hit emits result-received before DOM commit", async () =>
 
   assert.equal(traceEvents.some((event) => event.event === "background.cache.hit" && event.traceId === "trace-trace-cache"), true);
   assert.equal(traceEvents.some((event) => event.event === "background.job.result_received" && event.status === "received"), true);
+});
+
+test("background discards an exact banned AI result before serializing it for DOM rendering", async () => {
+  const resultUrl = "http://127.0.0.1:8766/cache/images/wrong.webp?key=blocked-before-render";
+  const forwarded = [];
+  const traceEvents = [];
+  const QueueScheduler = loadQueueScheduler({
+    traceEvents,
+    storageGet: async (defaults) => defaults === null
+      ? { storageSchemaVersion: 5, blockedResultRules: [resultUrl] }
+      : defaults,
+    tabsSendMessage: async (_tabId, message) => forwarded.push(message),
+  });
+  let backendCalls = 0;
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: {
+      get: async () => ({
+        buffer: new Uint8Array([1]).buffer,
+        contentType: "image/webp",
+        enhancedImageUrl: resultUrl,
+        originalImageUrl: "https://cdn.example.test/original.jpg",
+      }),
+      set: async () => undefined,
+    },
+    upscaleProvider: {
+      upscale: async () => { backendCalls += 1; throw new Error("cache should have prevented backend work"); },
+      cancel() {},
+    },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+
+  scheduler.enqueue(makeJob("blocked-cache"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(backendCalls, 0);
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].type, "REJECT_IMAGE_RESULT");
+  assert.equal(forwarded[0].resultUrl, resultUrl);
+  assert.equal(traceEvents.some((event) => event.event === "background.job.result_blocked"), true);
+  assert.equal(traceEvents.some((event) => event.event === "background.job.result_received"), false);
 });
 
 test("trace helper does not throw when console debug fails", () => {
@@ -2307,6 +2406,62 @@ test("renderer success returns rendered and removes fading ownership class", asy
   assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
   assert.equal(image.classList.contains("ai-manga-upscaler-ready"), true);
   assert.equal(renderer.activeObjectUrls.get(image), "blob:render-success");
+});
+
+test("renderer restores the exact original DOM state after a committed AI result is banned", async () => {
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:wrong-result";
+  const { Renderer, trackedImages } = loadContentClasses({ urlApi });
+  const renderer = new Renderer();
+  renderer.fadeOut = async (target) => target.classList.add("ai-manga-upscaler-fading");
+  const pictureSource = makeRenderElement({ attributes: { srcset: "original-wide.webp 2x", sizes: "80vw" } });
+  const image = makeRenderElement({
+    src: "https://cdn.example.test/original.jpg",
+    attributes: {
+      src: "https://cdn.example.test/original.jpg",
+      srcset: "original-small.jpg 1x, original-large.jpg 2x",
+      sizes: "90vw",
+    },
+    style: { width: "640px", height: "auto", maxWidth: "95%", aspectRatio: "4 / 7", objectFit: "cover" },
+  });
+  const entry = {
+    imageId: "restore-image",
+    operationId: "restore-operation",
+    sourceRevision: "restore-revision",
+    metadata: {
+      imageUrl: image.src,
+      width: 640,
+      height: 1120,
+      src: image.src,
+      srcset: image.getAttribute("srcset"),
+      sizes: image.getAttribute("sizes"),
+      pictureSources: [{ source: pictureSource, srcset: pictureSource.getAttribute("srcset"), sizes: pictureSource.getAttribute("sizes") }],
+    },
+  };
+  trackedImages.set(entry.imageId, entry);
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from("wrong-result").toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  image.complete = true;
+  image.dispatch("load");
+  assert.equal(await rendering, "rendered");
+  assert.equal(image.src, "blob:wrong-result");
+
+  assert.equal(renderer.restoreOriginal(image), true);
+  assert.equal(image.src, "https://cdn.example.test/original.jpg");
+  assert.equal(image.getAttribute("srcset"), "original-small.jpg 1x, original-large.jpg 2x");
+  assert.equal(image.getAttribute("sizes"), "90vw");
+  assert.equal(pictureSource.getAttribute("srcset"), "original-wide.webp 2x");
+  assert.equal(pictureSource.getAttribute("sizes"), "80vw");
+  assert.deepEqual(image.style, { width: "640px", height: "auto", maxWidth: "95%", aspectRatio: "4 / 7", objectFit: "cover" });
+  assert.equal(image.classList.contains("ai-manga-upscaler-ready"), false);
+  assert.equal(renderer.activeObjectUrls.has(image), false);
+  assert.deepEqual(urlApi.revoked, ["blob:wrong-result"]);
 });
 
 test("renderer rollback preserves an originally absent src attribute", async () => {
@@ -3178,6 +3333,105 @@ test("a completed image remains skipped after disable and re-enable", () => {
   assert.equal((image.listeners.get("load") || []).length, 1);
 });
 
+test("rejecting an exact AI result restores the original without blacklisting its source", () => {
+  const restored = [];
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    restoreOriginal: (image) => {
+      restored.push(image);
+      return true;
+    },
+  };
+  const { viewportProvider, sentMessages, trackedImages, trackedImageKeys, HTMLImageElement } = makeContentProvider({ renderer });
+  const image = new HTMLImageElement();
+  image.src = "https://cdn.example.test/original.jpg";
+  image.currentSrc = image.src;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 1400;
+  const metadata = viewportProvider.imageProvider.read(image);
+  const baseKey = viewportProvider.imageKey(metadata, image);
+  const entry = {
+    imageId: "image-result-ban",
+    operationId: "operation-result-ban",
+    traceId: "trace-result-ban",
+    sourceRevision: baseKey,
+    baseKey,
+    image,
+    metadata,
+    state: "fixed",
+    pageOrder: 0,
+  };
+  trackedImages.set(entry.imageId, entry);
+  trackedImageKeys.set(baseKey, entry);
+
+  const result = viewportProvider.rejectImageResult({
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    resultUrl: "http://127.0.0.1:8766/cache/images/wrong.webp",
+  });
+
+  assert.equal(result.rejected, true);
+  assert.deepEqual(restored, [image]);
+  assert.equal(viewportProvider.isBlacklisted(metadata.imageUrl), false);
+  assert.equal(viewportProvider.isBlockedResult("http://127.0.0.1:8766/cache/images/wrong.webp"), true);
+  assert.equal(trackedImages.has(entry.imageId), false);
+  assert.ok(sentMessages.some((message) => (
+    message.type === "IMAGE_RESULT_REJECTED" &&
+    message.imageId === entry.imageId &&
+    message.operationId === entry.operationId
+  )));
+});
+
+test("a previously banned AI result is discarded before the DOM render transaction", async () => {
+  let renderCalls = 0;
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    restoreOriginal: () => true,
+    render: async () => {
+      renderCalls += 1;
+      return "rendered";
+    },
+  };
+  const { viewportProvider, trackedImages, trackedImageKeys, HTMLImageElement } = makeContentProvider({ renderer });
+  const image = new HTMLImageElement();
+  image.src = "https://cdn.example.test/original-2.jpg";
+  image.currentSrc = image.src;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 1400;
+  const metadata = viewportProvider.imageProvider.read(image);
+  const baseKey = viewportProvider.imageKey(metadata, image);
+  const entry = {
+    imageId: "image-result-recurrence",
+    operationId: "operation-result-recurrence",
+    traceId: "trace-result-recurrence",
+    sourceRevision: baseKey,
+    sourceFingerprint: null,
+    baseKey,
+    image,
+    metadata,
+    state: "waiting",
+    pageOrder: 0,
+    isSegment: false,
+  };
+  trackedImages.set(entry.imageId, entry);
+  trackedImageKeys.set(baseKey, entry);
+  viewportProvider.blockedResults.add("http://127.0.0.1:8766/cache/images/wrong-2.webp");
+
+  const outcome = await viewportProvider.complete({
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: baseKey,
+    sourceFingerprint: null,
+    enhancedImageUrl: "http://127.0.0.1:8766/cache/images/wrong-2.webp",
+    imageBase64: "enhanced",
+  });
+
+  assert.equal(outcome, "result-rejected");
+  assert.equal(renderCalls, 0);
+});
+
 test("initial discovery opens only a bounded number of nearest lookahead images at once", async () => {
   const reads = [];
   const { viewportProvider, sentMessages, HTMLImageElement, trackedImages } = makeContentProvider({
@@ -3761,6 +4015,61 @@ test("candidate evaluator rejects explicitly marked interface and advertising im
 
   assert.equal(viewportProvider.canProcessCandidate(advertisement), false);
   assert.equal(viewportProvider.canProcessCandidate(navigationIcon), false);
+});
+
+test("candidate evaluator rejects HentaiVNX-style chapter promotion banners", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const banner = makeTallImage("hentaivnx-promotion");
+  banner.naturalWidth = banner.clientWidth = banner.width = 1420;
+  banner.naturalHeight = banner.clientHeight = banner.height = 520;
+  banner.alt = "ĐỌC CHAP MỚI MIỄN PHÍ SỚM NHẤT TẠI HENTAIVNX.NET";
+  banner.getBoundingClientRect = () => ({ width: 1420, height: 520, top: 0, bottom: 520, left: 0, right: 1420 });
+
+  assert.equal(imageProvider.canProcess(banner), false);
+});
+
+test("candidate evaluator rejects the live HentaiVNX bn.png banner but keeps chapter images with the same generic alt", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const banner = makeTallImage("live-bn");
+  banner.src = banner.currentSrc = "https://www.hentaivnx.live/images/bn.png";
+  banner.alt = "HentaiVn Truyện tranh online";
+  banner.naturalWidth = banner.clientWidth = banner.width = 2546;
+  banner.naturalHeight = banner.clientHeight = banner.height = 930;
+  banner.getBoundingClientRect = () => ({ width: 1273, height: 465, top: 0, bottom: 465, left: 0, right: 1273 });
+  const chapter = makeTallImage("live-page");
+  chapter.src = chapter.currentSrc = "https://sv5.2tcdn.cfd/for-sale-fallen-lady-never-used/29/1.jpg";
+  chapter.alt = "HentaiVn Truyện tranh online";
+
+  assert.equal(imageProvider.canProcess(banner), false);
+  assert.equal(imageProvider.canProcess(chapter), true);
+});
+
+test("candidate evaluator rejects wide short branding banners even when input limits are disabled", () => {
+  const { ImageProvider } = loadContentClasses();
+  const imageProvider = new ImageProvider({
+    minInputWidthEnabled: false,
+    minInputHeightEnabled: false,
+    maxInputWidthEnabled: false,
+    maxInputHeightEnabled: false,
+  });
+  const banner = makeTallImage("wide-branding");
+  banner.naturalWidth = banner.clientWidth = banner.width = 1600;
+  banner.naturalHeight = banner.clientHeight = banner.height = 360;
+  banner.getBoundingClientRect = () => ({ width: 1600, height: 360, top: 0, bottom: 360, left: 0, right: 1600 });
+
+  assert.equal(imageProvider.canProcess(banner), false);
 });
 
 test("candidate evaluator rejects the common one-pixel tracking GIF", () => {

@@ -819,6 +819,68 @@ async function main() {
     assert.ok(dashboardLoad.filterMs < 3000, `Dashboard filter took ${dashboardLoad.filterMs} ms`);
     assert.ok(dashboardLoad.detailMs < 3000, `Dashboard detail took ${dashboardLoad.detailMs} ms`);
     if (heapBefore && heapAfter) assert.ok(heapAfter - heapBefore < 128 * 1024 * 1024, "Dashboard heap growth must remain bounded");
+
+    // Run lookahead before adding a global result-ban rule; fixture outputs may share cache URLs.
+    const lookaheadTargetCreated = await browserClient.send("Target.createTarget", { url: `${fixture.origin}/lookahead-e2e` });
+    const lookaheadTarget = await waitFor("lookahead fixture target", async () => {
+      const currentTargets = await listTargets(port);
+      return currentTargets.find((target) => target.id === lookaheadTargetCreated.targetId && target.webSocketDebuggerUrl) || null;
+    });
+    lookaheadClient = await connectTarget(lookaheadTarget);
+    await lookaheadClient.send("Page.enable");
+    await lookaheadClient.send("Runtime.enable");
+    const lookaheadEvidence = await waitFor("offscreen image processing before scroll", async () => {
+      const state = await lookaheadClient.evaluate(`(() => {
+        const image = document.querySelector('#eligible-lookahead');
+        if (!image) return null;
+        const rect = image.getBoundingClientRect();
+        return {
+          marker: document.body?.dataset.fixture || null,
+          ready: image.classList.contains('ai-manga-upscaler-ready'),
+          src: image.src,
+          scrollY: window.scrollY,
+          viewportHeight: window.innerHeight,
+          rectTop: rect.top,
+          viewportDistance: Math.max(0, rect.top - window.innerHeight),
+        };
+      })()`);
+      if (state?.marker !== "lookahead-e2e-v1" || !state.ready || !state.src?.startsWith("blob:")) return null;
+      const health = await readHealth();
+      if (health.queue.size !== 0 || health.queue.waiting !== 0 || health.queue.processing !== 0) return null;
+      return state;
+    }, 60000);
+    assert.equal(lookaheadEvidence.scrollY, 0, "lookahead acceptance scrolled the page");
+    assert.ok(lookaheadEvidence.viewportDistance > 1800, "lookahead image was outside the legacy prefetch margin");
+
+    const resultBanEvidence = await waitFor("Dashboard exact AI-result ban", async () => dashboardClient.evaluate(`(async () => {
+      const row = [...document.querySelectorAll('.image-row')].find((candidate) => candidate.querySelector('.ban-result'));
+      const button = row?.querySelector('.ban-result');
+      if (!button?.dataset.resultUrl) return null;
+      const resultUrl = button.dataset.resultUrl;
+      const originalUrl = row.querySelector('.original-media img')?.currentSrc || '';
+      button.click();
+      for (let index = 0; index < 150; index += 1) {
+        const stored = await chrome.storage.local.get({ blockedResultRules: [], blacklistRules: [] });
+        if (stored.blockedResultRules.includes(resultUrl)) {
+          return {
+            resultUrl,
+            originalUrl,
+            status: row.querySelector('.state')?.textContent || null,
+            sourceStillUnblocked: !stored.blacklistRules.includes(originalUrl),
+            buttonText: button.textContent,
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return null;
+    })()`), 20000);
+    assert.ok(resultBanEvidence, "Dashboard must expose a working exact-result ban action");
+    assert.equal(resultBanEvidence.sourceStillUnblocked, true);
+    assert.equal(resultBanEvidence.buttonText, "Banned");
+    const restoredAfterBan = await waitFor("content restores original after result ban", async () => pageClient.evaluate(`(() => {
+      const image = document.querySelector('#eligible-static');
+      return image && !String(image.currentSrc || image.src).startsWith('blob:') ? image.currentSrc || image.src : null;
+    })()`), 20000);
     dashboardEvidence.summary = dashboardSeed.summary;
     dashboardEvidence.filters = { completedRows: completedFilter.length, compoundRows: compoundFilter.length, searchRows: searchResult.length };
     dashboardEvidence.retry = { oldOperation: retrySource.operationId, newOperation: retryRecord.operationId, retryCount: retryRecord.retryCount, linkedParent: retryRecord.parentJobId === retrySource.key };
@@ -828,6 +890,7 @@ async function main() {
     dashboardEvidence.detailToggle = detailToggleState;
     dashboardEvidence.listToggle = { ...defaultMonitorListState, expandedOnDemand: true };
     dashboardEvidence.pendingOriginalPreview = pendingOriginalPreview;
+    dashboardEvidence.resultBan = { ...resultBanEvidence, restoredSource: restoredAfterBan };
     dashboardEvidence.load = { syntheticJobs: 500, renderedRows: dashboardLoad.rows, renderMs: Math.round(dashboardLoad.renderMs), filterMs: Math.round(dashboardLoad.filterMs), detailMs: Math.round(dashboardLoad.detailMs), heapGrowthBytes: heapBefore && heapAfter ? heapAfter - heapBefore : null };
 
     dashboardClient.close();
@@ -1052,37 +1115,6 @@ async function main() {
       protectedRequests: fixture.lifecycleRequestCount("reload"),
       queue: settledReloadState.queue,
     };
-
-    const lookaheadTargetCreated = await browserClient.send("Target.createTarget", { url: `${fixture.origin}/lookahead-e2e` });
-    const lookaheadTarget = await waitFor("lookahead fixture target", async () => {
-      const currentTargets = await listTargets(port);
-      return currentTargets.find((target) => target.id === lookaheadTargetCreated.targetId && target.webSocketDebuggerUrl) || null;
-    });
-    lookaheadClient = await connectTarget(lookaheadTarget);
-    await lookaheadClient.send("Page.enable");
-    await lookaheadClient.send("Runtime.enable");
-    const lookaheadEvidence = await waitFor("offscreen image processing before scroll", async () => {
-      const state = await lookaheadClient.evaluate(`(() => {
-        const image = document.querySelector('#eligible-lookahead');
-        if (!image) return null;
-        const rect = image.getBoundingClientRect();
-        return {
-          marker: document.body?.dataset.fixture || null,
-          ready: image.classList.contains('ai-manga-upscaler-ready'),
-          src: image.src,
-          scrollY: window.scrollY,
-          viewportHeight: window.innerHeight,
-          rectTop: rect.top,
-          viewportDistance: Math.max(0, rect.top - window.innerHeight),
-        };
-      })()`);
-      if (state?.marker !== "lookahead-e2e-v1" || !state.ready || !state.src?.startsWith("blob:")) return null;
-      const health = await readHealth();
-      if (health.queue.size !== 0 || health.queue.waiting !== 0 || health.queue.processing !== 0) return null;
-      return state;
-    }, 60000);
-    assert.equal(lookaheadEvidence.scrollY, 0, "lookahead acceptance scrolled the page");
-    assert.ok(lookaheadEvidence.viewportDistance > 1800, "lookahead image was outside the legacy prefetch margin");
 
     const browserExceptions = [pageClient, popupClient, lookaheadClient, ...workerClients]
       .filter(Boolean)

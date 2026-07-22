@@ -99,7 +99,12 @@ function loadDashboard(options = {}) {
     window: { location: { search: "?tabId=7" } },
     chrome: {
       runtime: { sendMessage: options.sendMessage || (async () => ({})) },
-      storage: { local: { get: async () => ({ blacklistRules: [] }), set: async () => undefined } },
+      storage: {
+        local: {
+          get: options.storageGet || (async () => ({ blacklistRules: [], blockedResultRules: [] })),
+          set: options.storageSet || (async () => undefined),
+        },
+      },
     },
   });
   vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorListToggle = initializeMonitorListToggle; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle; globalThis.__refreshEnhancementControls = refreshEnhancementControls;`, context);
@@ -261,6 +266,39 @@ test("dashboard recovers a protected pending original through the background pre
   renderImages([imageRecord({ pageUrl: "https://reader.example/chapter/1" })]);
   assert.equal(row.__parts.originalMedia.firstElementChild, fallback);
   assert.equal(messages.length, 1);
+});
+
+test("dashboard bans the exact AI result without adding the original URL to the source blacklist", async () => {
+  const messages = [];
+  const stored = [];
+  const { renderImages, imageRows } = loadDashboard({
+    sendMessage: async (message) => {
+      messages.push(message);
+      return { banned: true };
+    },
+    storageSet: async (value) => stored.push(value),
+  });
+  const record = imageRecord({
+    status: "fixed",
+    originalImageUrl: "https://cdn.example.test/original.jpg",
+    enhancedImageUrl: "http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-1",
+  });
+
+  renderImages([record]);
+  const row = [...imageRows.values()][0];
+  const banButton = row.__parts.aiActions.children.find((child) => child.className === "ban-result");
+  assert.ok(banButton);
+  banButton.dispatch("click");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, "BAN_IMAGE_RESULT");
+  assert.equal(messages[0].tabId, 7);
+  assert.equal(messages[0].imageId, "image-1");
+  assert.equal(messages[0].operationId, "operation-1");
+  assert.equal(messages[0].resultUrl, "http://127.0.0.1:8766/cache/images/enhanced.webp?key=result-1");
+  assert.deepEqual(stored, []);
+  assert.equal(banButton.textContent, "Banned");
 });
 
 test("ERR-422-001 dashboard renders validation field and trace separately from preview state", () => {

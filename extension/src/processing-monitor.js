@@ -79,7 +79,10 @@ var AI_PROCESSING_MONITOR = (() => {
     }
     if (["CANCELLED", "FAILED", "TIMED_OUT", "REMOVED"].includes(toStage)) return true;
     if (toStage === "SKIPPED") {
-      return ["DETECTED", "WAITING_FOR_VIEWPORT", "READING_SOURCE", "VALIDATING_SOURCE"].includes(fromStage);
+      return [
+        "DETECTED", "WAITING_FOR_VIEWPORT", "READING_SOURCE", "VALIDATING_SOURCE",
+        "RECEIVING_RESULT", "PREPARING_RENDER", "RENDERING",
+      ].includes(fromStage);
     }
     return Boolean(SUCCESSORS[fromStage]?.includes(toStage));
   }

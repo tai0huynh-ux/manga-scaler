@@ -46,9 +46,10 @@ const DEFAULT_STATE = Object.freeze({
   lastModel: null,
   lastProvider: null,
   blacklistRules: [],
+  blockedResultRules: [],
 });
 
-const STORAGE_SCHEMA_VERSION = 4;
+const STORAGE_SCHEMA_VERSION = 5;
 const STORAGE_BOOLEAN_KEYS = new Set([
   "enabled", "minInputWidthEnabled", "minInputHeightEnabled", "maxInputWidthEnabled",
   "maxInputHeightEnabled", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
@@ -76,6 +77,18 @@ const STORAGE_STRING_LIMITS = {
   textTargetLanguage: 16,
 };
 
+function normalizeBlockedResultUrl(value) {
+  try {
+    if (typeof value !== "string" || !value || value.length > 16384) return null;
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 function migratePersistedSettings(rawState = {}) {
   const source = rawState && typeof rawState === "object" && !Array.isArray(rawState) ? rawState : {};
   const sourceSchemaVersion = Number(source.storageSchemaVersion) || 0;
@@ -84,13 +97,13 @@ function migratePersistedSettings(rawState = {}) {
     if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
     const value = source[key];
     if (STORAGE_BOOLEAN_KEYS.has(key)) {
-      if (key === "aheadProcessingEnabled" && sourceSchemaVersion < STORAGE_SCHEMA_VERSION) continue;
+      if (key === "aheadProcessingEnabled" && sourceSchemaVersion < 4) continue;
       if (typeof value === "boolean") migrated[key] = value;
       continue;
     }
     if (Object.prototype.hasOwnProperty.call(STORAGE_NUMERIC_BOUNDS, key)) {
       if (
-        sourceSchemaVersion < STORAGE_SCHEMA_VERSION &&
+        sourceSchemaVersion < 4 &&
         key === "aheadProcessingImageLimit"
       ) continue;
       const [minimum, maximum] = STORAGE_NUMERIC_BOUNDS[key];
@@ -110,6 +123,9 @@ function migratePersistedSettings(rawState = {}) {
     else if (key === "resolutionPreset" && ["hd", "fhd", "2k", "4k"].includes(value)) migrated[key] = value;
     else if (key === "screenOrientation" && ["auto", "landscape", "portrait"].includes(value)) migrated[key] = value;
     else if (key === "blacklistRules" && Array.isArray(value)) migrated[key] = value.filter((item) => typeof item === "string").slice(0, 100);
+    else if (key === "blockedResultRules" && Array.isArray(value)) {
+      migrated[key] = [...new Set(value.map(normalizeBlockedResultUrl).filter(Boolean))].slice(-200);
+    }
     else if (key === "lastQuality" || key === "lastDetectedMode" || key === "lastComparison") {
       if (value === null || typeof value === "string" || typeof value === "object") migrated[key] = value;
     } else if (typeof value === typeof DEFAULT_STATE[key]) {
@@ -537,6 +553,7 @@ class StatisticsTracker {
       lastModel: current.lastModel || null,
       lastProvider: current.lastProvider || null,
       blacklistRules: current.blacklistRules || [],
+      blockedResultRules: current.blockedResultRules || [],
       scopes: {
         currentPage: { ...currentTab, processing: queueSnapshot.byTab[activeTabId] ?? 0 },
         openPages: { ...openTabs, processing: queueSnapshot.queueSize },
@@ -1597,6 +1614,7 @@ class QueueScheduler {
           },
         });
         if (!this.isCurrentJob(job)) return;
+        if (await this.rejectBlockedResult(job, cached, true)) return;
         this.sendComplete(job, cached, true);
         emitTrace({
           event: "background.job.result_received",
@@ -1680,7 +1698,7 @@ class QueueScheduler {
       });
       await this.cacheProvider.set(cacheIdentity, result);
       if (!this.isCurrentJob(job)) return;
-      if (!this.isCurrentJob(job)) return;
+      if (await this.rejectBlockedResult(job, result, false)) return;
       this.sendComplete(job, result, false);
       emitTrace({
         event: "background.job.result_received",
@@ -1814,6 +1832,49 @@ class QueueScheduler {
     }
   }
 
+  async rejectBlockedResult(job, result, cacheHit) {
+    const resultUrl = normalizeBlockedResultUrl(result?.enhancedImageUrl);
+    if (!resultUrl) return false;
+    let settings;
+    try {
+      settings = await getRuntimeSettings();
+    } catch {
+      return false;
+    }
+    if (!this.isCurrentJob(job)) return false;
+    const blocked = Array.isArray(settings?.blockedResultRules) && settings.blockedResultRules
+      .some((rule) => normalizeBlockedResultUrl(rule) === resultUrl);
+    if (!blocked) return false;
+    pageImageRegistry.update(job.tabId, job.imageId, {
+      operationId: job.operationId,
+      status: "skipped",
+      reason: "blocked-ai-result",
+      originalImageUrl: result.originalImageUrl || job.imageUrl,
+      enhancedImageUrl: null,
+      renderCommit: false,
+      completionStats: undefined,
+    });
+    await this.monitorJobEvent(job, "SKIPPED", {
+      cache: cacheHit ? "HIT" : "MISS",
+      metadata: { reason: "blocked_ai_result", previewValid: false },
+    });
+    chrome.tabs.sendMessage(job.tabId, {
+      type: "REJECT_IMAGE_RESULT",
+      imageId: job.imageId,
+      operationId: job.operationId,
+      resultUrl,
+      reason: "previously-blocked-ai-result",
+    }).catch(() => {});
+    emitTrace({
+      event: "background.job.result_blocked",
+      traceId: job.traceId,
+      status: "skipped",
+      attempt: job.attempt,
+      metadata: { reason: "blocked_ai_result" },
+    });
+    return true;
+  }
+
   sendComplete(job, result, cacheHit) {
     chrome.tabs.sendMessage(job.tabId, {
       type: "UPSCALE_COMPLETE",
@@ -1823,6 +1884,8 @@ class QueueScheduler {
       sourceFingerprint: job.sourceFingerprint || null,
       traceId: job.traceId,
       imageUrl: job.imageUrl,
+      originalImageUrl: result.originalImageUrl || job.imageUrl,
+      enhancedImageUrl: result.enhancedImageUrl || null,
       imageBase64: this.arrayBufferToBase64(result.buffer),
       contentType: result.contentType,
       cacheKey: result.cacheKey,
@@ -2360,6 +2423,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "IMAGE_RESULT_REJECTED") {
+    if (!hasMessageOperationIdentity(message, sender)) {
+      sendResponse({ recorded: false, reason: "Missing operation identity." });
+      return false;
+    }
+    const current = pageImageRegistry.page(sender.tab.id).get(message.imageId);
+    if (!current || current.operationId !== message.operationId) {
+      sendResponse({ recorded: false, stale: true });
+      return false;
+    }
+    pageImageRegistry.update(sender.tab.id, message.imageId, {
+      operationId: message.operationId,
+      status: "skipped",
+      reason: message.reason || "blocked-ai-result",
+      enhancedImageUrl: null,
+      renderCommit: false,
+      completionStats: undefined,
+    });
+    recordProcessingEvent({
+      tabId: sender.tab.id,
+      imageId: message.imageId,
+      operationId: message.operationId,
+      traceId: message.traceId,
+      sourceUrl: current.imageUrl,
+      stage: "SKIPPED",
+      metadata: { reason: message.reason || "blocked_ai_result", previewValid: false },
+    }).then(() => sendResponse({ recorded: true }));
+    return true;
+  }
+
   if (message.type === "PREPROCESSING_FALLBACK") {
     if (!hasMessageOperationIdentity(message, sender)) {
       sendResponse({ recorded: false, reason: "Missing operation identity." });
@@ -2572,6 +2665,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = Number.isInteger(message.tabId) ? message.tabId : lastContentTabId;
     sendResponse({ tabId, images: Number.isInteger(tabId) ? pageImageRegistry.list(tabId) : [] });
     return false;
+  }
+
+  if (message.type === "BAN_IMAGE_RESULT") {
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : null;
+    const imageId = typeof message.imageId === "string" ? message.imageId : "";
+    const operationId = typeof message.operationId === "string" ? message.operationId : "";
+    const resultUrl = normalizeBlockedResultUrl(message.resultUrl);
+    if (!Number.isInteger(tabId) || tabId < 0 || !imageId || !operationId || !resultUrl) {
+      sendResponse({ banned: false, reason: "Invalid result identity." });
+      return false;
+    }
+    const current = pageImageRegistry.page(tabId).get(imageId);
+    if (!current || current.operationId !== operationId || normalizeBlockedResultUrl(current.enhancedImageUrl) !== resultUrl) {
+      sendResponse({ banned: false, stale: true, reason: "AI result is no longer current." });
+      return false;
+    }
+    Promise.resolve(chrome.storage.local.get({ blockedResultRules: [] })).then(async (stored) => {
+      const latest = pageImageRegistry.page(tabId).get(imageId);
+      if (!latest || latest.operationId !== operationId || normalizeBlockedResultUrl(latest.enhancedImageUrl) !== resultUrl) {
+        sendResponse({ banned: false, stale: true, reason: "AI result changed while banning." });
+        return;
+      }
+      const rules = Array.isArray(stored?.blockedResultRules) ? stored.blockedResultRules : [];
+      const nextRules = [...new Set([...rules.map(normalizeBlockedResultUrl).filter(Boolean), resultUrl])].slice(-200);
+      await chrome.storage.local.set({ blockedResultRules: nextRules });
+      scheduler.cancel(tabId, imageId, operationId);
+      pageImageRegistry.update(tabId, imageId, {
+        operationId,
+        status: "skipped",
+        reason: "blocked-ai-result",
+        enhancedImageUrl: null,
+        renderCommit: false,
+        completionStats: undefined,
+      });
+      chrome.tabs.sendMessage(tabId, {
+        type: "REJECT_IMAGE_RESULT",
+        imageId,
+        operationId,
+        resultUrl,
+      }).catch(() => {});
+      sendResponse({ banned: true, resultUrl });
+    }).catch((error) => sendResponse({ banned: false, reason: error?.message || "Unable to persist result ban." }));
+    return true;
   }
 
   if (message.type === "RETRY_IMAGE") {

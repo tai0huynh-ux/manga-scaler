@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added an exact `Ban wrong result` Dashboard action. It stores only the current AI result URL, never the original source URL, restores a committed image to its original DOM state, and skips the same result before base64/render delivery on future operations.
+- Added schema-5 `blockedResultRules` migration with bounded HTTP/HTTPS normalization and separate Dashboard removal controls for original-source and AI-result rules.
+- Rejected HentaiVNX `/images/bn.png` and explicit promotion/banner assets during discovery while preserving normal chapter images with generic reader `alt` text.
 - Fixed Dashboard image rows so an original preview appears as soon as an image is detected, before preprocessing or AI completion. Remote previews use lazy/low-priority loading; protected CDN failures fall back to a one-shot, operation-checked browser read without retrying the same failed URL every poll.
 - Fixed extension/browser lag from monitor persistence and Dashboard rendering: monitor recovery snapshots are compact and bounded, summary-only reads avoid transferring timelines while the list is closed, polling is single-flight/visibility-aware, and the Processing Monitor job list is collapsed by default until opened.
 - Prevented delayed content messages from resurrecting an operation cancelled during service-worker restart; retries continue to use a new operation identity.

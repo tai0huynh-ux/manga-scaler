@@ -37,6 +37,7 @@ const statusPresentation = {
   error: ["Processing failed", "The image could not be processed."],
   timeout: ["Timed out", "Processing exceeded the allowed stage timeout."],
   cancelled: ["Cancelled", "This operation was cancelled."],
+  skipped: ["Skipped", "This AI result was banned; the original image remains visible."],
   removed: ["No longer available", "The source image is no longer on the page."],
 };
 
@@ -86,7 +87,7 @@ async function performRefresh() {
   renderImages(images);
   renderQuality([...images].reverse().find((item) => item.quality)?.quality || stats.lastQuality);
   renderScopes(stats.scopes || {});
-  renderBlacklist(stats.blacklistRules || []);
+  renderBlacklist(stats.blacklistRules || [], stats.blockedResultRules || []);
   renderMonitor(monitorSnapshot, images, stats);
 }
 
@@ -339,11 +340,19 @@ function formatMonitorSource(source) {
   return `${source.scheme}://${source.hostname}${source.path || "/"}${source.queryKeys?.length ? ` ?${source.queryKeys.join(", ")}` : ""}`;
 }
 
-function renderBlacklist(rules) {
+function renderBlacklist(sourceRules, resultRules = []) {
   const target = document.getElementById("blacklist");
   target.replaceChildren();
-  if (!rules.length) { target.textContent = "No images are blocked."; return; }
-  rules.forEach((rule) => {
+  const groups = [
+    { title: "Original sources", key: "blacklistRules", rules: sourceRules },
+    { title: "AI results", key: "blockedResultRules", rules: resultRules },
+  ].filter((group) => group.rules.length);
+  if (!groups.length) { target.textContent = "No images are blocked."; return; }
+  groups.forEach((group) => {
+    const heading = document.createElement("strong");
+    heading.textContent = group.title;
+    target.appendChild(heading);
+    group.rules.forEach((rule) => {
     const row = document.createElement("div");
     row.className = "blacklist-row";
     const text = document.createElement("code");
@@ -351,11 +360,13 @@ function renderBlacklist(rules) {
     const remove = document.createElement("button");
     remove.textContent = "Remove";
     remove.addEventListener("click", async () => {
-      await chrome.storage.local.set({ blacklistRules: rules.filter((item) => item !== rule) });
+      const stored = await chrome.storage.local.get({ blacklistRules: [], blockedResultRules: [] });
+      await chrome.storage.local.set({ [group.key]: (stored[group.key] || []).filter((item) => item !== rule) });
       refresh();
     });
     row.append(text, remove);
     target.appendChild(row);
+    });
   });
 }
 
@@ -413,6 +424,9 @@ function createImageRow() {
   aiMedia.className = "image-media ai-media";
   const aiActions = document.createElement("div");
   aiActions.className = "image-actions";
+  const openAi = createOpenButton("", "Open AI image");
+  const banResult = createBanResultButton();
+  aiActions.append(openAi, banResult);
   ai.append(aiCaption, aiMedia, aiActions);
 
   const originalCaption = document.createElement("figcaption");
@@ -425,7 +439,7 @@ function createImageRow() {
   originalActions.append(openOriginal, block);
   original.append(originalCaption, originalMedia, originalActions);
   row.append(ai, original);
-  row.__parts = { aiLabel, state, aiMedia, aiActions, originalCaption, originalMedia, openOriginal, block };
+  row.__parts = { aiLabel, state, aiMedia, aiActions, openAi, banResult, originalCaption, originalMedia, openOriginal, block };
   return row;
 }
 
@@ -439,7 +453,16 @@ function updateImageRow(row, item, index) {
 
   if (item.enhancedImageUrl) {
     updateMediaImage(parts.aiMedia, item.enhancedImageUrl, `AI enhanced image ${index + 1}`, "AI result is unavailable.");
-    updateSingleOpenButton(parts.aiActions, item.enhancedImageUrl, "Open AI image");
+    const previousResultUrl = parts.banResult.dataset.resultUrl;
+    parts.openAi.href = item.enhancedImageUrl;
+    parts.openAi.textContent = "Open AI image";
+    parts.banResult.dataset.tabId = String(item.tabId ?? contentTabId ?? "");
+    parts.banResult.dataset.imageId = item.imageId || "";
+    parts.banResult.dataset.operationId = item.operationId || "";
+    parts.banResult.dataset.resultUrl = item.enhancedImageUrl;
+    parts.banResult.disabled = false;
+    if (previousResultUrl !== item.enhancedImageUrl) parts.banResult.textContent = "Ban wrong result";
+    parts.aiActions.replaceChildren(parts.openAi, parts.banResult);
   } else {
     const [title, defaultDetail] = statusPresentation[status] || ["Waiting", "The image operation has not completed yet."];
     updateMediaPlaceholder(
@@ -615,8 +638,8 @@ function createBlockButton(source) {
   const button = document.createElement("button");
   button.className = "block-image";
   button.type = "button";
-  button.textContent = "Block AI";
-  button.title = "Do not upscale this image again";
+  button.textContent = "Block original";
+  button.title = "Do not process this original source again";
   button.dataset.source = source;
   button.addEventListener("click", async () => {
     const rule = normalizeImageUrl(button.dataset.source || "");
@@ -625,6 +648,35 @@ function createBlockButton(source) {
     button.disabled = true;
     button.textContent = "Blocked";
     refresh();
+  });
+  return button;
+}
+
+function createBanResultButton() {
+  const button = document.createElement("button");
+  button.className = "ban-result";
+  button.type = "button";
+  button.textContent = "Ban wrong result";
+  button.title = "Ban only this AI result, not the original image";
+  button.addEventListener("click", async () => {
+    if (button.disabled || !button.dataset.resultUrl) return;
+    button.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "BAN_IMAGE_RESULT",
+        tabId: Number(button.dataset.tabId),
+        imageId: button.dataset.imageId,
+        operationId: button.dataset.operationId,
+        resultUrl: button.dataset.resultUrl,
+      });
+      if (response?.banned) {
+        button.textContent = "Banned";
+        return;
+      }
+    } catch {
+      // Keep the action retryable when the service worker is unavailable.
+    }
+    button.disabled = false;
   });
   return button;
 }

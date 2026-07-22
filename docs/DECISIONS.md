@@ -10,6 +10,16 @@ Reason: The common path does not copy image bytes through the service worker or 
 
 Consequence: Origin and enhanced images can coexist from the first detected state through completion. A source that remains unavailable after both paths shows the existing placeholder and open-source link; canvas/background/WebGL sources remain outside the registry contract.
 
+## 2026-07-22 - Ban exact enhanced results without banning sources
+
+Context: A reader promotional banner was falsely enhanced, and users needed a way to reject one malformed AI output while preserving the original image and allowing later settings/source changes to try again.
+
+Decision: Persist a bounded `blockedResultRules` list of exact normalized HTTP/HTTPS enhanced-result URLs. Dashboard bans must match the current registry operation and result URL; the background rejects matching cache/backend results before base64 DOM delivery. Content retains a first-original renderer snapshot so a post-commit rejection restores the original source, responsive state, styles, and Blob ownership.
+
+Reason: Result identity and source identity are different contracts. Exact URL matching avoids poisoning every future source operation, early background rejection removes unnecessary browser serialization/paint work, and snapshot restore is safer than reconstructing responsive DOM state from the current Blob.
+
+Consequence: Banned results become `skipped` and remain visible as originals. Removing a result rule is independent from removing a source rule. Automatic alternate-source guessing remains out of scope; future reprocessing may use a new operation/settings/cache identity.
+
 ## 2026-07-20 - Activate registered slice wrappers before enhanced results arrive
 
 Context: A stale or constrained DOM size could send an extreme manga page through full-image inference, producing a very narrow output at the backend height cap. Waiting for every backend segment result before replacing the main image made long pages appear stuck, while inserting each enhanced segment into the reader caused visible layout/paint churn.

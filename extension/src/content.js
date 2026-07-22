@@ -114,17 +114,49 @@ class ImageProvider {
     if (isReaderChrome) return true;
     const source = image?.currentSrc || image?.src || "";
     if (/^data:image\/gif;base64,R0lGODlhAQABA/i.test(source)) return true;
-    const attributes = [
-      image?.alt,
-      image?.title,
+    const identityAttributes = [
       image?.id,
       image?.className,
-      image?.getAttribute?.("aria-label"),
       image?.currentSrc,
       image?.src,
     ].filter((value) => typeof value === "string").join(" ").toLowerCase();
-    const explicitAssetPattern = /(^|[\s_./-])(advert(?:isement|ising)?|ads?|adserver|adservice|doubleclick|googleads|avatar|badge|emoji|icon|logo|sprite)(?=$|[\s_./-])|noavatar/i;
-    if (explicitAssetPattern.test(attributes)) return true;
+    const descriptiveAttributes = [
+      image?.alt,
+      image?.title,
+      image?.getAttribute?.("aria-label"),
+    ].filter((value) => typeof value === "string").join(" ").toLowerCase();
+    const explicitAssetPattern = /(^|[\s_./-])(advert(?:isement|ising)?|ads?|adserver|adservice|doubleclick|googleads|avatar|badge|branding|banner|emoji|icon|logo|promo(?:tion)?|sponsor|announcement|notice|chapter-nav|sprite)(?=$|[\s_./-])|noavatar/i;
+    if (explicitAssetPattern.test(identityAttributes)) return true;
+    const promotionTextPattern = /(đọc\s*chap\s*mới|doc\s*chap\s*moi|miễn\s*phí\s*sớm\s*nhất|mien\s*phi\s*som\s*nhat|read\s+new\s+chapter|free\s+early\s+release)/i;
+    if (promotionTextPattern.test(descriptiveAttributes)) return true;
+    // Promotional copy is commonly placed on a wrapper rather than on the image.
+    let ancestor = image?.parentElement || null;
+    for (let depth = 0; ancestor && depth < 4; depth += 1, ancestor = ancestor.parentElement) {
+      const marker = [
+        ancestor.id,
+        ancestor.className,
+        ancestor.getAttribute?.("aria-label"),
+        ancestor.getAttribute?.("role"),
+      ].filter((value) => typeof value === "string").join(" ").toLowerCase();
+      const ancestorText = typeof ancestor.textContent === "string" ? ancestor.textContent.slice(0, 512) : "";
+      if (explicitAssetPattern.test(marker) || promotionTextPattern.test(ancestorText)) return true;
+    }
+    const rect = image?.getBoundingClientRect?.() || {};
+    const measuredWidth = Number(rect.width) || Number(image?.clientWidth) || Number(image?.naturalWidth) || 0;
+    const measuredHeight = Number(rect.height) || Number(image?.clientHeight) || Number(image?.naturalHeight) || 0;
+    try {
+      const sourceUrl = new URL(source, document.baseURI);
+      if (/\/images\/bn\.png$/i.test(sourceUrl.pathname) && measuredHeight > 0 && measuredWidth / measuredHeight >= 2.4) {
+        return true;
+      }
+    } catch {
+      // Invalid source URLs are handled by the normal image metadata path.
+    }
+    // A short, full-width asset is a banner only when it also has a branding/promo signal.
+    if (
+      measuredWidth >= 900 && measuredHeight > 0 && measuredWidth / measuredHeight >= 3.2 &&
+      /banner|branding|promo|promotion|sponsor|announcement|notice/i.test(identityAttributes)
+    ) return true;
     if (typeof image?.closest !== "function") return false;
     return Boolean(image.closest([
       "header", "nav", "aside", "footer",
@@ -173,6 +205,7 @@ class Renderer {
   constructor() {
     this.activeObjectUrls = new WeakMap();
     this.renderTransactions = new WeakMap();
+    this.committedRenderStates = new WeakMap();
     this.sliceTransactions = new WeakMap();
     this.revokedObjectUrls = new Set();
     this.transactionSequence = 0;
@@ -262,6 +295,9 @@ class Renderer {
     }
 
     transaction.state = "committed";
+    if (!this.committedRenderStates.has(image)) {
+      this.committedRenderStates.set(image, snapshot);
+    }
     image.classList.remove?.("ai-manga-upscaler-fading");
     image.classList.add?.("ai-manga-upscaler-ready");
     if (this.renderTransactions.get(image) === transaction) {
@@ -589,6 +625,51 @@ class Renderer {
     delete image.dataset.aiMangaOriginalSrc;
     delete image.dataset.aiMangaOriginalSrcset;
     delete image.dataset.aiMangaOriginalSizes;
+    this.committedRenderStates.delete(image);
+  }
+
+  restoreOriginal(image) {
+    if (!image) return false;
+    const prepared = this.renderTransactions.get(image);
+    if (prepared?.state === "prepared") prepared.rollback();
+    const snapshot = this.committedRenderStates.get(image);
+    const activeObjectUrl = this.activeObjectUrls.get(image);
+    if (!snapshot && typeof activeObjectUrl !== "string") return false;
+    if (snapshot) {
+      this.restoreAttribute(image, "src", snapshot.src);
+      if (snapshot.src.present) image.src = snapshot.src.value ?? "";
+      else if (snapshot.srcProperty) {
+        image.src = snapshot.srcProperty;
+        image.removeAttribute?.("src");
+      } else {
+        image.removeAttribute?.("src");
+      }
+      this.restoreAttribute(image, "srcset", snapshot.srcset);
+      this.restoreAttribute(image, "sizes", snapshot.sizes);
+      this.restoreStyleValue(image.style, "width", snapshot.width);
+      this.restoreStyleValue(image.style, "height", snapshot.height);
+      this.restoreStyleValue(image.style, "maxWidth", snapshot.maxWidth);
+      this.restoreStyleValue(image.style, "aspectRatio", snapshot.aspectRatio);
+      this.restoreStyleValue(image.style, "objectFit", snapshot.objectFit);
+      this.restoreDatasetValue(image, "aiMangaOriginalSrc", snapshot.originalSrc);
+      this.restoreDatasetValue(image, "aiMangaOriginalSrcset", snapshot.originalSrcset);
+      this.restoreDatasetValue(image, "aiMangaOriginalSizes", snapshot.originalSizes);
+      (snapshot.pictureSources || []).forEach((sourceSnapshot) => {
+        this.restoreAttribute(sourceSnapshot.source, "srcset", sourceSnapshot.srcset);
+        this.restoreAttribute(sourceSnapshot.source, "sizes", sourceSnapshot.sizes);
+        this.restoreDatasetValue(sourceSnapshot.source, "aiMangaOriginalSrcset", sourceSnapshot.originalSrcset);
+        this.restoreDatasetValue(sourceSnapshot.source, "aiMangaOriginalSizes", sourceSnapshot.originalSizes);
+      });
+      if (snapshot.fading) image.classList.add?.("ai-manga-upscaler-fading");
+      else image.classList.remove?.("ai-manga-upscaler-fading");
+      if (snapshot.ready) image.classList.add?.("ai-manga-upscaler-ready");
+      else image.classList.remove?.("ai-manga-upscaler-ready");
+    }
+    if (typeof activeObjectUrl === "string") this.revokeObjectUrl(activeObjectUrl);
+    this.activeObjectUrls.delete(image);
+    this.renderTransactions.delete(image);
+    this.committedRenderStates.delete(image);
+    return true;
   }
 
   freezeLayout(image, metadata) {
@@ -729,6 +810,7 @@ class ViewportImageProvider {
     this.enabled = true;
     this.sequence = 0;
     this.blacklist = new Set();
+    this.blockedResults = new Set();
     this.preprocessingActive = 0;
     this.preprocessingWaiters = [];
     this.preprocessingConcurrency = AI_MANGA_UPSCALER_CONFIG.queue.preprocessingConcurrency;
@@ -771,7 +853,7 @@ class ViewportImageProvider {
 
   async start() {
     const stored = await chrome.storage.local.get({
-      enabled: true, blacklistRules: [],
+      enabled: true, blacklistRules: [], blockedResultRules: [],
       minInputWidth: AI_MANGA_UPSCALER_CONFIG.images.minWidthPx,
       minInputHeight: AI_MANGA_UPSCALER_CONFIG.images.minHeightPx,
       maxInputWidth: AI_MANGA_UPSCALER_CONFIG.images.maxWidthPx,
@@ -792,6 +874,7 @@ class ViewportImageProvider {
     if (!isActiveContentInstance()) return;
     this.enabled = stored.enabled;
     this.blacklist = new Set(stored.blacklistRules || []);
+    this.blockedResults = new Set((stored.blockedResultRules || []).map((value) => this.normalizeResultUrl(value)).filter(Boolean));
     this.imageProvider.updateLimits(stored);
     this.imageSlicingEnabled = stored.imageSlicingEnabled !== false;
     this.imageSliceMaxWidth = Number(stored.imageSliceMaxWidth) || AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
@@ -2547,6 +2630,65 @@ class ViewportImageProvider {
     this.drainPreprocessingQueue();
   }
 
+  normalizeResultUrl(resultUrl) {
+    try {
+      const url = new URL(resultUrl, document.baseURI);
+      if (!["http:", "https:"].includes(url.protocol)) return null;
+      url.hash = "";
+      return url.href;
+    } catch {
+      return null;
+    }
+  }
+
+  isBlockedResult(resultUrl) {
+    const normalized = this.normalizeResultUrl(resultUrl);
+    return Boolean(normalized && this.blockedResults.has(normalized));
+  }
+
+  findImageForOperation(imageId, operationId) {
+    const tracked = trackedImages.get(imageId);
+    if (tracked?.operationId === operationId) return tracked.image;
+    return [...document.querySelectorAll("img")].find((candidate) => (
+      candidate.dataset?.aiEnhancerImageId === imageId &&
+      candidate.dataset?.aiEnhancerOperationId === operationId
+    )) || null;
+  }
+
+  rejectImageResult(message) {
+    const normalizedResultUrl = this.normalizeResultUrl(message?.resultUrl || message?.enhancedImageUrl);
+    if (!normalizedResultUrl || typeof message?.imageId !== "string" || !message.imageId ||
+      typeof message?.operationId !== "string" || !message.operationId) {
+      return { rejected: false, reason: "invalid-result-identity" };
+    }
+    this.blockedResults.add(normalizedResultUrl);
+    const entry = trackedImages.get(message.imageId);
+    if (entry && entry.operationId !== message.operationId) {
+      return { rejected: false, stale: true };
+    }
+    const image = this.findImageForOperation(message.imageId, message.operationId);
+    if (entry && image && entry.baseKey) {
+      trackedImageKeys.delete(entry.baseKey);
+      completedImageKeys.delete(entry.baseKey);
+      this.removeTrackedEntry(entry);
+    } else if (image?.dataset?.aiEnhancerKey) {
+      trackedImageKeys.delete(image.dataset.aiEnhancerKey);
+      completedImageKeys.delete(image.dataset.aiEnhancerKey);
+    }
+    const restored = image ? Boolean(this.renderer.restoreOriginal?.(image)) : false;
+    this.sendMonitorMessage({
+      type: "IMAGE_RESULT_REJECTED",
+      imageId: message.imageId,
+      operationId: message.operationId,
+      sourceRevision: entry?.sourceRevision || image?.dataset?.aiEnhancerKey || null,
+      traceId: entry?.traceId || image?.dataset?.aiEnhancerTraceId || null,
+      imageUrl: entry?.metadata?.imageUrl || null,
+      resultUrl: normalizedResultUrl,
+      reason: message.reason || "blocked-ai-result",
+    });
+    return { rejected: true, restored, resultUrl: normalizedResultUrl };
+  }
+
   runInitialAheadProcessing() {
     return this.handlePageLoaded();
   }
@@ -2627,6 +2769,14 @@ class ViewportImageProvider {
     const entry = trackedImages.get(message.imageId);
     if (!this.isCurrentMessage(entry, message) || (entry?.isSegment && !this.isCurrentSegmentEntry(entry))) {
       return "stale";
+    }
+    if (this.isBlockedResult(message.enhancedImageUrl)) {
+      this.rejectImageResult({
+        ...message,
+        resultUrl: message.enhancedImageUrl,
+        reason: "previously-blocked-ai-result",
+      });
+      return "result-rejected";
     }
 
     entry.state = "processing";
@@ -2913,6 +3063,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       .filter((entry) => viewportProvider.isBlacklisted(entry.metadata?.imageUrl))
       .forEach((entry) => viewportProvider.cancel(entry));
   }
+  if (areaName === "local" && changes.blockedResultRules) {
+    viewportProvider.blockedResults = new Set(
+      (changes.blockedResultRules.newValue || [])
+        .map((value) => viewportProvider.normalizeResultUrl(value))
+        .filter(Boolean),
+    );
+  }
   if (areaName === "local" && (
     changes.minInputWidth || changes.minInputHeight || changes.maxInputWidth || changes.maxInputHeight ||
     changes.minInputWidthEnabled || changes.minInputHeightEnabled || changes.maxInputWidthEnabled || changes.maxInputHeightEnabled
@@ -2973,6 +3130,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!isActiveContentInstance()) return false;
   if (message.type === "AI_ENHANCER_PING") {
     sendResponse({ ok: true });
+    return false;
+  }
+  if (message.type === "REJECT_IMAGE_RESULT") {
+    sendResponse(viewportProvider.rejectImageResult(message));
     return false;
   }
   if (message.type === "UPSCALE_COMPLETE") {
