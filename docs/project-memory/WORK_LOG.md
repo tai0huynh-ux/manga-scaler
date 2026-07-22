@@ -338,3 +338,10 @@ Append one concise entry for every completed Codex change set. Keep old entries 
 - Verification: New regressions failed before implementation for summary-only/compact snapshots, default-collapsed list, bounded persistence, and stale terminal re-enqueue, then passed. Full `scripts/verify.ps1` passed 69 backend tests, 224 extension tests, JavaScript checks, Ruff, and 77% backend coverage. Settings Edge E2E passed with zero browser exceptions. Real Edge fixture passed default-collapsed list, on-demand 503-row rendering at 44 ms, zero browser exceptions, 55/55 tall slices, two wide tiles, worker/navigation/reload lifecycle, and settled queue/rule state.
 - Measurement: Compact persisted data for a realistic 505-job state was about 53 KB, or about 0.51 MiB/s at the 100 ms coalescing cadence, versus about 26 MiB/s for the previous full active snapshot.
 - Git: Source, regression tests, E2E contract, product docs, and project memory are ready for the mandatory repository auto-sync.
+
+## 2026-07-22 - Monitor-lag checkpoint live re-verification
+
+- Request: Resume the completed lag investigation, confirm the default-collapsed Processing Monitor shown in the report, and verify the synced repository/runtime state.
+- Verification: Full `scripts/verify.ps1` passed `69` backend tests, `224` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. The live pipeline-v4 backend at `127.0.0.1:8766` reported DirectML, `waiting=0`, `processing=0`, and no failed jobs. `main`, `HEAD`, and `origin/main` matched `7b70090d956d2b0eafd874da2dff1836f9b15358` with a clean tree before this documentation correction.
+- Documentation: Corrected the stale top-level feature checkpoint in `CURRENT_STATE.md`; no runtime source or behavior changed.
+- Git: This documentation-only verification record is ready for the mandatory repository auto-sync.

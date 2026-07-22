@@ -3,8 +3,8 @@
 ## Baseline
 
 - Verified date: 2026-07-22, Asia/Bangkok.
-- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and a lazy, collapsible Processing Monitor. The starting committed baseline is `3485023f6964b76cf225729c525179c1d8b521dd`; this verified change set awaits the mandatory repository auto-sync.
-- Branch: `main`; current source/origin baseline: `3485023f6964b76cf225729c525179c1d8b521dd`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
+- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and a lazy, collapsible Processing Monitor. The monitor-lag implementation checkpoint is `7b70090d956d2b0eafd874da2dff1836f9b15358`.
+- Branch: `main`; the verified feature implementation and `origin/main` matched `7b70090d956d2b0eafd874da2dff1836f9b15358` before this documentation-only baseline correction; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
