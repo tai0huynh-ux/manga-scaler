@@ -75,11 +75,16 @@ function loadDashboard() {
   const elements = {
     imageList: new FakeElement("div"),
     imageCount: new FakeElement("span"),
+    mode: new FakeElement("select"),
+    level: new FakeElement("input"),
+    levelValue: new FakeElement("output"),
     monitorLayout: new FakeElement("div"),
     monitorDetail: new FakeElement("aside"),
     toggleMonitorDetail: new FakeElement("button"),
   };
+  Object.entries(elements).forEach(([id, element]) => { element.id = id; });
   const document = {
+    activeElement: null,
     createElement: (tagName) => new FakeElement(tagName),
     getElementById: (id) => elements[id] || new FakeElement("div"),
   };
@@ -95,12 +100,14 @@ function loadDashboard() {
       storage: { local: { get: async () => ({ blacklistRules: [] }), set: async () => undefined } },
     },
   });
-  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle;`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__renderImages = renderImages; globalThis.__imageRows = imageRows; globalThis.__initializeMonitorDetailToggle = initializeMonitorDetailToggle; globalThis.__refreshEnhancementControls = refreshEnhancementControls;`, context);
   return {
     renderImages: context.__renderImages,
     imageRows: context.__imageRows,
     initializeMonitorDetailToggle: context.__initializeMonitorDetailToggle,
+    refreshEnhancementControls: context.__refreshEnhancementControls,
     elements,
+    document,
   };
 }
 
@@ -139,6 +146,26 @@ test("monitor detail toggle collapses and restores the panel without losing its 
   assert.equal(elements.toggleMonitorDetail.getAttribute("aria-expanded"), "true");
   assert.equal(elements.toggleMonitorDetail.textContent, "Hide details");
   assert.equal(elements.monitorDetail.firstElementChild, detailContent);
+});
+
+test("dashboard polling does not reset a focused strength or mode control", () => {
+  const { refreshEnhancementControls, elements, document } = loadDashboard();
+  elements.level.value = "100";
+  elements.levelValue.textContent = "100%";
+  elements.mode.value = "artwork";
+
+  document.activeElement = elements.level;
+  refreshEnhancementControls({ mode: "manga", enhanceLevel: 0.05 });
+  assert.equal(elements.level.value, "100");
+  assert.equal(elements.levelValue.textContent, "100%");
+  assert.equal(elements.mode.value, "manga");
+
+  elements.mode.value = "artwork";
+  document.activeElement = elements.mode;
+  refreshEnhancementControls({ mode: "photo", enhanceLevel: 0.35 });
+  assert.equal(elements.mode.value, "artwork");
+  assert.equal(String(elements.level.value), "35");
+  assert.equal(elements.levelValue.textContent, "35%");
 });
 
 test("dashboard keyed rendering preserves image nodes when URLs do not change", () => {

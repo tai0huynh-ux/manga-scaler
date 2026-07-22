@@ -38,6 +38,18 @@ const statusPresentation = {
   removed: ["No longer available", "The source image is no longer on the page."],
 };
 
+function refreshEnhancementControls(stats) {
+  const activeId = document.activeElement?.id || null;
+  const mode = document.getElementById("mode");
+  const level = document.getElementById("level");
+  const levelValue = document.getElementById("levelValue");
+  if (activeId !== "mode") mode.value = stats.mode || "auto";
+  if (activeId !== "level") {
+    level.value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
+    levelValue.textContent = `${level.value}%`;
+  }
+}
+
 async function refresh() {
   const [stats, page, monitor] = await Promise.all([
     chrome.runtime.sendMessage({ type: "GET_STATS", tabId: contentTabId }),
@@ -45,9 +57,7 @@ async function refresh() {
     chrome.runtime.sendMessage({ type: "GET_PROCESSING_MONITOR", tabId: contentTabId }),
   ]);
   monitorSnapshot = monitor || { jobs: [], summary: {} };
-  document.getElementById("mode").value = stats.mode || "auto";
-  document.getElementById("level").value = Math.round((stats.enhanceLevel ?? 0.35) * 100);
-  document.getElementById("levelValue").textContent = `${document.getElementById("level").value}%`;
+  refreshEnhancementControls(stats);
   document.getElementById("timeout").value = stats.maxProcessingSeconds ?? 60;
   if (!document.querySelector(".settings").contains(document.activeElement)) {
     imageSettingIds.forEach((id) => {

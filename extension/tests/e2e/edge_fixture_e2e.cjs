@@ -226,6 +226,7 @@ async function main() {
   let browserProcess = null;
   let pageClient = null;
   let browserClient = null;
+  let popupClient = null;
   let dashboardClient = null;
   let geometryClient = null;
   let lookaheadClient = null;
@@ -259,6 +260,7 @@ async function main() {
     const extensionWorker = await waitForExtensionWorker(port);
     assert.ok(extensionWorker.url.startsWith("chrome-extension://"));
     const initialWorkerClient = await connectTarget(extensionWorker);
+    await initialWorkerClient.evaluate("globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__ = []");
 
     const targets = await listTargets(port);
     const pageTarget = targets.find((target) => target.type === "page" && target.url === "about:blank")
@@ -309,6 +311,136 @@ async function main() {
       assert.match(rejected.src, /^http:/);
     }
     assert.ok(pageState.health.queue.completed >= healthBefore.queue.completed + 2);
+
+    const popupUrl = new URL("../popup.html", extensionWorker.url);
+    const createdPopup = await browserClient.send("Target.createTarget", { url: popupUrl.href });
+    const popupTarget = await waitFor("extension Popup target", async () => {
+      const currentTargets = await listTargets(port);
+      return currentTargets.find((target) => target.id === createdPopup.targetId && target.webSocketDebuggerUrl) || null;
+    }, 20000);
+    popupClient = await connectTarget(popupTarget);
+    await popupClient.send("Page.enable");
+    await waitFor("Popup settings render", async () => popupClient.evaluate(
+      "document.readyState === 'complete' && document.getElementById('enhanceLevel')?.value === '35' && document.getElementById('sizingMode')?.value === 'auto'",
+    ), 20000);
+
+    const focusedSliderState = await popupClient.evaluate(`(async () => {
+      const slider = document.getElementById('enhanceLevel');
+      slider.focus();
+      slider.value = '100';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 2300));
+      const stored = await chrome.storage.local.get({ enhanceLevel: 0.35 });
+      return {
+        value: slider.value,
+        label: document.getElementById('enhanceLevelValue').textContent,
+        stored: stored.enhanceLevel,
+        active: document.activeElement === slider,
+      };
+    })()`);
+    assert.deepEqual(focusedSliderState, { value: "100", label: "100%", stored: 0.35, active: true });
+
+    const settingsEvidence = {
+      initialAutoOutput: [pageState.state.staticImage.naturalWidth, pageState.state.staticImage.naturalHeight],
+      focusedSlider: focusedSliderState,
+      matrix: [],
+    };
+    for (const settingCase of [
+      { preset: "hd", strength: 0.05, maxWidth: 1280, maxHeight: 720, output: 720 },
+      { preset: "fhd", strength: 0.35, maxWidth: 1920, maxHeight: 1080, output: 1080 },
+      { preset: "2k", strength: 1, maxWidth: 2560, maxHeight: 1440, output: 1440 },
+    ]) {
+      const beforeOperations = await pageClient.evaluate(`(() => ({
+        static: document.querySelector('#eligible-static')?.dataset.aiEnhancerOperationId || null,
+        dynamic: document.querySelector('#eligible-dynamic')?.dataset.aiEnhancerOperationId || null,
+      }))()`);
+      await popupClient.evaluate(`(async () => {
+        const level = document.getElementById('enhanceLevel');
+        level.value = ${JSON.stringify(String(Math.round(settingCase.strength * 100)))};
+        level.dispatchEvent(new Event('input', { bubbles: true }));
+        level.dispatchEvent(new Event('change', { bubbles: true }));
+        for (let index = 0; index < 100; index += 1) {
+          const stored = await chrome.storage.local.get({ enhanceLevel: -1 });
+          if (stored.enhanceLevel === ${JSON.stringify(settingCase.strength)}) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        document.getElementById('sizingMode').value = 'screen';
+        document.getElementById('resolutionPreset').value = ${JSON.stringify(settingCase.preset)};
+        document.getElementById('screenOrientation').value = 'auto';
+        document.getElementById('resolutionPreset').dispatchEvent(new Event('change', { bubbles: true }));
+        for (let index = 0; index < 100; index += 1) {
+          const stored = await chrome.storage.local.get({ sizingMode: '', resolutionPreset: '', enhanceLevel: -1 });
+          if (stored.sizingMode === 'screen' && stored.resolutionPreset === ${JSON.stringify(settingCase.preset)} && stored.enhanceLevel === ${JSON.stringify(settingCase.strength)}) return stored;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error('Popup settings did not persist.');
+      })()`);
+
+      const settledCase = await waitFor(`${settingCase.preset} ${Math.round(settingCase.strength * 100)}% settings render`, async () => {
+        const page = await pageClient.evaluate(`(() => {
+          const describe = (selector) => {
+            const image = document.querySelector(selector);
+            return image ? {
+              operationId: image.dataset.aiEnhancerOperationId || null,
+              ready: image.classList.contains('ai-manga-upscaler-ready'),
+              width: image.naturalWidth,
+              height: image.naturalHeight,
+              src: image.src,
+            } : null;
+          };
+          return { static: describe('#eligible-static'), dynamic: describe('#eligible-dynamic') };
+        })()`);
+        if (
+          !page.static?.ready || !page.dynamic?.ready ||
+          page.static.operationId === beforeOperations.static ||
+          page.dynamic.operationId === beforeOperations.dynamic ||
+          page.static.width !== settingCase.output || page.static.height !== settingCase.output ||
+          page.dynamic.width !== settingCase.output || page.dynamic.height !== settingCase.output
+        ) return null;
+        const health = await readHealth();
+        if (health.queue.size !== 0 || health.queue.waiting !== 0 || health.queue.processing !== 0) return null;
+        const trace = await initialWorkerClient.evaluate(`globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__.filter((event) => (
+          event.event === 'background.backend.request.started' &&
+          event.metadata?.request_metadata?.enhance_level === ${JSON.stringify(settingCase.strength)} &&
+          event.metadata?.request_metadata?.max_output_width === ${settingCase.maxWidth} &&
+          event.metadata?.request_metadata?.max_output_height === ${settingCase.maxHeight}
+        )).length`);
+        return trace > 0 ? { page, health, matchingRequests: trace } : null;
+      }, 180000);
+      const stored = await initialWorkerClient.evaluate("chrome.storage.local.get({ sizingMode: '', resolutionPreset: '', enhanceLevel: -1 })");
+      assert.equal(stored.enhanceLevel, settingCase.strength, "resolution change reset Strength");
+      settingsEvidence.matrix.push({
+        preset: settingCase.preset,
+        strength: settingCase.strength,
+        request: [settingCase.maxWidth, settingCase.maxHeight],
+        output: [settledCase.page.static.width, settledCase.page.static.height],
+        matchingRequests: settledCase.matchingRequests,
+      });
+    }
+    // Leave the fixture in its baseline profile so later worker/navigation gates
+    // measure lifecycle behavior rather than the last expensive 2K/100% job.
+    await popupClient.evaluate(`(async () => {
+      document.getElementById('sizingMode').value = 'auto';
+      document.getElementById('resolutionPreset').value = 'fhd';
+      document.getElementById('sizingMode').dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('enhanceLevel').value = '35';
+      document.getElementById('enhanceLevel').dispatchEvent(new Event('input', { bubbles: true }));
+      document.getElementById('enhanceLevel').dispatchEvent(new Event('change', { bubbles: true }));
+      for (let index = 0; index < 100; index += 1) {
+        const stored = await chrome.storage.local.get({ sizingMode: '', enhanceLevel: -1 });
+        if (stored.sizingMode === 'auto' && stored.enhanceLevel === 0.35) return stored;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('Popup baseline settings did not persist.');
+    })()`);
+    await waitFor("baseline settings queue settlement", async () => {
+      const health = await readHealth();
+      return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 ? health : null;
+    }, 180000);
+    popupClient.close();
+    popupClient = null;
+    await browserClient.send("Target.closeTarget", { targetId: createdPopup.targetId });
+
     const monitorState = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
     const dashboardEvidence = {};
     const completedMonitorJobs = monitorState.jobs.filter((job) => job.stage === "COMPLETED");
@@ -316,7 +448,9 @@ async function main() {
     assert.ok(completedMonitorJobs.every((job) => job.renderCommit?.confirmed === true), "monitor completion must include renderer confirmation");
     assert.equal(JSON.stringify(monitorState).includes("imageData"), false, "monitor snapshot must exclude image bytes");
 
-    const retrySource = completedMonitorJobs[0];
+    // Settings reprocessing leaves older terminal rows in history; retry the
+    // newest real completion so its operation identity still matches the page.
+    const retrySource = completedMonitorJobs.at(-1);
     const dashboardSeed = await initialWorkerClient.evaluate(`(async () => {
       processingMonitor.clearTerminal();
       const tabId = ${JSON.stringify(retrySource.tabId)};
@@ -891,7 +1025,7 @@ async function main() {
     assert.equal(lookaheadEvidence.scrollY, 0, "lookahead acceptance scrolled the page");
     assert.ok(lookaheadEvidence.viewportDistance > 1800, "lookahead image was outside the legacy prefetch margin");
 
-    const browserExceptions = [pageClient, lookaheadClient, ...workerClients]
+    const browserExceptions = [pageClient, popupClient, lookaheadClient, ...workerClients]
       .filter(Boolean)
       .flatMap((client) => client.events)
       .filter((event) => event.method === "Runtime.exceptionThrown");
@@ -911,6 +1045,7 @@ async function main() {
       completedDelta: pageState.health.queue.completed - healthBefore.queue.completed,
       staticOutput: [pageState.state.staticImage.naturalWidth, pageState.state.staticImage.naturalHeight],
       dynamicOutput: [pageState.state.dynamicImage.naturalWidth, pageState.state.dynamicImage.naturalHeight],
+      settings: settingsEvidence,
       queue: pageState.health.queue,
       dashboard: dashboardEvidence,
       lookahead: lookaheadEvidence,
@@ -920,6 +1055,7 @@ async function main() {
     }, null, 2));
   } finally {
     for (const client of workerClients) client.close();
+    popupClient?.close();
     dashboardClient?.close();
     geometryClient?.close();
     lookaheadClient?.close();

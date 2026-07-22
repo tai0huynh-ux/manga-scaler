@@ -2143,10 +2143,9 @@ function resolveOutputLimits(settings, metrics = {}) {
       ? automaticOrientation
       : settings.screenOrientation;
     if (orientation === "portrait") [width, height] = [height, width];
-    return {
-      width: outputWidthEnabled ? Math.min(width, configuredMaxWidth) : null,
-      height: outputHeightEnabled ? Math.min(height, configuredMaxHeight) : null,
-    };
+    // Pixel-mode controls are hidden in screen mode; a selected preset must
+    // therefore reach the backend exactly instead of inheriting stale caps.
+    return { width, height };
   }
   // A bounded DPR/detail multiplier keeps automatic sizing responsive on high-DPI displays.
   const ratio = clamp(Number(metrics.devicePixelRatio) || 1, 1, 1.5);

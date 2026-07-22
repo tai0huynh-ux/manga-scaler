@@ -396,11 +396,12 @@ function loadContentClasses(options = {}) {
     __AI_MANGA_UPSCALER_TRACE_EVENTS__: options.traceEvents || [],
   });
   vm.runInContext(configSource, context);
-  vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys; globalThis.__contentInstanceId = contentInstanceId;\n}`, context);
+  vm.runInContext(`${prefix}\nglobalThis.__ImageProvider = ImageProvider; globalThis.__ViewportImageProvider = ViewportImageProvider; globalThis.__Renderer = Renderer; globalThis.__settingsRequireReprocess = settingsRequireReprocess; globalThis.__HTMLImageElement = HTMLImageElement; globalThis.__trackedImages = trackedImages; globalThis.__trackedImageKeys = trackedImageKeys; globalThis.__completedImageKeys = completedImageKeys; globalThis.__contentInstanceId = contentInstanceId;\n}`, context);
   return {
     ImageProvider: context.__ImageProvider,
     ViewportImageProvider: context.__ViewportImageProvider,
     Renderer: context.__Renderer,
+    settingsRequireReprocess: context.__settingsRequireReprocess,
     HTMLImageElement: context.__HTMLImageElement,
     config: context.AI_MANGA_UPSCALER_CONFIG,
     sentMessages,
@@ -1406,7 +1407,22 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
   assert.deepEqual(migratePersistedSettings(migrated), migrated);
 });
 
-test("REQ-NORM preserves exact 5% and 100% strength payloads", () => {
+test("resolution and output settings trigger content reprocessing while scheduling-only changes do not", () => {
+  const { settingsRequireReprocess } = loadContentClasses();
+
+  for (const key of [
+    "enhanceLevel", "sizingMode", "resolutionPreset", "screenOrientation",
+    "maxOutputWidth", "maxOutputHeight", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
+    "outputQuality", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
+  ]) {
+    assert.equal(settingsRequireReprocess({ [key]: { newValue: true } }), true, key);
+  }
+  for (const key of ["aheadProcessingImageLimit", "prefetchMarginPx", "preprocessingConcurrency", "upscaleConcurrency"]) {
+    assert.equal(settingsRequireReprocess({ [key]: { newValue: true } }), false, key);
+  }
+});
+
+test("REQ-NORM preserves exact 5%, 35%, and 100% strength payloads", () => {
   const { normalizeUpscaleRequest } = loadBackgroundClasses();
   const base = {
     imageUrl: "https://example.com/image.png",
@@ -1420,6 +1436,7 @@ test("REQ-NORM preserves exact 5% and 100% strength payloads", () => {
   };
 
   assert.equal(normalizeUpscaleRequest({ ...base, enhanceLevel: 0.05 }, {}).enhanceLevel, 0.05);
+  assert.equal(normalizeUpscaleRequest({ ...base, enhanceLevel: 0.35 }, {}).enhanceLevel, 0.35);
   assert.equal(normalizeUpscaleRequest({ ...base, enhanceLevel: 1 }, {}).enhanceLevel, 1);
 });
 
@@ -1454,7 +1471,7 @@ test("backend health requires the current image pipeline version", () => {
   assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "3" }), false);
 });
 
-test("enhancement slider settings persist exact normalized endpoints", async () => {
+test("enhancement slider settings persist exact 5%, 35%, and 100% values", async () => {
   const writes = [];
   const responses = [];
   const { dispatch } = loadBackgroundMessageHarness({
@@ -1467,6 +1484,11 @@ test("enhancement slider settings persist exact normalized endpoints", async () 
     (response) => responses.push(response),
   ), true);
   assert.equal(dispatch(
+    { type: "SET_ENHANCEMENT", mode: "auto", enhanceLevel: 0.35 },
+    {},
+    (response) => responses.push(response),
+  ), true);
+  assert.equal(dispatch(
     { type: "SET_ENHANCEMENT", mode: "artwork", enhanceLevel: 1 },
     {},
     (response) => responses.push(response),
@@ -1475,6 +1497,7 @@ test("enhancement slider settings persist exact normalized endpoints", async () 
 
   assert.equal(JSON.stringify(writes), JSON.stringify([
     { mode: "manga", enhanceLevel: 0.05 },
+    { mode: "auto", enhanceLevel: 0.35 },
     { mode: "artwork", enhanceLevel: 1 },
   ]));
   assert.equal(JSON.stringify(responses), JSON.stringify(writes));
@@ -4965,6 +4988,58 @@ test("portrait HD FHD and 2K presets stay resize-safe while 4K may use neural in
   assert.ok(scales.fhd <= 1.5);
   assert.ok(scales["2k"] <= 1.5);
   assert.ok(scales["4k"] > 1.5);
+});
+
+test("screen presets produce exact portrait targets and pixel mode keeps explicit limits", () => {
+  const resolveOutputLimits = loadBackgroundHelpers();
+  const source = { sourceWidth: 800, sourceHeight: 1741, renderedWidth: 800, renderedHeight: 1741 };
+  const expected = { hd: [720, 1280], fhd: [1080, 1920], "2k": [1440, 2560], "4k": [2160, 3840] };
+
+  for (const [preset, [width, height]] of Object.entries(expected)) {
+    const limits = resolveOutputLimits({
+        sizingMode: "screen", resolutionPreset: preset, screenOrientation: "auto",
+        maxOutputWidthEnabled: true, maxOutputHeightEnabled: true,
+        // Pixel-mode limits are hidden in screen mode and must not silently cap a preset.
+        maxOutputWidth: 2048, maxOutputHeight: 8192,
+      }, source);
+    assert.equal(limits.width, width, `${preset} width`);
+    assert.equal(limits.height, height, `${preset} height`);
+  }
+
+  for (const [width, height] of [[512, 512], [1366, 768], [2048, 8192]]) {
+    const pixelLimits = resolveOutputLimits({
+        sizingMode: "pixel", maxOutputWidthEnabled: true, maxOutputHeightEnabled: true,
+        maxOutputWidth: width, maxOutputHeight: height,
+      }, source);
+    assert.equal(pixelLimits.width, width);
+    assert.equal(pixelLimits.height, height);
+  }
+});
+
+test("resolution and strength changes isolate scheduler cache identities", async () => {
+  const QueueScheduler = loadQueueScheduler();
+  const keys = [];
+  const scheduler = new QueueScheduler({
+    maxConcurrentRequests: 1,
+    cacheProvider: { get: async (key) => { keys.push(key); return null; }, set: async () => undefined },
+    upscaleProvider: { upscale: async () => ({ buffer: new Uint8Array([1]).buffer, contentType: "image/png" }), cancel() {} },
+    statisticsTracker: { recordSuccess: async () => undefined, recordError: async () => undefined },
+  });
+  const base = {
+    ...makeJob("settings-identity"), sourceFingerprint: "sha256:settings", maxOutputWidth: 1080,
+    maxOutputHeight: 1920, enhanceLevel: 0.05,
+  };
+  scheduler.enqueue(base);
+  scheduler.enqueue({ ...base, imageId: "settings-identity-2", operationId: "settings-identity-op-2", maxOutputWidth: 1440, maxOutputHeight: 2560 });
+  scheduler.enqueue({ ...base, imageId: "settings-identity-3", operationId: "settings-identity-op-3", enhanceLevel: 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(keys.length, 3);
+  assert.equal(new Set(keys).size, 3);
+  assert.ok(keys[0].includes("|0.050|1080x1920|"));
+  assert.ok(keys[1].includes("|0.050|1440x2560|"));
+  assert.ok(keys[2].includes("|1.000|1080x1920|"));
 });
 
 test("auto output limits bound high-DPR work while retaining a quality floor", () => {

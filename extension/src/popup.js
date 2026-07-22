@@ -89,8 +89,10 @@ class PopupController {
   async refreshStats() {
     const stats = await chrome.runtime.sendMessage({ type: "GET_STATS" });
     this.enabledToggle.checked = Boolean(stats.enabled);
-    this.modeSelect.value = stats.mode || "auto";
-    this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
+    if (this.document.activeElement !== this.modeSelect) this.modeSelect.value = stats.mode || "auto";
+    if (this.document.activeElement !== this.enhanceLevel) {
+      this.enhanceLevel.value = String(Math.round((stats.enhanceLevel ?? 0.35) * 100));
+    }
     this.processingTimeout.value = String(stats.maxProcessingSeconds ?? 60);
     if (!this.imageSettingIds.includes(this.document.activeElement?.id)) {
       this.imageSettingIds.forEach((id) => {

@@ -2,6 +2,19 @@
 const trackedImages = new Map();
 const trackedImageKeys = new Map();
 const completedImageKeys = new Set();
+
+// These settings change the backend request or its rendered pixels. Existing
+// operations must be replaced so a user change is visible without a reload.
+const CONTENT_REPROCESS_SETTING_KEYS = new Set([
+  "mode", "enhanceLevel", "sizingMode", "resolutionPreset", "screenOrientation",
+  "maxOutputWidth", "maxOutputHeight", "maxOutputWidthEnabled", "maxOutputHeightEnabled",
+  "outputQuality", "performanceBoost", "textCleanupEnabled", "textTranslateEnabled",
+  "textSourceLanguage", "textTargetLanguage",
+]);
+
+function settingsRequireReprocess(changes = {}) {
+  return Object.keys(changes || {}).some((key) => CONTENT_REPROCESS_SETTING_KEYS.has(key));
+}
 const contentInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 function isActiveContentInstance() {
@@ -2891,7 +2904,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.enabled) {
     viewportProvider.setEnabled(Boolean(changes.enabled.newValue));
   }
-  if (areaName === "local" && (changes.mode || changes.enhanceLevel)) {
+  if (areaName === "local" && settingsRequireReprocess(changes)) {
     viewportProvider.reprocessVisibleImages();
   }
   if (areaName === "local" && changes.blacklistRules) {
