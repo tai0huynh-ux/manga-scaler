@@ -1006,10 +1006,36 @@ async function main() {
       return refererRules(state.rules).length === 0 && state.rules.some((rule) => rule.id === unrelatedRuleId) ? state : null;
     });
     fixture.releaseStalledLifecycleRead("worker");
-    const recoveredImage = await waitFor("new image after worker reactivation", async () => {
-      const state = await pageImageState(pageClient, "#lifecycle-recovery");
-      return state?.ready && state.src.startsWith("blob:") ? state : null;
-    });
+    let recoveredImage;
+    let recoveryDiagnostics = null;
+    try {
+      recoveredImage = await waitFor("new image after worker reactivation", async () => {
+        const state = await pageImageState(pageClient, "#lifecycle-recovery");
+        if (state?.ready && state.src.startsWith("blob:")) return state;
+        recoveryDiagnostics = {
+          image: state,
+          worker: await readWorkerState(workerClient, workerPageUrl),
+          content: await pageClient.evaluate(`(() => {
+            const image = document.querySelector('#lifecycle-recovery');
+            return image ? {
+              observed: image.dataset.aiMangaUpscalerObserved || null,
+              seen: image.dataset.aiEnhancerSeen || null,
+              key: image.dataset.aiEnhancerKey || null,
+              imageId: image.dataset.aiEnhancerImageId || null,
+              operationId: image.dataset.aiEnhancerOperationId || null,
+              sourceGeneration: image.dataset.aiEnhancerSourceGeneration || null,
+              complete: image.complete,
+              naturalWidth: image.naturalWidth,
+              naturalHeight: image.naturalHeight,
+              rect: image.getBoundingClientRect().toJSON(),
+            } : null;
+          })()`),
+        };
+        return null;
+      });
+    } catch (error) {
+      throw new Error(`${error.message}: ${JSON.stringify(recoveryDiagnostics)}`);
+    }
     const oldWorkerImage = await pageImageState(pageClient, "#lifecycle-primary");
     const settledWorkerState = await waitForSettledWorkerState(workerClient, workerPageUrl);
     assert.equal(oldWorkerImage.ready, false, `old worker image unexpectedly rendered: ${JSON.stringify(oldWorkerImage)}`);

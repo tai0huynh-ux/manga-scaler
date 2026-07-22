@@ -3,8 +3,8 @@
 ## Baseline
 
 - Verified date: 2026-07-22, Asia/Bangkok.
-- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while whole-page scheduling now queues every eligible unique source, prioritizes the current reading position then images below then images above, and keeps active work bounded. The last committed monitor-lag checkpoint before this change is `7b70090d956d2b0eafd874da2dff1836f9b15358`.
-- Branch: `main`; the verified feature implementation and `origin/main` matched `7b70090d956d2b0eafd874da2dff1836f9b15358` before this documentation-only baseline correction; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
+- Current green feature checkpoint: whole-page pipeline v4 retains exact Strength/resolution/slicing behavior while scroll backpressure, O(1) ahead admission, asynchronous large-image fingerprint decoding, and frame-paced result commits remove page-load scroll hot paths. The user-designated recovery checkpoint immediately before this change is the pushed tag `perfect-1`.
+- Branch: `main`; the starting `HEAD` and `origin/main` matched `c109cff1421aaec1975ce14febd8958e506ea8f3` with tag `perfect-1` before this verified change set.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
 - Upstream before the protected-read lifecycle checkpoint: `origin/main` matched `83c0c2e` with zero divergence.
@@ -13,10 +13,10 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the pipeline-v4 strength-compute change set:
+Full `scripts/verify.ps1` result on the latest scroll-responsiveness change set:
 
 - Backend: 69 tests passed, including model-free 5% routing, monotonic and hard-capped neural input compute, exact-size neural composition, aggressive 100% finishing, fast WebP encoding, O(1) health cache accounting, and queue/lifecycle races.
-- Extension: 238 tests passed, including preloaded idle render commits, full-page queued-state coverage, current/below/above reading priority, dynamic-image ahead admission, duplicate-source terminal status, exact slider payload persistence, pipeline-v4 rejection, lazy Processing Monitor reads/persistence, responsive slicing, protected reads, worker lifecycle, and operation identity.
+- Extension: 247 tests passed, including O(1) whole-page admission, discovery-geometry reuse, scroll-idle backpressure, visible-first one-per-frame render commits, background-tab frame fallback, asynchronous large-image fingerprint decoding, first-load identity, responsive slicing, protected reads, worker lifecycle, and operation identity.
 - JavaScript syntax checks passed.
 - Ruff passed.
 - Total backend coverage: 77%, above the 45% gate; `inference_queue.py` is at 92%.
@@ -29,7 +29,10 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Viewport-aware `<img>` discovery and preprocessing.
 - User-configurable page-load ahead processing: after `window.load`, each page queues every eligible image once, keeps one owner per canonical source URL, and drains unique work through the bounded active-owner limit. Eligible lazy-loaded or dynamically inserted images join the same backlog immediately.
 - Disabled content scripts stay dormant. Enable notifications are idempotent, detach/re-observe existing images without duplicate load listeners, run the initial ahead pass only if it has not already run for that page, and continue skipping completed image keys.
-- Reading priority is current viewport first, then images below from near to far, then images above. Scroll/resize reorders stored document coordinates and bounded preprocessing waiters without traversing every discovered image or forcing full-page layout reads; `IntersectionObserver` can still promote visible work immediately.
+- Reading priority is current viewport first, then images below from near to far, then images above. After scroll idle, stored document coordinates reorder the ahead queue and only bounded preprocessing waiters refresh layout; `IntersectionObserver` can still promote visible work immediately.
+- Continuous scrolling marks a 160 ms interaction window: no new offscreen ahead owner starts during that window, no hot-path full-priority refresh runs, visible intersections can still promote immediately, and idle resumes the backlog.
+- Prepared enhanced images enter one shared visual-commit queue. At most one source swap occurs per animation frame; visible results may commit while scrolling, offscreen results wait for idle, and a 120 ms fallback prevents suspended animation frames from stranding completed work.
+- Large base64 source fingerprints prefer asynchronous browser data-URL decoding before deterministic fallback, and initial/in-memory cached load events confirm the existing operation instead of creating duplicate work.
 - Background settings are loaded once, updated through `storage.onChanged`, and protected against an older in-flight read overwriting a newer enable change. `IMAGE_SEEN` and `ENQUEUE_IMAGE` no longer read extension settings once per image.
 - Processing Monitor active history is capped at 500. Hot session snapshots are coalesced at 100 ms, local checkpoints at 5 seconds, and terminal events request a 250 ms durable checkpoint; explicit retry/clear/recovery operations flush immediately.
 - `IMAGE_SEEN` statistics increments are batched into one storage update per 100 ms burst.
@@ -186,3 +189,11 @@ Update this file whenever a completed change alters the verified baseline, capab
 - It includes the verified whole-page forward-reading queue, exact wrong-result ban and original restoration, bounded/collapsed monitoring, responsive slicing, effective resolution/Strength behavior, and non-blocking image replacement.
 - Acceptance baseline: `69` backend tests, `238` extension tests, JavaScript checks, Ruff, `77%` backend coverage, and the deterministic Edge fixture with zero browser exceptions and settled queue/rule/lifecycle state.
 - Recovery reference: use the pushed annotated Git tag `perfect-1`; preserve history and prefer a new branch or `git revert` for future recovery instead of destructive reset operations.
+
+## Latest scroll-responsiveness delta (2026-07-22)
+
+- Root cause: the first page-load pass repeated layout/eligibility reads across a large image set, ahead-queue membership used linear scans, scroll events could repeatedly sort/update work, large fingerprints could synchronously decode base64 on the content main thread, and multiple prepared results could mutate visible DOM in one frame.
+- Changes: discovery geometry is reused at page load; ahead membership is a `Set`; continuous scroll applies a 160 ms backpressure window while `IntersectionObserver` preserves visible promotion; large fingerprints use the asynchronous browser path; result commits are visible-first and limited to one per frame with a 120 ms suspended-frame fallback. The original source and responsive attributes stay untouched until the guarded commit point.
+- Identity fix: first normal and fast cached load events confirm the observed source without increasing `sourceGeneration`; a genuine later same-URL reload still creates a new source revision.
+- Verification: full `scripts/verify.ps1` passed `69` backend tests, `247` extension tests, JavaScript checks, Ruff, and `77%` backend coverage. The final real Edge fixture passed in `76.3 s` with zero browser exceptions, an offscreen lookahead commit at `scrollY=0`, `55/55` tall slices, two responsive wide tiles, successful worker recovery/navigation/reload, and settled queue/rule/lock state.
+- Limitation: the deterministic heavy Edge gate is green, but a long-duration performance soak on the exact public reader and the user's real scroll pattern remains future release evidence rather than a completed claim.

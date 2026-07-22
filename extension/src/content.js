@@ -94,7 +94,7 @@ class ImageProvider {
     const height = image.naturalHeight || image.height || image.clientHeight;
     const allowTallImage = options.allowTallImage === true;
     return (
-      !this.isInterfaceOrAdvertisement(image) &&
+      !this.isInterfaceOrAdvertisement(image, options.rect) &&
       (this.limits.minInputWidthEnabled === false || width >= this.limits.minInputWidth) &&
       (this.limits.minInputHeightEnabled === false || height >= this.limits.minInputHeight) &&
       (this.limits.maxInputWidthEnabled === false || width <= this.limits.maxInputWidth) &&
@@ -102,7 +102,7 @@ class ImageProvider {
     );
   }
 
-  isInterfaceOrAdvertisement(image) {
+  isInterfaceOrAdvertisement(image, rectOverride = null) {
     const reader = image?.closest?.(".reading-detail.box_doc") || image?.parentElement;
     const isReaderChrome = Boolean(
       reader?.classList?.contains?.("reading-detail") &&
@@ -141,7 +141,7 @@ class ImageProvider {
       const ancestorText = typeof ancestor.textContent === "string" ? ancestor.textContent.slice(0, 512) : "";
       if (explicitAssetPattern.test(marker) || promotionTextPattern.test(ancestorText)) return true;
     }
-    const rect = image?.getBoundingClientRect?.() || {};
+    const rect = rectOverride || image?.getBoundingClientRect?.() || {};
     const measuredWidth = Number(rect.width) || Number(image?.clientWidth) || Number(image?.naturalWidth) || 0;
     const measuredHeight = Number(rect.height) || Number(image?.clientHeight) || Number(image?.naturalHeight) || 0;
     try {
@@ -167,10 +167,10 @@ class ImageProvider {
     ].join(",")));
   }
 
-  read(image) {
+  read(image, rectOverride = null) {
     const originalSource = image.dataset.aiMangaOriginalSrc;
     const stableUrl = originalSource ? new URL(originalSource, document.baseURI).href : image.currentSrc || image.src;
-    const rect = image.getBoundingClientRect?.() || {};
+    const rect = rectOverride || image.getBoundingClientRect?.() || {};
     return {
       imageUrl: stableUrl,
       src: originalSource || image.getAttribute("src"),
@@ -208,6 +208,10 @@ class Renderer {
     this.committedRenderStates = new WeakMap();
     this.sliceTransactions = new WeakMap();
     this.revokedObjectUrls = new Set();
+    this.visualCommitQueue = [];
+    this.visualCommitScheduled = false;
+    this.visualCommitFallbackMs = 120;
+    this.scrollStateProvider = () => false;
     this.transactionSequence = 0;
     this.installStyles();
   }
@@ -279,28 +283,23 @@ class Renderer {
       return "stale";
     }
 
-    this.freezeLayout(image, metadata);
-    this.preserveResponsiveAttributes(image, metadata);
-    transaction.applied = this.capturePreparedRenderState(image, metadata);
-    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
-      transaction.rollback();
-      return "stale";
-    }
-
-    image.removeAttribute("srcset");
-    image.removeAttribute("sizes");
-    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
-      transaction.rollback();
-      return "stale";
-    }
-
     try {
-      await this.waitForVisualCommit(transaction.abortController.signal);
+      await this.waitForVisualCommit(image, transaction.abortController.signal);
     } catch {
       const stale = !isCurrent() || this.renderTransactions.get(image) !== transaction;
       transaction.rollback();
       return stale ? "stale" : "load-error";
     }
+    if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
+      transaction.rollback();
+      return "stale";
+    }
+
+    this.freezeLayout(image, metadata);
+    this.preserveResponsiveAttributes(image, metadata);
+    transaction.applied = this.capturePreparedRenderState(image, metadata);
+    image.removeAttribute("srcset");
+    image.removeAttribute("sizes");
     if (!isCurrent() || this.renderTransactions.get(image) !== transaction) {
       transaction.rollback();
       return "stale";
@@ -370,29 +369,74 @@ class Renderer {
     }
   }
 
-  waitForVisualCommit(signal = null) {
+  setScrollStateProvider(provider) {
+    this.scrollStateProvider = typeof provider === "function" ? provider : () => false;
+  }
+
+  resumeVisualCommits() {
+    this.scheduleVisualCommit();
+  }
+
+  waitForVisualCommit(image, signal = null) {
     if (signal?.aborted) return Promise.reject(new Error("Render commit cancelled."));
-    const idleCallback = globalThis.requestIdleCallback;
-    const frameCallback = globalThis.requestAnimationFrame;
-    if (typeof idleCallback !== "function" && typeof frameCallback !== "function") return Promise.resolve();
     return new Promise((resolve, reject) => {
-      let settled = false;
-      const cleanup = () => signal?.removeEventListener?.("abort", onAbort);
-      const settle = (callback, value) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        callback(value);
+      const waiter = { image, signal, resolve, reject, cancelled: false, onAbort: null };
+      waiter.onAbort = () => {
+        if (waiter.cancelled) return;
+        waiter.cancelled = true;
+        reject(new Error("Render commit cancelled."));
+        this.scheduleVisualCommit();
       };
-      const onAbort = () => settle(reject, new Error("Render commit cancelled."));
-      signal?.addEventListener?.("abort", onAbort, { once: true });
-      const commit = () => settle(resolve);
-      if (typeof idleCallback === "function") {
-        idleCallback(commit, { timeout: 120 });
-      } else {
-        frameCallback(() => frameCallback(commit));
-      }
+      signal?.addEventListener?.("abort", waiter.onAbort, { once: true });
+      this.visualCommitQueue.push(waiter);
+      this.scheduleVisualCommit();
     });
+  }
+
+  scheduleVisualCommit() {
+    if (this.visualCommitScheduled) return;
+    this.visualCommitQueue = this.visualCommitQueue.filter((waiter) => !waiter.cancelled);
+    if (!this.visualCommitQueue.length) return;
+    let scrolling = false;
+    try {
+      scrolling = this.scrollStateProvider() === true;
+    } catch {
+      scrolling = false;
+    }
+    let commitIndex = 0;
+    if (scrolling) {
+      commitIndex = this.visualCommitQueue.findIndex((waiter) => this.isVisibleForCommit(waiter.image));
+      if (commitIndex < 0) return;
+    }
+    const [waiter] = this.visualCommitQueue.splice(commitIndex, 1);
+    if (!waiter || waiter.signal?.aborted) {
+      this.scheduleVisualCommit();
+      return;
+    }
+    this.visualCommitScheduled = true;
+    let committed = false;
+    let fallbackTimer = null;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+      this.visualCommitScheduled = false;
+      waiter.signal?.removeEventListener?.("abort", waiter.onAbort);
+      if (!waiter.cancelled && !waiter.signal?.aborted) waiter.resolve();
+      this.scheduleVisualCommit();
+    };
+    if (typeof globalThis.requestAnimationFrame === "function") {
+      fallbackTimer = setTimeout(commit, this.visualCommitFallbackMs);
+      globalThis.requestAnimationFrame(commit);
+    } else {
+      Promise.resolve().then(commit);
+    }
+  }
+
+  isVisibleForCommit(image) {
+    const rect = image?.getBoundingClientRect?.();
+    if (!rect) return true;
+    return rect.bottom >= 0 && rect.top <= (window.innerHeight || 0);
   }
 
   prepareRawSlices(image, metadata, segments, identity = {}) {
@@ -797,7 +841,7 @@ class Renderer {
 
   fadeOut(image) {
     if (image?.dataset?.aiEnhancerRawSlice === "true") return Promise.resolve();
-    image.classList.add("ai-manga-upscaler-fading");
+    image.classList.remove?.("ai-manga-upscaler-fading");
     return Promise.resolve();
   }
 
@@ -849,8 +893,8 @@ class Renderer {
     style.id = "ai-manga-upscaler-styles";
     style.textContent = `
       img.ai-manga-upscaler-fading {
-        opacity: 0.2 !important;
-        transition: opacity ${AI_MANGA_UPSCALER_CONFIG.render.fadeMs}ms ease !important;
+        opacity: 1 !important;
+        transition: none !important;
       }
 
       img.ai-manga-upscaler-ready {
@@ -903,11 +947,17 @@ class ViewportImageProvider {
     this.prefetchMarginPx = AI_MANGA_UPSCALER_CONFIG.images.prefetchMarginPx;
     this.aheadProcessingKeys = new Map();
     this.initialAheadQueue = [];
+    this.initialAheadQueueKeys = new Set();
     this.sourceOwners = new Map();
     this.sourceOwnerKeysByImage = new WeakMap();
+    this.imageLoadStates = new WeakMap();
+    this.initialLoadConfirmationWindowMs = 250;
     this.aheadProcessingCompleted = false;
     this.pageLoadHandled = false;
     this.pageHidden = false;
+    this.scrollActive = false;
+    this.scrollIdleTimer = null;
+    this.scrollIdleDelayMs = 160;
     this.imageSlicingEnabled = AI_MANGA_UPSCALER_CONFIG.images.slicingEnabled;
     this.imageSliceMaxWidth = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxWidthPx;
     this.imageSliceMaxHeight = AI_MANGA_UPSCALER_CONFIG.images.sliceMaxHeightPx;
@@ -925,10 +975,14 @@ class ViewportImageProvider {
         threshold: [0, 0.01],
       },
     );
-    this.onScroll = this.throttle(() => this.refreshPriorities(), 250);
+    this.onScroll = () => this.handleScrollActivity();
+    this.renderer?.setScrollStateProvider?.(() => this.scrollActive);
     this.onWindowLoad = () => this.handlePageLoaded();
     this.onPageHide = () => {
       this.pageHidden = true;
+      if (this.scrollIdleTimer !== null) clearTimeout(this.scrollIdleTimer);
+      this.scrollIdleTimer = null;
+      this.scrollActive = false;
       this.clearAheadBacklog("page-hidden");
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
       this.aheadProcessingKeys.clear();
@@ -991,6 +1045,9 @@ class ViewportImageProvider {
       if (document.readyState === "complete") this.handlePageLoaded();
       else this.observeExistingImages();
     } else {
+      if (this.scrollIdleTimer !== null) clearTimeout(this.scrollIdleTimer);
+      this.scrollIdleTimer = null;
+      this.scrollActive = false;
       this.clearAheadBacklog("disabled");
       [...this.sliceGroups.values()].forEach((group) => this.rollbackSliceGroup(group, "disabled"));
       [...trackedImages.values()].forEach((entry) => this.cancel(entry));
@@ -1009,6 +1066,7 @@ class ViewportImageProvider {
     completedImageKeys.clear();
     this.aheadProcessingKeys.clear();
     this.initialAheadQueue = [];
+    this.initialAheadQueueKeys.clear();
     this.sourceOwners.clear();
     this.sourceOwnerKeysByImage = new WeakMap();
     document.querySelectorAll("img").forEach((image) => this.schedule(image));
@@ -1022,6 +1080,7 @@ class ViewportImageProvider {
     const loadListener = this.imageLoadListeners.get(image);
     if (loadListener) image.removeEventListener("load", loadListener);
     this.imageLoadListeners.delete(image);
+    this.imageLoadStates.delete(image);
     this.intersectionObserver.unobserve?.(image);
     delete image.dataset.aiMangaUpscalerObserved;
     delete image.dataset.aiEnhancerSeen;
@@ -1063,6 +1122,7 @@ class ViewportImageProvider {
     }
 
     image.dataset.aiMangaUpscalerObserved = "true";
+    this.imageLoadStates.set(image, this.captureImageLoadState(image));
     const reportSeen = (event = null) => {
       if (!this.enabled || !isActiveContentInstance()) return;
       if (image.dataset.aiMangaOriginalSrc) {
@@ -1078,16 +1138,19 @@ class ViewportImageProvider {
         this.rollbackSliceGroup(group, "superseded");
       }
       if (event?.type === "load") {
-        const currentGeneration = Number(image.dataset.aiEnhancerSourceGeneration || "0");
-        image.dataset.aiEnhancerSourceGeneration = String(currentGeneration + 1);
+        this.updateImageLoadGeneration(image);
       }
-      if (!this.canProcessCandidate(image, { allowPrefetch: true })) {
-        return;
-      }
-      const metadata = this.imageProvider.read(image);
+      const candidate = this.inspectCandidate(image, { allowPrefetch: true });
+      if (!candidate) return;
+      const { metadata, rect } = candidate;
       if (this.isBlacklisted(metadata.imageUrl)) return;
-      const imageKey = this.imageKey(metadata, image);
+      const imageKey = this.imageKey(metadata, image, rect);
+      const keyedEntry = trackedImageKeys.get(imageKey);
       if (image.dataset.aiEnhancerSeen === "true" && image.dataset.aiEnhancerKey === imageKey) {
+        if (keyedEntry?.image === image) {
+          keyedEntry.metadata = metadata;
+          this.updateEntryGeometry(keyedEntry, rect);
+        }
         return;
       }
       if (completedImageKeys.has(imageKey)) {
@@ -1100,7 +1163,7 @@ class ViewportImageProvider {
         if (oldEntry) this.cancel(oldEntry);
         trackedImageKeys.delete(image.dataset.aiEnhancerKey);
       }
-      const existing = trackedImageKeys.get(imageKey);
+      const existing = keyedEntry;
       if (existing && existing.image !== image && document.documentElement.contains(existing.image)) {
         image.dataset.aiEnhancerSeen = "true";
         image.dataset.aiEnhancerImageId = existing.imageId;
@@ -1117,7 +1180,7 @@ class ViewportImageProvider {
       image.dataset.aiEnhancerKey = imageKey;
       image.dataset.aiEnhancerSeen = "true";
       if (!existing) {
-        trackedImageKeys.set(imageKey, {
+        const created = {
           imageId,
           operationId,
           traceId,
@@ -1128,7 +1191,9 @@ class ViewportImageProvider {
           baseKey: imageKey,
           isSegment: false,
           pageOrder: Number(image.dataset.aiEnhancerPageOrder) || 0,
-        });
+        };
+        this.updateEntryGeometry(created, rect);
+        trackedImageKeys.set(imageKey, created);
         emitTrace({
           event: "content.operation.created",
           traceId,
@@ -1159,6 +1224,39 @@ class ViewportImageProvider {
     this.intersectionObserver.observe(image);
   }
 
+  captureImageLoadState(image) {
+    return {
+      source: image?.currentSrc || image?.getAttribute?.("src") || image?.src || "",
+      naturalWidth: Number(image?.naturalWidth) || 0,
+      naturalHeight: Number(image?.naturalHeight) || 0,
+      completeAtObservation: Boolean(image?.complete && Number(image?.naturalWidth) > 0),
+      observedAt: performance.now(),
+      loadConfirmed: false,
+    };
+  }
+
+  updateImageLoadGeneration(image) {
+    const previous = this.imageLoadStates.get(image);
+    const current = this.captureImageLoadState(image);
+    const withinCachedLoadWindow = Boolean(
+      previous?.completeAtObservation &&
+      performance.now() - Number(previous.observedAt || 0) <= this.initialLoadConfirmationWindowMs
+    );
+    const isFirstNormalLoad = Boolean(
+      previous &&
+      !previous.loadConfirmed &&
+      previous.source === current.source &&
+      (!previous.completeAtObservation || withinCachedLoadWindow)
+    );
+    if (!isFirstNormalLoad) {
+      const generation = Number(image.dataset.aiEnhancerSourceGeneration || "0");
+      image.dataset.aiEnhancerSourceGeneration = String(generation + 1);
+    }
+    current.loadConfirmed = true;
+    this.imageLoadStates.set(image, current);
+    return !isFirstNormalLoad;
+  }
+
   handleIntersections(entries) {
     if (!this.enabled) {
       return;
@@ -1170,17 +1268,21 @@ class ViewportImageProvider {
         continue;
       }
 
-      if (entry.isIntersecting && this.isWithinPrefetch(image)) {
-        this.schedule(image, true, { allowPrefetch: true });
-        this.updateImagePriority(image);
+      const rect = entry.boundingClientRect || null;
+      const distance = rect ? this.viewportDistanceFromRect(rect) : this.viewportDistance(image);
+      const tracked = this.findByImage(image) || this.findKeyEntryByImage(image)?.entry;
+      if (tracked && rect) this.updateEntryGeometry(tracked, rect);
+      if (entry.isIntersecting && distance <= this.prefetchMarginPx) {
+        this.schedule(image, true, { allowPrefetch: true, rect });
+        this.updateImagePriority(image, null, distance);
       } else {
-        const existing = this.findByImage(image);
+        const existing = tracked;
         if (existing) {
-          this.updateImagePriority(image);
+          this.updateImagePriority(image, null, distance);
           if (
             existing.state === "preprocessing_queued" &&
             existing.aheadProcessing !== true &&
-            this.viewportDistance(image) > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx
+            distance > AI_MANGA_UPSCALER_CONFIG.images.cancelDistancePx
           ) {
             this.deferPreprocessingOperation(existing, "cancelled-outside-prefetch");
           }
@@ -1193,19 +1295,23 @@ class ViewportImageProvider {
     if (image.dataset.aiEnhancerRawSlice === "true") {
       return;
     }
-    const metadata = this.imageProvider.read(image);
     const activeSliceGroup = this.sliceGroupsByParent.get(image);
     if (image.dataset.aiEnhancerSliced === "true") {
-      const nextKey = metadata.imageUrl ? this.imageKey(metadata, image) : null;
+      const currentRect = image.getBoundingClientRect();
+      const currentMetadata = this.imageProvider.read(image, currentRect);
+      const nextKey = currentMetadata.imageUrl ? this.imageKey(currentMetadata, image, currentRect) : null;
       if (!activeSliceGroup || activeSliceGroup.sourceRevision === nextKey) return;
       this.rollbackSliceGroup(activeSliceGroup, "superseded");
     }
-    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl) || !this.canProcessCandidate(image, options)) {
+    const candidate = this.inspectCandidate(image, options);
+    if (!candidate) return;
+    const { metadata, rect } = candidate;
+    if (!metadata.imageUrl || this.isBlacklisted(metadata.imageUrl)) {
       return;
     }
 
     let existing = this.findByImage(image);
-    const baseKey = this.imageKey(metadata, image);
+    const baseKey = this.imageKey(metadata, image, rect);
     const existingKeyEntry = this.findKeyEntryByImage(image);
     if (existingKeyEntry && existingKeyEntry.baseKey !== baseKey) {
       this.cancelPreprocessingSignal(existingKeyEntry.entry.preprocessingSignal, "superseded");
@@ -1254,6 +1360,7 @@ class ViewportImageProvider {
       aheadProcessing: options.aheadProcessing === true,
       queueStatusReported: Boolean(existing?.queueStatusReported || existingByKey?.queueStatusReported),
     };
+    this.updateEntryGeometry(operationEntry, rect);
     if (!this.claimSourceOwner(operationEntry)) {
       trackedImageKeys.set(baseKey, operationEntry);
       this.markDuplicateSource(operationEntry);
@@ -1319,6 +1426,8 @@ class ViewportImageProvider {
         : null;
       if (!this.isCurrentImageEntry(operationEntry)) return;
       operationEntry.sourceFingerprint = sourceFingerprint;
+      const dispatchRect = image.getBoundingClientRect();
+      this.updateEntryGeometry(operationEntry, dispatchRect);
       const enqueueResponse = await this.sendRuntimeMessage({
         type: "ENQUEUE_IMAGE",
         imageId,
@@ -1330,8 +1439,8 @@ class ViewportImageProvider {
         imageData: readResult.ok ? readResult.imageData : null,
         cacheVariant: "full",
         pageOrder,
-        viewportDistance: this.viewportDistance(image),
-        displayMetrics: this.displayMetrics(image),
+        viewportDistance: this.viewportDistanceFromRect(dispatchRect),
+        displayMetrics: this.displayMetrics(image, dispatchRect),
       }, "segment-enqueue-timeout").catch((error) => ({ accepted: false, error }));
       if (enqueueResponse?.accepted === false && this.isCurrentImageEntry(operationEntry)) {
         this.failPreprocessingOperation(operationEntry, this.reasonFromError(enqueueResponse.error, enqueueResponse.reason || "segment-enqueue-error"));
@@ -1911,7 +2020,7 @@ class ViewportImageProvider {
       sourceRevision: operation.sourceRevision,
       imageUrl: operation.metadata?.imageUrl || "",
       pageOrder: operation.pageOrder,
-      viewportDistance: this.viewportDistance(operation.image),
+      viewportDistance: this.viewportDistanceForEntry(operation),
       status: state,
       reason,
     };
@@ -2038,7 +2147,7 @@ class ViewportImageProvider {
 
   async sourceFingerprint(imageData) {
     if (!imageData) return null;
-    const bytes = this.imageDataToBytes(imageData);
+    const bytes = await this.imageDataToBytesAsync(imageData);
     if (bytes.length <= 4096) {
       return `sha256:${this.sha256Bytes(bytes)}`;
     }
@@ -2051,6 +2160,20 @@ class ViewportImageProvider {
       }
     }
     return `sha256:${this.sha256Bytes(bytes)}`;
+  }
+
+  async imageDataToBytesAsync(imageData) {
+    if (typeof imageData === "string" && imageData.length > 8192 && typeof fetch === "function") {
+      try {
+        const response = await fetch(`data:application/octet-stream;base64,${imageData}`);
+        if (response.ok && typeof response.arrayBuffer === "function") {
+          return new Uint8Array(await response.arrayBuffer());
+        }
+      } catch {
+        // Fall back to the deterministic decoder when data URLs are unavailable.
+      }
+    }
+    return this.imageDataToBytes(imageData);
   }
 
   imageDataToBytes(imageData) {
@@ -2150,10 +2273,10 @@ class ViewportImageProvider {
     }
   }
 
-  shouldSliceImage(image) {
+  shouldSliceImage(image, rectOverride = null) {
     if (!this.imageSlicingEnabled) return false;
     const sourceHeight = image.naturalHeight || 0;
-    const renderedHeight = image.getBoundingClientRect().height || image.clientHeight || 0;
+    const renderedHeight = (rectOverride || image.getBoundingClientRect()).height || image.clientHeight || 0;
     const sourceWidth = image.naturalWidth || 0;
     return sourceWidth > this.imageSliceMaxWidth || sourceHeight > this.imageSliceMaxHeight || renderedHeight > window.innerHeight * 1.8;
   }
@@ -2239,15 +2362,27 @@ class ViewportImageProvider {
   }
 
   canProcessCandidate(image, options = {}) {
-    if (!this.isVisibleCandidate(image, options)) {
-      return false;
-    }
-    return this.imageProvider.canProcess(image, {
-      allowTallImage: this.imageSlicingEnabled && this.shouldSliceImage(image),
-    });
+    return Boolean(this.evaluateCandidate(image, options));
   }
 
-  isVisibleCandidate(image, options = {}) {
+  evaluateCandidate(image, options = {}) {
+    const rect = options.rect || image?.getBoundingClientRect?.();
+    if (!rect || !this.isVisibleCandidate(image, options, rect)) return null;
+    if (!this.imageProvider.canProcess(image, {
+      allowTallImage: this.imageSlicingEnabled && this.shouldSliceImage(image, rect),
+      rect,
+    })) return null;
+    return { rect };
+  }
+
+  inspectCandidate(image, options = {}) {
+    const candidate = this.evaluateCandidate(image, options);
+    if (!candidate) return null;
+    const { rect } = candidate;
+    return { rect, metadata: this.imageProvider.read(image, rect) };
+  }
+
+  isVisibleCandidate(image, options = {}, rectOverride = null) {
     if (!image || image.dataset?.aiEnhancerRawSlice === "true" || image.dataset?.aiEnhancerSliced === "true") {
       return false;
     }
@@ -2261,7 +2396,7 @@ class ViewportImageProvider {
     if (document.documentElement?.contains && !document.documentElement.contains(image)) {
       return false;
     }
-    const rect = image.getBoundingClientRect();
+    const rect = rectOverride || image.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) {
       return false;
     }
@@ -2537,6 +2672,7 @@ class ViewportImageProvider {
   clearAheadBacklog(reason = "cancelled") {
     const queued = this.initialAheadQueue;
     this.initialAheadQueue = [];
+    this.initialAheadQueueKeys.clear();
     let cleared = 0;
     for (const item of queued) {
       const entry = trackedImageKeys.get(item.baseKey);
@@ -2549,9 +2685,30 @@ class ViewportImageProvider {
     return cleared;
   }
 
-  imageKey(metadata, image) {
+  updateEntryGeometry(entry, rect) {
+    if (!entry || !rect) return entry;
+    const scrollY = Number(window.scrollY || 0);
+    entry.documentTop = scrollY + Number(rect.top || 0);
+    entry.documentBottom = scrollY + Number(rect.bottom || rect.top || 0);
+    entry.geometryWidth = Number(rect.width) || entry.geometryWidth || 0;
+    entry.geometryHeight = Number(rect.height) || entry.geometryHeight || 0;
+    return entry;
+  }
+
+  viewportDistanceForEntry(entry) {
+    if (!entry || !Number.isFinite(entry.documentTop) || !Number.isFinite(entry.documentBottom)) {
+      return entry?.image ? this.viewportDistance(entry.image) : Number.MAX_SAFE_INTEGER;
+    }
+    const viewportTop = Number(window.scrollY || 0);
+    const viewportBottom = viewportTop + Number(window.innerHeight || 0);
+    if (entry.documentBottom >= viewportTop && entry.documentTop <= viewportBottom) return 0;
+    if (entry.documentTop > viewportBottom) return entry.documentTop - viewportBottom;
+    return viewportTop - entry.documentBottom;
+  }
+
+  imageKey(metadata, image, rectOverride = null) {
     const normalizedUrl = this.processingKey(metadata.imageUrl);
-    const rect = image.getBoundingClientRect();
+    const rect = rectOverride || image.getBoundingClientRect();
     const width = Math.round(metadata.width || rect.width || image.naturalWidth || 0);
     const height = Math.round(metadata.height || rect.height || image.naturalHeight || 0);
     const sourceWidth = image.naturalWidth || width;
@@ -2573,7 +2730,7 @@ class ViewportImageProvider {
   }
 
   acquirePreprocessingSlot(operation) {
-    const viewportDistance = this.viewportDistance(operation.image);
+    const viewportDistance = this.viewportDistanceForEntry(operation);
     const waiter = {
       imageId: operation.imageId,
       operationId: operation.operationId,
@@ -2643,8 +2800,8 @@ class ViewportImageProvider {
     return typeof release === "function" ? release() : false;
   }
 
-  displayMetrics(image) {
-    const rect = image.getBoundingClientRect();
+  displayMetrics(image, rectOverride = null) {
+    const rect = rectOverride || image.getBoundingClientRect();
     return {
       sourceWidth: image.naturalWidth || image.width || 0,
       sourceHeight: image.naturalHeight || image.height || 0,
@@ -2730,10 +2887,11 @@ class ViewportImageProvider {
     for (const waiter of [...this.preprocessingWaiters]) {
       const entry = waiter?.operation;
       if (!entry || entry.state !== "preprocessing_queued" || !entry.image) continue;
-      const distance = this.viewportDistance(entry.image);
+      this.updateEntryGeometry(entry, entry.image.getBoundingClientRect());
+      const distance = this.viewportDistanceForEntry(entry);
       waiter.viewportDistance = distance;
       waiter.priorityTier = this.preprocessingPriorityTier(entry, distance);
-      this.updateImagePriority(entry.image, entry.imageId);
+      this.updateImagePriority(entry.image, entry.imageId, distance);
       if (distance <= this.prefetchMarginPx && entry.aheadProcessing === true) {
         this.releaseAheadProcessing(entry);
       }
@@ -2743,6 +2901,18 @@ class ViewportImageProvider {
     }
     this.drainPreprocessingQueue();
     this.scheduleAheadProcessing();
+  }
+
+  handleScrollActivity() {
+    if (!this.enabled || this.pageHidden) return;
+    this.scrollActive = true;
+    if (this.scrollIdleTimer !== null) clearTimeout(this.scrollIdleTimer);
+    this.scrollIdleTimer = setTimeout(() => {
+      this.scrollIdleTimer = null;
+      this.scrollActive = false;
+      this.refreshPriorities();
+      this.renderer?.resumeVisualCommits?.();
+    }, this.scrollIdleDelayMs);
   }
 
   normalizeResultUrl(resultUrl) {
@@ -2814,12 +2984,9 @@ class ViewportImageProvider {
     this.pageLoadHandled = true;
     this.aheadProcessingCompleted = true;
     this.initialAheadQueue = [];
+    this.initialAheadQueueKeys.clear();
     if (this.aheadProcessingEnabled && this.aheadProcessingImageLimit > 0) {
-      const candidates = [...trackedImageKeys.values()].filter((entry) => (
-        entry.state === "seen" &&
-        entry.image &&
-        this.canProcessCandidate(entry.image, { allowPrefetch: true })
-      ));
+      const candidates = [...trackedImageKeys.values()].filter((entry) => entry.state === "seen" && entry.image);
       for (const entry of candidates) this.queueAheadImage(entry, { schedule: false, sort: false });
       this.sortAheadQueue();
     }
@@ -2831,7 +2998,12 @@ class ViewportImageProvider {
     if (this.pageHidden || !this.enabled || !this.aheadProcessingEnabled || this.aheadProcessingImageLimit <= 0) return;
 
     while (this.aheadProcessingKeys.size < this.aheadProcessingImageLimit && this.initialAheadQueue.length) {
+      if (this.scrollActive) {
+        const nextPriority = this.aheadQueuePriority(this.initialAheadQueue[0]);
+        if (nextPriority.priorityTier !== 0) return;
+      }
       const queued = this.initialAheadQueue.shift();
+      this.initialAheadQueueKeys.delete(queued.baseKey);
       const entry = trackedImageKeys.get(queued.baseKey);
       const isAttached = !document.documentElement?.contains || document.documentElement.contains(queued.image);
       if (
@@ -2849,10 +3021,13 @@ class ViewportImageProvider {
     }
   }
 
-  preprocessingPriorityTier(operation, distance = operation?.image ? this.viewportDistance(operation.image) : Number.MAX_SAFE_INTEGER) {
-    const rect = operation?.image?.getBoundingClientRect?.();
-    if (rect && rect.bottom >= 0 && rect.top <= window.innerHeight) return 0;
-    if (rect && rect.top > window.innerHeight) return 1;
+  preprocessingPriorityTier(operation, distance = this.viewportDistanceForEntry(operation)) {
+    const viewportTop = Number(window.scrollY || 0);
+    const viewportBottom = viewportTop + Number(window.innerHeight || 0);
+    if (Number.isFinite(operation?.documentTop) && Number.isFinite(operation?.documentBottom)) {
+      if (operation.documentBottom >= viewportTop && operation.documentTop <= viewportBottom) return 0;
+      if (operation.documentTop > viewportBottom) return 1;
+    }
     if (distance === 0) return 0;
     return 2;
   }
@@ -2896,8 +3071,15 @@ class ViewportImageProvider {
       this.markDuplicateSource(entry);
       return false;
     }
-    if (!this.initialAheadQueue.some((queued) => queued.baseKey === entry.baseKey)) {
-      const rect = entry.image.getBoundingClientRect();
+    if (!this.initialAheadQueueKeys.has(entry.baseKey)) {
+      const rect = Number.isFinite(entry.documentTop) && Number.isFinite(entry.documentBottom)
+        ? {
+            top: entry.documentTop - Number(window.scrollY || 0),
+            bottom: entry.documentBottom - Number(window.scrollY || 0),
+            width: entry.geometryWidth || 0,
+            height: entry.geometryHeight || 0,
+          }
+        : entry.image.getBoundingClientRect();
       const scrollY = Number(window.scrollY || 0);
       this.initialAheadQueue.push({
         image: entry.image,
@@ -2907,6 +3089,7 @@ class ViewportImageProvider {
         documentTop: scrollY + Number(rect.top || 0),
         documentBottom: scrollY + Number(rect.bottom || 0),
       });
+      this.initialAheadQueueKeys.add(entry.baseKey);
       if (sort) this.sortAheadQueue();
       entry.queueStatusReported = true;
       this.sendPreprocessingStatus(entry, "PREPROCESSING_QUEUED", "preprocessing_queued", "ahead-page-order");
@@ -2915,7 +3098,7 @@ class ViewportImageProvider {
     return true;
   }
 
-  updateImagePriority(image, imageId = null) {
+  updateImagePriority(image, imageId = null, distanceOverride = null) {
     const entry = imageId ? trackedImages.get(imageId) : this.findByImage(image);
     const targetId = entry?.imageId || imageId || image.dataset.aiEnhancerImageId;
     if (!targetId) return;
@@ -2923,7 +3106,7 @@ class ViewportImageProvider {
       type: "UPDATE_PRIORITY",
       imageId: targetId,
       operationId: entry?.operationId || image.dataset.aiEnhancerOperationId || null,
-      viewportDistance: this.viewportDistance(image),
+      viewportDistance: Number.isFinite(distanceOverride) ? distanceOverride : this.viewportDistance(image),
     });
   }
 
@@ -3162,7 +3345,10 @@ class ViewportImageProvider {
   }
 
   viewportDistance(image) {
-    const rect = image.getBoundingClientRect();
+    return this.viewportDistanceFromRect(image.getBoundingClientRect());
+  }
+
+  viewportDistanceFromRect(rect) {
     if (rect.bottom >= 0 && rect.top <= window.innerHeight) {
       return 0;
     }

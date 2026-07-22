@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removed the remaining first-entry scroll hot paths without reducing image quality: page-load ahead admission reuses discovery geometry and O(1) membership, while continuous scroll pauses only new offscreen owners until a 160 ms idle boundary.
+- Added visible-first frame pacing for enhanced-image replacement. The renderer commits at most one prepared image per animation frame, leaves originals visible until commit, defers offscreen swaps while scrolling, and falls back after 120 ms if a background tab stops animation frames.
+- Moved large source-fingerprint base64 decoding to the asynchronous browser path and prevented first normal/fast-cached load events from creating duplicate operations; genuine later same-URL reloads still receive a new revision.
 - Reduced scroll jank during image replacement: result bytes use asynchronous browser Blob conversion when available, are preloaded/decoded off the visible image, the fixed pre-swap fade wait is gone, and the final DOM swap is deferred to an idle/frame-safe point while layout dimensions stay frozen.
 - Fixed valid images remaining as `Detected, not queued for preprocessing`: every unique eligible image now enters a metadata-only page backlog immediately, including lazy/dynamic images discovered after load, while active preprocessing remains bounded.
 - Changed image priority to match reading direction: current viewport first, then images below from near to far, then images above. Duplicate sources now end as explicit `Skipped` records, and disabling/reprocessing/page exit settles unscheduled backlog state.

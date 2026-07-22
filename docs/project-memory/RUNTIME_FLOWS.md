@@ -10,7 +10,7 @@ DOM discovery
   -> browser reads displayed bytes
   -> inspect encoded source geometry
   -> promote to slicing when source dimensions exceed slice limits
-  -> source fingerprint
+  -> asynchronous source fingerprint decode/hash
   -> ENQUEUE_IMAGE
   -> background waiting
   -> background processing
@@ -18,15 +18,19 @@ DOM discovery
   -> UPSCALE_COMPLETE
   -> asynchronous Blob conversion
   -> detached image preload/decode
-  -> idle/frame-safe DOM commit with frozen layout
+  -> visible-first one-per-frame DOM commit with frozen layout
   -> fixed/cache
 ```
 
-Terminal states are `error`, `timeout`, `cancelled`, `removed`, `skipped`, and `superseded`. After `window.load`, each page admits every eligible `seen` image to one metadata-only ahead backlog, canonicalizes the source URL, and keeps one owner for each source. Admission emits `PREPROCESSING_QUEUED` immediately, while `aheadProcessingImageLimit` still bounds the owners that can start real work. Eligible mutation/lazy-load images discovered later join the same backlog. Priority is current viewport, then images below from near to far, then images above; scroll sorting uses stored document coordinates rather than rereading the full page layout. Duplicate sources emit terminal `PREPROCESSING_SKIPPED`, and operation/source-owner/completed-key guards suppress repeated work.
+Terminal states are `error`, `timeout`, `cancelled`, `removed`, `skipped`, and `superseded`. After `window.load`, each page admits every eligible `seen` image to one metadata-only ahead backlog, canonicalizes the source URL, and keeps one owner for each source. Admission emits `PREPROCESSING_QUEUED` immediately, while `aheadProcessingImageLimit` still bounds the owners that can start real work. Queue membership uses an O(1) key set and the load pass reuses geometry captured during discovery rather than rescanning every image. Eligible mutation/lazy-load images discovered later join the same backlog. Priority is current viewport, then images below from near to far, then images above. Duplicate sources emit terminal `PREPROCESSING_SKIPPED`, and operation/source-owner/completed-key guards suppress repeated work.
 
 When an enhanced result is returned, the background checks the exact result URL against `blockedResultRules` before sending base64 bytes to the content script. A match is recorded as `SKIPPED`, keeps the original source in the registry, and sends only an operation-checked rejection message. A Dashboard ban stores that exact result URL after verifying the current operation; it never adds the original URL to `blacklistRules`. If the result has already committed, content restores the renderer's retained first-original snapshot and clears only that operation's completion ownership.
 
-When disabled, discovery and load callbacks remain dormant and the pending snapshot queue is discarded. Re-enabling detaches and re-registers existing observers once, preserves completed/source-owner suppression, and runs the page-load snapshot only when the page has not already consumed it. `IntersectionObserver` promotes later images; scroll/resize work only reprioritizes currently queued preprocessing waiters and never scans the full discovered-image registry.
+When disabled, discovery and load callbacks remain dormant and the pending snapshot queue is discarded. Re-enabling detaches and re-registers existing observers once, preserves completed/source-owner suppression, and runs the page-load snapshot only when the page has not already consumed it. `IntersectionObserver` promotes later images. Scroll/resize only marks interaction active and resets a 160 ms idle boundary; it does not scan or reprioritize the page on each event. At idle, stored document coordinates reorder the ahead backlog and only active preprocessing waiters receive fresh geometry.
+
+Large base64 source fingerprints prefer browser-managed data-URL/fetch decoding and Web Crypto so byte conversion does not monopolize the content main thread. A deterministic decoder/hash remains the compatibility fallback. Initial incomplete and fast cached image load events confirm the already-created operation; only a later genuine reload increments source generation.
+
+Prepared render results use one shared visual-commit queue. The renderer resolves at most one waiter per animation frame, prioritizes an image intersecting the viewport while scroll is active, leaves offscreen commits queued until idle, and uses a 120 ms timer if a background/headless tab stops delivering animation frames. The original image remains fully visible and retains responsive attributes until the operation-current commit point.
 
 ## Identity model
 
@@ -54,6 +58,7 @@ eligible candidate
 - `preprocessing_queued` includes metadata-only page backlog entries; it does not mean image bytes, a preprocessing slot, or backend capacity have been acquired.
 - Detached, superseded, distant, timed-out, or cancelled waiters cannot later acquire a slot.
 - Slot release is idempotent and must settle on success, failure, cancellation, and fallback.
+- While scroll is active, the scheduler does not grant a new offscreen ahead owner; visible intersection work remains eligible and idle resumes normal current/below/above draining.
 
 ## Background scheduling
 

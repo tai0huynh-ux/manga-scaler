@@ -396,6 +396,8 @@ function loadContentClasses(options = {}) {
     Blob: class {},
     URLSearchParams,
     TextEncoder,
+    requestAnimationFrame: options.requestAnimationFrame,
+    requestIdleCallback: options.requestIdleCallback,
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     atob: (value) => Buffer.from(value, "base64").toString("binary"),
@@ -1808,6 +1810,31 @@ test("content fingerprint remains SHA-256 when Web Crypto is unavailable", async
   assert.equal(fingerprint, "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 });
 
+test("large content fingerprints decode through the asynchronous data URL path", async () => {
+  const payload = Buffer.alloc(8192, 0x5a);
+  let fetchCalls = 0;
+  let synchronousDecodeCalls = 0;
+  const { ViewportImageProvider } = loadContentClasses({
+    fetch: async (url) => {
+      fetchCalls += 1;
+      assert.match(url, /^data:application\/octet-stream;base64,/);
+      return { ok: true, arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) };
+    },
+  });
+  const viewportProvider = new ViewportImageProvider({ imageProvider: {}, renderer: {} });
+  const originalDecoder = viewportProvider.base64ToBytes.bind(viewportProvider);
+  viewportProvider.base64ToBytes = (value) => {
+    synchronousDecodeCalls += 1;
+    return originalDecoder(value);
+  };
+
+  const fingerprint = await viewportProvider.sourceFingerprint(payload.toString("base64"));
+
+  assert.equal(fetchCalls, 1);
+  assert.equal(synchronousDecodeCalls, 0);
+  assert.match(fingerprint, /^sha256:[0-9a-f]{64}$/);
+});
+
 test("same image element source change starts a new operation identity", async () => {
   const reads = ["first-data", "second-data"];
   const { viewportProvider, sentMessages } = makeContentProvider({
@@ -1862,6 +1889,44 @@ test("IMAGE_SEEN and enqueue lifecycle share one exact operation identity", asyn
   assert.ok(messages.every((message) => message.operationId));
 });
 
+test("the first normal load confirms an incomplete image without replacing its operation", async () => {
+  const { viewportProvider, HTMLImageElement, sentMessages } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/first-normal-load.png";
+  image.currentSrc = image.src;
+  image.complete = false;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 900;
+
+  viewportProvider.observeImage(image);
+  const firstSeen = sentMessages.find((message) => message.type === "IMAGE_SEEN");
+  image.complete = true;
+  image.dispatch("load");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const seen = sentMessages.filter((message) => message.type === "IMAGE_SEEN");
+  assert.equal(seen.length, 1, JSON.stringify(sentMessages));
+  assert.equal(image.dataset.aiEnhancerOperationId, firstSeen.operationId);
+  assert.equal(image.dataset.aiEnhancerSourceGeneration || "0", "0");
+});
+
+test("a fast cached image does not create a second operation when its first load event arrives", async () => {
+  const { viewportProvider, HTMLImageElement, sentMessages } = makeContentProvider();
+  const image = new HTMLImageElement();
+  image.src = "https://example.com/fast-cached-first-load.png";
+  image.currentSrc = image.src;
+  image.complete = true;
+  image.naturalWidth = image.clientWidth = image.width = 900;
+  image.naturalHeight = image.clientHeight = image.height = 900;
+
+  viewportProvider.observeImage(image);
+  image.dispatch("load");
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sentMessages.filter((message) => message.type === "IMAGE_SEEN").length, 1, JSON.stringify(sentMessages));
+  assert.equal(image.dataset.aiEnhancerSourceGeneration || "0", "0");
+});
+
 test("same-URL page reload cancels old bytes and starts a new source revision", async () => {
   const firstRead = deferred();
   const firstReadStarted = deferred();
@@ -1884,8 +1949,10 @@ test("same-URL page reload cancels old bytes and starts a new source revision", 
   image.clientHeight = 900;
   image.width = 900;
   image.height = 900;
+  image.complete = true;
 
   viewportProvider.observeImage(image);
+  viewportProvider.imageLoadStates.get(image).observedAt -= 1000;
   viewportProvider.handleIntersections([{ target: image, isIntersecting: true }]);
   await firstReadStarted.promise;
   image.dispatch("load");
@@ -2448,6 +2515,163 @@ test("renderer prepares and preloads the result before the visible source commit
   image.complete = true;
   image.dispatch("load");
   assert.equal(await rendering, "rendered");
+});
+
+test("renderer keeps the original fully visible while a result is prepared", async () => {
+  const { Renderer } = loadContentClasses();
+  const renderer = new Renderer();
+  const image = makeRenderElement({
+    src: "https://example.com/original-visible.png",
+    classes: ["ai-manga-upscaler-fading"],
+  });
+
+  await renderer.fadeOut(image);
+
+  assert.equal(image.classList.contains("ai-manga-upscaler-fading"), false);
+  assert.equal(image.src, "https://example.com/original-visible.png");
+});
+
+test("renderer commits at most one prepared image in each animation frame", async () => {
+  const frameCallbacks = [];
+  const urlApi = makeTrackedUrlApi();
+  let objectUrlSequence = 0;
+  urlApi.createObjectURL = () => `blob:paced-${objectUrlSequence++}`;
+  const { Renderer, trackedImages } = loadContentClasses({
+    urlApi,
+    requestAnimationFrame: (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    },
+  });
+  const renderer = new Renderer();
+  renderer.preloadObjectUrl = async () => undefined;
+  const images = [0, 1].map((index) => {
+    const image = makeRenderElement({ src: `https://example.com/original-${index}.png` });
+    image.complete = true;
+    image.naturalWidth = 100;
+    const entry = {
+      imageId: `paced-image-${index}`,
+      operationId: `paced-operation-${index}`,
+      sourceRevision: `paced-revision-${index}`,
+      metadata: { width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+    };
+    trackedImages.set(entry.imageId, entry);
+    return { image, entry };
+  });
+
+  const renders = images.map(({ image, entry }) => renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from(entry.imageId).toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(frameCallbacks.length, 1);
+  assert.ok(images.every(({ image }) => !image.src.startsWith("blob:paced-")));
+  frameCallbacks.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(images.filter(({ image }) => image.src.startsWith("blob:paced-")).length, 1);
+  assert.equal(frameCallbacks.length, 1);
+  frameCallbacks.shift()();
+  assert.deepEqual(await Promise.all(renders), ["rendered", "rendered"]);
+  assert.equal(images.filter(({ image }) => image.src.startsWith("blob:paced-")).length, 2);
+});
+
+test("renderer commits visible results during scroll and resumes offscreen results after idle", async () => {
+  const frameCallbacks = [];
+  let scrolling = true;
+  const urlApi = makeTrackedUrlApi();
+  let objectUrlSequence = 0;
+  urlApi.createObjectURL = () => `blob:scroll-paced-${objectUrlSequence++}`;
+  const { Renderer, trackedImages } = loadContentClasses({
+    urlApi,
+    requestAnimationFrame: (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    },
+  });
+  const renderer = new Renderer();
+  renderer.setScrollStateProvider(() => scrolling);
+  renderer.preloadObjectUrl = async () => undefined;
+  const makeEntry = (name, top) => {
+    const image = makeRenderElement({ src: `https://example.com/${name}.png` });
+    image.complete = true;
+    image.naturalWidth = 100;
+    image.getBoundingClientRect = () => ({ width: 100, height: 100, top, bottom: top + 100, left: 0, right: 100 });
+    const entry = {
+      imageId: `scroll-${name}`,
+      operationId: `scroll-operation-${name}`,
+      sourceRevision: `scroll-revision-${name}`,
+      metadata: { width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+    };
+    trackedImages.set(entry.imageId, entry);
+    return { image, entry };
+  };
+  const offscreen = makeEntry("offscreen", 2000);
+  const visible = makeEntry("visible", 0);
+  const renders = [offscreen, visible].map(({ image, entry }) => renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from(entry.imageId).toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(frameCallbacks.length, 1);
+  frameCallbacks.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(visible.image.src, "blob:scroll-paced-1");
+  assert.equal(offscreen.image.src, "https://example.com/offscreen.png");
+  assert.equal(frameCallbacks.length, 0);
+
+  scrolling = false;
+  renderer.resumeVisualCommits();
+  assert.equal(frameCallbacks.length, 1);
+  frameCallbacks.shift()();
+  assert.deepEqual(await Promise.all(renders), ["rendered", "rendered"]);
+  assert.equal(offscreen.image.src, "blob:scroll-paced-0");
+});
+
+test("renderer uses a bounded fallback when a background tab stops animation frames", async () => {
+  const fakeTimers = makeFakeTimers();
+  const frameCallbacks = [];
+  const urlApi = makeTrackedUrlApi();
+  urlApi.createObjectURL = () => "blob:background-fallback";
+  const { Renderer, trackedImages } = loadContentClasses({
+    timers: fakeTimers.api,
+    urlApi,
+    requestAnimationFrame: (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    },
+  });
+  const renderer = new Renderer();
+  renderer.preloadObjectUrl = async () => undefined;
+  const image = makeRenderElement({ src: "https://example.com/background-original.png" });
+  image.complete = true;
+  image.naturalWidth = 100;
+  const entry = {
+    imageId: "background-fallback-image",
+    operationId: "background-fallback-operation",
+    sourceRevision: "background-fallback-revision",
+    metadata: { width: 100, height: 100, src: image.src, srcset: null, sizes: null, pictureSources: [] },
+  };
+  trackedImages.set(entry.imageId, entry);
+
+  const rendering = renderer.render(image, {
+    imageId: entry.imageId,
+    operationId: entry.operationId,
+    sourceRevision: entry.sourceRevision,
+    imageBase64: Buffer.from(entry.imageId).toString("base64"),
+  }, () => trackedImages.get(entry.imageId) === entry);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(frameCallbacks.length, 1);
+  assert.equal(image.src, "https://example.com/background-original.png");
+
+  fakeTimers.runNext();
+  assert.equal(await rendering, "rendered");
+  assert.equal(image.src, "blob:background-fallback");
 });
 
 test("renderer restores the exact original DOM state after a committed AI result is banned", async () => {
@@ -3691,7 +3915,7 @@ test("ahead ownership releases only after the final slice result", async () => {
   assert.ok(sentMessages.some((message) => message.type === "ENQUEUE_IMAGE" && message.imageUrl === "https://example.com/slice-second.png"));
 });
 
-test("initial lookahead performs one bounded layout selection on a large page", () => {
+test("initial lookahead reuses discovery geometry instead of rescanning a large page", () => {
   const fakeTimers = makeFakeTimers();
   const { viewportProvider, HTMLImageElement } = makeContentProvider({
     preprocessingConcurrency: 3,
@@ -3718,10 +3942,76 @@ test("initial lookahead performs one bounded layout selection on a large page", 
   assert.ok(layoutReads < 2500, `initial discovery used ${layoutReads} layout reads before the ahead pass`);
   viewportProvider.runInitialAheadProcessing();
   const completedPassReads = layoutReads;
-  assert.ok(completedPassReads < 10000, `initial ahead pass used ${completedPassReads} layout reads`);
+  assert.ok(completedPassReads < 900, `initial ahead pass used ${completedPassReads} layout reads`);
 
   viewportProvider.scheduleAheadProcessing();
   assert.equal(layoutReads, completedPassReads);
+});
+
+test("active scrolling pauses new offscreen ahead owners and idle resumes the backlog", async () => {
+  const reads = [];
+  const renderer = {
+    installRawSlices: () => [],
+    waitForImageLoad: async () => undefined,
+    render: async () => "rendered",
+  };
+  const { viewportProvider, sentMessages, HTMLImageElement } = makeContentProvider({
+    aheadProcessingImageLimit: 1,
+    renderer,
+    readDisplayedImage: async (imageUrl) => {
+      reads.push(imageUrl);
+      return `bytes:${imageUrl}`;
+    },
+  });
+  viewportProvider.imageSlicingEnabled = false;
+  viewportProvider.sourceFingerprint = async (imageData) => `fingerprint:${imageData}`;
+  const images = [0, 1].map((index) => {
+    const image = new HTMLImageElement();
+    image.src = `https://example.com/scroll-backpressure-${index}.png`;
+    image.currentSrc = image.src;
+    image.naturalWidth = image.clientWidth = image.width = 900;
+    image.naturalHeight = image.clientHeight = image.height = 900;
+    const top = 3000 + index * 1000;
+    image.getBoundingClientRect = () => ({ width: 900, height: 900, top, bottom: top + 900, left: 0, right: 900 });
+    return image;
+  });
+
+  images.forEach((image) => viewportProvider.observeImage(image));
+  viewportProvider.runInitialAheadProcessing();
+  await new Promise((resolve) => setImmediate(resolve));
+  const first = sentMessages.find((message) => message.type === "ENQUEUE_IMAGE");
+  assert.ok(first);
+  viewportProvider.scrollActive = true;
+  assert.equal(await viewportProvider.complete({ ...first, type: "UPSCALE_COMPLETE", imageBase64: "enhanced" }), "rendered");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reads, ["https://example.com/scroll-backpressure-0.png"]);
+
+  viewportProvider.scrollActive = false;
+  viewportProvider.scheduleAheadProcessing();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reads, [
+    "https://example.com/scroll-backpressure-0.png",
+    "https://example.com/scroll-backpressure-1.png",
+  ]);
+});
+
+test("scroll activity defers priority work until the idle boundary", () => {
+  const fakeTimers = makeFakeTimers();
+  let refreshes = 0;
+  let resumes = 0;
+  const { viewportProvider } = makeContentProvider({
+    timers: fakeTimers.api,
+    renderer: { resumeVisualCommits: () => { resumes += 1; } },
+  });
+  viewportProvider.refreshPriorities = () => { refreshes += 1; };
+
+  viewportProvider.handleScrollActivity();
+  assert.equal(viewportProvider.scrollActive, true);
+  assert.equal(refreshes, 0);
+  fakeTimers.runNext();
+  assert.equal(viewportProvider.scrollActive, false);
+  assert.equal(refreshes, 1);
+  assert.equal(resumes, 1);
 });
 
 test("the initial lookahead pass does not repeat on viewport refresh", async () => {

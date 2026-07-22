@@ -185,3 +185,15 @@ Decision: wait for monitor recovery before accepting `ENQUEUE_IMAGE`, and reject
 Reason: Operation identity is already the authoritative stale-work boundary; applying it at the post-restart enqueue boundary prevents old bytes from resurrecting without affecting new operation IDs created by navigation or reprocessing.
 
 Consequence: Retries must use a new operation identity, and the worker/navigation/reload lifecycle remains settled with no stale render.
+
+## 2026-07-22 - Apply interaction backpressure and frame-paced image commits
+
+Context: Whole-page ahead processing preserved quality and immediate originals, but opening a long chapter and scrolling quickly still concentrated layout reads, queue sorting, base64 fingerprint decoding, and multiple DOM source swaps on the content main thread.
+
+Options considered: disable whole-page ahead processing; lower output quality or Strength; add larger fixed delays; keep full processing but separate admission, compute, and visual commit work around browser interaction boundaries.
+
+Decision: keep whole-page quality and bounded backend concurrency unchanged. Reuse discovery geometry, use O(1) ahead membership, pause only new offscreen ahead ownership during a 160 ms scroll window, decode large fingerprints asynchronously, and commit at most one prepared image per animation frame. Visible commits can proceed during scroll; offscreen commits resume at idle. A 120 ms fallback handles suspended animation frames.
+
+Reason: Browser responsiveness depends on bounding synchronous main-thread work and visual mutations, not on hiding originals or weakening the enhancement pipeline. Interaction backpressure protects the current reading frame while preserving completed work and forward progress.
+
+Consequence: Fast scrolling no longer triggers page-wide reprioritization or a burst of image swaps. A completed offscreen result may wait briefly for scroll idle, but the original remains visible, visible results stay prioritized, and background/headless tabs cannot strand the render queue.
