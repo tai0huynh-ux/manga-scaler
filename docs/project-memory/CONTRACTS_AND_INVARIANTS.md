@@ -89,6 +89,9 @@ Browser-owned encoded dimensions are authoritative when DOM geometry is absent, 
 - `enhanceLevel >= 0.15` may use neural inference for every preset. Neural input area must increase monotonically with strength and remain bounded by source dimensions, safe model dimensions, and the `500,000` pixel cap.
 - Neural output must be resized to the exact Lanczos target before composition. Strength controls a nonlinear neural weight plus progressively stronger finishing; `100%` is explicitly allowed to create halos or distortion.
 - Neural and fast-path results use distinct backend keys and the extension `pipeline:v4-strength-compute` cache namespace. A stale v3 cache entry must never replace a current result.
+- Screen sizing returns the selected HD/FHD/2K/4K dimensions exactly; Manual Pixel width/height caps apply only in `sizingMode=pixel` and must not silently constrain a Screen preset.
+- Changes to output sizing, output quality, enhancement mode/Strength, performance, or text-processing settings invalidate current content operations and rediscover them so the new payload is rendered. Scheduling-only changes do not trigger a full reprocess.
+- Popup/Dashboard polling must not overwrite a focused mode or Strength control; the value remains user-owned until focus leaves the control.
 
 ## Discovery support boundary
 

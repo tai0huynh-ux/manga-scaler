@@ -24,6 +24,8 @@
 - **Enhancement Strength became weak after the v3 blending change:** resolved by restoring neural finishing, making neural compute and blend weight increase with strength, allowing non-4K neural work from `15%`, and making `100%` intentionally aggressive.
 - **An older backend could report HTTP 200 while serving the pre-fix image pipeline:** resolved with health `pipelineVersion=4`, a dedicated `8766` endpoint, strict extension/Native Messaging compatibility checks, and the `pipeline:v4-strength-compute` cache namespace.
 - **Whole-page ahead processing could be silently disabled by persisted pre-v3 settings:** resolved with an idempotent schema-4 migration that restores the one-shot page-load default while preserving later explicit user choices.
+- **Changing Screen preset appeared ineffective below 4K:** resolved by reprocessing existing page images on output-setting changes and by preventing hidden Manual Pixel caps from limiting Screen presets.
+- **Strength slider could snap back during Popup/Dashboard polling:** resolved by preserving focused mode and Strength controls until the user leaves them.
 
 ## Remaining limitations
 

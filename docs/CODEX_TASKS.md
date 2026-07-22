@@ -22,6 +22,7 @@
 - [x] Prove full same-tab navigation cleanup and automatic unpacked-extension reload recovery without duplicate replacements.
 - [x] Fix whole-page ahead migration, strength-controlled neural blending, stale backend selection, byte-preserving PNG caching, and resize-safe HD/FHD/2K routing; verify with full gates and Edge fixture E2E.
 - [x] Restore effective Strength behavior with a model-free 0-10% fast path, strength-scaled neural compute from 15%, exact-size composition, aggressive 100% finishing, pipeline v4 isolation, benchmarks, and Edge E2E.
+- [x] Verify Extension settings across Auto/HD/FHD/2K and Strength 5/35/100%; reprocess existing images on output-setting changes, protect focused controls from polling resets, and make Screen presets ignore hidden Manual Pixel caps.
 
 ## Manual follow-up
 

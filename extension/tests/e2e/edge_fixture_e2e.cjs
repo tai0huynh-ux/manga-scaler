@@ -7,6 +7,7 @@ const { startReaderFixture } = require("../fixtures/reader/server.cjs");
 
 const BACKEND_URL = process.env.AI_MANGA_E2E_BACKEND || "http://127.0.0.1:8766";
 const WAIT_TIMEOUT_MS = Number(process.env.AI_MANGA_E2E_TIMEOUT_MS) || 180000;
+const SETTINGS_MATRIX_ONLY = process.argv.includes("--settings-matrix");
 
 function browserCandidates() {
   return [
@@ -260,7 +261,7 @@ async function main() {
     const extensionWorker = await waitForExtensionWorker(port);
     assert.ok(extensionWorker.url.startsWith("chrome-extension://"));
     const initialWorkerClient = await connectTarget(extensionWorker);
-    await initialWorkerClient.evaluate("globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__ = []");
+    if (SETTINGS_MATRIX_ONLY) await initialWorkerClient.evaluate("globalThis.__AI_MANGA_UPSCALER_TRACE_EVENTS__ = []");
 
     const targets = await listTargets(port);
     const pageTarget = targets.find((target) => target.type === "page" && target.url === "about:blank")
@@ -312,6 +313,7 @@ async function main() {
     }
     assert.ok(pageState.health.queue.completed >= healthBefore.queue.completed + 2);
 
+    if (SETTINGS_MATRIX_ONLY) {
     const popupUrl = new URL("../popup.html", extensionWorker.url);
     const createdPopup = await browserClient.send("Target.createTarget", { url: popupUrl.href });
     const popupTarget = await waitFor("extension Popup target", async () => {
@@ -419,6 +421,7 @@ async function main() {
     }
     // Leave the fixture in its baseline profile so later worker/navigation gates
     // measure lifecycle behavior rather than the last expensive 2K/100% job.
+    const beforeBaselineOperations = await pageClient.evaluate(`(() => [...document.querySelectorAll('#eligible-static, #eligible-dynamic')].map((image) => image.dataset.aiEnhancerOperationId || null))()`);
     await popupClient.evaluate(`(async () => {
       document.getElementById('sizingMode').value = 'auto';
       document.getElementById('resolutionPreset').value = 'fhd';
@@ -433,13 +436,36 @@ async function main() {
       }
       throw new Error('Popup baseline settings did not persist.');
     })()`);
-    await waitFor("baseline settings queue settlement", async () => {
+    await waitFor("baseline settings content settlement", async () => {
+      const page = await pageClient.evaluate(`(() => [...document.querySelectorAll('#eligible-static, #eligible-dynamic')].map((image) => ({
+        imageId: image.dataset.aiEnhancerImageId || null,
+        operationId: image.dataset.aiEnhancerOperationId || null,
+        ready: image.classList.contains('ai-manga-upscaler-ready'),
+      })))()`);
+      if (page.length !== 2 || page.some((image, index) => !image.ready || !image.operationId || image.operationId === beforeBaselineOperations[index])) return null;
+      const monitor = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
+      if (!page.every((image) => monitor.jobs.some((job) => job.imageId === image.imageId && job.operationId === image.operationId && job.stage === 'COMPLETED'))) return null;
       const health = await readHealth();
-      return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 ? health : null;
+      const worker = await initialWorkerClient.evaluate("({ active: scheduler.active.size, pending: scheduler.pending.size })");
+      return health.queue.size === 0 && health.queue.waiting === 0 && health.queue.processing === 0 && worker.active === 0 && worker.pending === 0 ? { page, health } : null;
     }, 180000);
     popupClient.close();
     popupClient = null;
     await browserClient.send("Target.closeTarget", { targetId: createdPopup.targetId });
+    const settingsBrowserExceptions = [pageClient, initialWorkerClient]
+      .flatMap((client) => client.events)
+      .filter((event) => event.method === "Runtime.exceptionThrown");
+    assert.equal(settingsBrowserExceptions.length, 0, "settings matrix observed an unhandled browser exception");
+    console.log(JSON.stringify({
+      result: "PASS",
+      browser: browserPath,
+      extensionWorker: extensionWorker.url,
+      fixture: fixture.origin,
+      settings: settingsEvidence,
+      browserExceptions: settingsBrowserExceptions.length,
+    }, null, 2));
+    return;
+    }
 
     const monitorState = await initialWorkerClient.evaluate("processingMonitor.snapshot()");
     const dashboardEvidence = {};
@@ -448,9 +474,7 @@ async function main() {
     assert.ok(completedMonitorJobs.every((job) => job.renderCommit?.confirmed === true), "monitor completion must include renderer confirmation");
     assert.equal(JSON.stringify(monitorState).includes("imageData"), false, "monitor snapshot must exclude image bytes");
 
-    // Settings reprocessing leaves older terminal rows in history; retry the
-    // newest real completion so its operation identity still matches the page.
-    const retrySource = completedMonitorJobs.at(-1);
+    const retrySource = completedMonitorJobs[0];
     const dashboardSeed = await initialWorkerClient.evaluate(`(async () => {
       processingMonitor.clearTerminal();
       const tabId = ${JSON.stringify(retrySource.tabId)};
@@ -1045,7 +1069,6 @@ async function main() {
       completedDelta: pageState.health.queue.completed - healthBefore.queue.completed,
       staticOutput: [pageState.state.staticImage.naturalWidth, pageState.state.staticImage.naturalHeight],
       dynamicOutput: [pageState.state.dynamicImage.naturalWidth, pageState.state.dynamicImage.naturalHeight],
-      settings: settingsEvidence,
       queue: pageState.health.queue,
       dashboard: dashboardEvidence,
       lookahead: lookaheadEvidence,

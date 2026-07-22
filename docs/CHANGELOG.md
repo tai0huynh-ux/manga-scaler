@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed Screen preset output being silently capped by hidden Manual Pixel limits; HD/FHD/2K/4K now send the selected dimensions exactly. Changing output sizing, quality, mode, Strength, or text settings reprocesses existing discovered images with a distinct cache identity, and focused Strength controls are no longer overwritten by polling.
+- Added a real Edge settings matrix gate (`npm.cmd run test:e2e:edge-settings`) covering Auto, HD 5%, Full HD 35%, and 2K 100% request/output behavior with zero browser exceptions.
 - Added an accessible `Hide details` / `Show details` control to Processing Monitor; collapsing the detail pane expands the jobs table while preserving the selected job and timeline for immediate restoration.
 - Added backend pipeline compatibility `4` on `127.0.0.1:8766`; the extension and Native Messaging launcher reject stale strength pipelines even when they return HTTP 200.
 - Fixed Enhancement Strength becoming nearly ineffective after neural blending: `0-10%` is now a model-free Lanczos path with minimum-effort WebP encoding, while `15-100%` progressively increases neural input compute, nonlinear contribution, and finishing strength. Neural output is resized to the exact requested geometry before composition, and `100%` is intentionally aggressive enough to distort.

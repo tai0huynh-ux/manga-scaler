@@ -5,6 +5,7 @@
     "check:js": "node --check extension/src/config.js && node --check extension/src/processing-monitor.js && node --check extension/src/background.js && node --check extension/src/content.js && node --check extension/src/popup.js && node --check extension/src/dashboard.js && node --check extension/tests/fixtures/reader/server.cjs && node --check extension/tests/e2e/edge_fixture_e2e.cjs && node --check extension/tests/e2e/edge_live_reader_e2e.cjs",
     "fixture:reader": "node extension/tests/fixtures/reader/server.cjs",
     "test:e2e:edge-fixture": "node extension/tests/e2e/edge_fixture_e2e.cjs",
+    "test:e2e:edge-settings": "node extension/tests/e2e/edge_fixture_e2e.cjs --settings-matrix",
     "test:e2e:edge-live-reader": "node extension/tests/e2e/edge_live_reader_e2e.cjs",
     "test:extension": "node --test extension/tests/*.test.cjs",
     "test": "npm run check:js && npm run test:extension"
