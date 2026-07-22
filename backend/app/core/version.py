@@ -1,3 +1,3 @@
 """Backend pipeline compatibility identity."""
 
-PIPELINE_VERSION = "3"
+PIPELINE_VERSION = "4"

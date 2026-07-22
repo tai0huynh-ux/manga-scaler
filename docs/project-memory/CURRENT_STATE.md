@@ -2,8 +2,8 @@
 
 ## Baseline
 
-- Verified date: 2026-07-21, Asia/Bangkok.
-- Current green feature checkpoint: the Processing Monitor detail pane can collapse without losing selection or diagnostics, alongside resize-safe output sizing, strength-controlled neural blending, stale-backend rejection, byte-preserving PNG caching, source-oriented screen presets, bounded high-DPI automatic sizing, page-load ahead draining, canonical duplicate suppression, and early responsive slice activation. The prior Dashboard checkpoint was committed and pushed as `63fe9449b884e7aad71f9c85706530db51dec749`; this change set is verified locally and awaits the mandatory repository auto-sync.
+- Verified date: 2026-07-22, Asia/Bangkok.
+- Current green feature checkpoint: pipeline v4 makes `0-10%` a model-free fast path and scales neural compute, contribution, and finishing from `15-100%`, while preserving exact output geometry, whole-page ahead draining, canonical duplicate suppression, responsive slicing, stale-runtime rejection, and the collapsible Processing Monitor. The starting committed baseline is `6d4c1b50cc6ba0cd2b6c6c702f042932547b33f0`; this verified change set awaits the mandatory repository auto-sync.
 - Branch: `main`; backend restart/cancellation integration commit: `edd461eecafd2807335f70f08f6b607a856c9ce4`.
 - Green live-reader/geometry baseline before Monitor integration: `9ada89648003c3d5aa1bbeacc6948290aa49fac0`.
 - Starting committed baseline for the protected-read lifecycle checkpoint: `83c0c2e`.
@@ -13,13 +13,13 @@
 
 ## Verified quality gate
 
-Full `scripts/verify.ps1` result on the page-load ahead and early-slice-activation change set:
+Full `scripts/verify.ps1` result on the pipeline-v4 strength-compute change set:
 
-- Backend: 60 tests passed, including resize-safe output geometry, O(1) health cache accounting, HTTP cancellation/lifespan restart, and queue-capacity shutdown races.
-- Extension: 211 tests passed, including the accessible Processing Monitor detail toggle, source-oriented screen sizing, bounded high-DPI automatic sizing, `window.load` one-shot wiring, canonical duplicate-source ownership, bounded snapshot draining, fallback/slice ahead settlement, decoded PNG/JPEG/WebP/GIF geometry promotion, responsive render sizing, early slice activation, coalesced monitor persistence, bounded scroll work, and geometry regressions.
+- Backend: 69 tests passed, including model-free 5% routing, monotonic and hard-capped neural input compute, exact-size neural composition, aggressive 100% finishing, fast WebP encoding, O(1) health cache accounting, and queue/lifecycle races.
+- Extension: 216 tests passed, including exact slider payload persistence, pipeline-v4 rejection, cache isolation, Processing Monitor interactions, whole-page ahead behavior, canonical duplicate ownership, responsive slicing, protected reads, and operation identity.
 - JavaScript syntax checks passed.
 - Ruff passed.
-- Total backend coverage: 73%, above the 45% gate; `inference_queue.py` is at 92%.
+- Total backend coverage: 77%, above the 45% gate; `inference_queue.py` is at 92%.
 - Real Edge unpacked-extension E2E passed with the DirectML backend: `768x32768` rendered through 55/55 ready slices, `2048x1200` rendered through two responsive 50% tiles inside a 735 px wrapper, browser exceptions were zero, and queue/rules/lifecycle state settled.
 
 Git integrity recovery also passed `git fsck --full` after injected `desktop.ini` files were moved to a recoverable external backup. Git reported one dangling blob but no corruption.
@@ -45,8 +45,8 @@ Git integrity recovery also passed `git fsck --full` after injected `desktop.ini
 - Bounded retries, deferred work, cancellation, tab-generation cleanup, and statistics.
 - FastAPI health, upscale, cancel, model status/switch/reload, comparison, and text endpoints.
 - Auto manga/artwork/photo classification.
-- Resize-only Lanczos/Pillow output for targets at or below `1.5x`, avoiding destructive neural undersampling while preserving post-processing, cache, quality, cancellation, and renderer contracts.
-- Source-oriented screen presets plus bounded automatic DPR/detail sizing; extension cache namespace `pipeline:v3-strength-blend` excludes malformed pre-fix results.
+- Model-free Lanczos/Pillow output at `0-10%`, including minimum-effort WebP encoding, exact aspect-safe geometry, truthful zero-GPU reporting, and no model resolution for any preset.
+- Strength-scaled neural input detail from `15-100%`, bounded to `500,000` pixels, composed back to the exact Lanczos target with nonlinear blending and progressively aggressive finishing. Extension cache namespace `pipeline:v4-strength-compute` excludes weak v3 results.
 - ONNX model download/checksum/load/warmup/hot reload and provider fallback.
 - Tiled inference, post-enhancement, WebP output, original cache, and quality metrics.
 - Conservative text cleanup, optional Tesseract OCR, online translation, rendering, and local translation memory.
@@ -126,9 +126,16 @@ Update this file whenever a completed change alters the verified baseline, capab
 - Collapsing hides only the detail aside, expands the jobs table to the full monitor width, and preserves the selected job, timeline, and sanitized diagnostics for immediate restoration.
 - Focused Dashboard regression passed `5/5`; fast verification passed `60` backend and `211` extension tests. A clean Edge E2E rerun clicked both states, preserved detail content, reported zero browser exceptions, rendered `55/55` tall slices and two responsive wide tiles, and settled queue, Referer, worker, navigation, and reload state.
 
-## Latest strength and stale-runtime delta (2026-07-21)
+## Previous strength and stale-runtime delta (2026-07-21)
 
 - `/health` now exposes `pipelineVersion=3`; the extension and Native Messaging launcher require it and use the dedicated `127.0.0.1:8766` endpoint, so the pre-fix `8765` process is not accepted.
 - Neural requests build a same-size Lanczos baseline and blend by `enhanceLevel`; `0%`, `5%`, and `100%` behavior is covered by unit tests. Browser-owned PNG originals reuse submitted bytes and output cache identities use `pipeline:v3-strength-blend`.
 - Schema-4 settings migration restores whole-page ahead processing for old persisted settings, defaults to three active ahead owners, preserves later explicit disables, and keeps the existing one-shot snapshot/canonical duplicate contract.
 - Fast verification passed `64` backend tests, `214` extension tests, JavaScript checks, Ruff, and coverage gates. The reproduced `800x1741 -> 884x1920` API benchmark returned `lanczos`/`Pillow`, zero GPU time, `882x1920`, `3.28 ms` input-cache work, and `354.21 ms` total latency. Edge fixture E2E passed with `55/55` tall slices, two wide tiles, zero browser exceptions, and settled queues; one earlier run hit the fixture's known worker-stop timing race.
+
+## Latest strength-compute delta (2026-07-22)
+
+- Root cause: pipeline v3 replaced neural finishing with a linear blend; `100%` returned raw neural output, while targets at or below `1.5x` never used the model, making Strength weak outside 4K.
+- Pipeline v4 makes `0-10%` strictly model-free and uses WebP method `0`. From `15%`, neural input area grows monotonically with Strength up to a `500,000` pixel cap, the model result is resized to the exact Lanczos target, and nonlinear composition receives progressively stronger finishing.
+- Direct reproduced benchmarks at `800x1741 -> 882x1920`: `5%` used `lanczos`/`Pillow`, zero GPU, and about `197 ms` total; `100%` used `anime_x4`/DirectML, about `1.39 s` GPU and `2.60 s` total, with `1.405x` measured sharpness gain and intentionally visible distortion.
+- Full verification passed `69` backend tests, `216` extension tests, JavaScript checks, Ruff, and `77%` coverage. Edge fixture E2E passed with zero browser exceptions, `55/55` tall slices, two responsive wide tiles, one offscreen ahead commit at `scrollY=0`, and settled queue/rules/worker/navigation/reload state.

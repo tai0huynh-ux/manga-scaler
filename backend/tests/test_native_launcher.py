@@ -33,4 +33,4 @@ def test_launcher_rejects_http_healthy_backend_with_stale_pipeline(monkeypatch) 
 
     assert launcher.healthy() is False
     assert launcher.BACKEND_PORT == 8766
-    assert launcher.REQUIRED_PIPELINE_VERSION == "3"
+    assert launcher.REQUIRED_PIPELINE_VERSION == "4"

@@ -73,7 +73,7 @@ Full verification runs:
 - Dashboard stable keyed rows, safe preview policy, and accessible detail-pane collapse/restore behavior verified through DOM regression and real Edge click interaction.
 - Processing Monitor transition safety, DOM-commit completion guard, structured 422 normalization, URL/token redaction, image-data exclusion, and indeterminate progress.
 - Source-oriented screen presets, bounded high-DPI automatic output sizing, resize-safe cache versioning, and aspect-preserving Lanczos output for targets at or below `1.5x`.
-- Pipeline compatibility health, stale-backend rejection, schema-4 ahead migration, strength-controlled neural blending, browser-owned PNG byte reuse, portrait HD/FHD/2K resize-safe routing, and the active `8766` endpoint.
+- Pipeline-v4 compatibility health, stale-backend rejection, schema-4 ahead migration, exact 5%/100% slider payloads, model-free fast routing, monotonic strength-controlled neural compute, exact output geometry, aggressive maximum finishing, browser-owned PNG byte reuse, and the active `8766` endpoint.
 
 ## Manual gaps
 

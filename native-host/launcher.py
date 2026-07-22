@@ -12,7 +12,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND_PORT = 8766
 BACKEND_URL = f"http://127.0.0.1:{BACKEND_PORT}/health"
-REQUIRED_PIPELINE_VERSION = "3"
+REQUIRED_PIPELINE_VERSION = "4"
 
 
 def read_message() -> dict:

@@ -20,8 +20,9 @@
 - **Segment insertion caused visible reading churn and delayed the main replacement:** resolved by registering segments in a hidden responsive wrapper, activating once before enhanced results arrive, and replacing exact raw nodes progressively with group rollback on failure.
 - **The initial ahead pass stopped after its first batch:** resolved by taking one `window.load` snapshot and draining every unique source through the bounded active-owner limit.
 - **Identical source URLs at different DOM sizes could enqueue duplicate work:** resolved with page-lifetime canonical source ownership and duplicate-node suppression.
-- **Screen presets fed severely downsampled manga into the anime model and corrupted text at 5% strength:** resolved by source-oriented presets, bounded automatic sizing, a Lanczos/Pillow path for targets up to `1.5x`, and a cache-identity bump that excludes stale malformed results.
-- **An older backend could report HTTP 200 while serving the pre-fix image pipeline:** resolved with health `pipelineVersion=3`, a dedicated `8766` endpoint, and strict extension/Native Messaging compatibility checks.
+- **Screen presets fed severely downsampled manga into the anime model and corrupted text at 5% strength:** resolved by source-oriented presets, bounded automatic sizing, and a strict model-free `0-10%` path.
+- **Enhancement Strength became weak after the v3 blending change:** resolved by restoring neural finishing, making neural compute and blend weight increase with strength, allowing non-4K neural work from `15%`, and making `100%` intentionally aggressive.
+- **An older backend could report HTTP 200 while serving the pre-fix image pipeline:** resolved with health `pipelineVersion=4`, a dedicated `8766` endpoint, strict extension/Native Messaging compatibility checks, and the `pipeline:v4-strength-compute` cache namespace.
 - **Whole-page ahead processing could be silently disabled by persisted pre-v3 settings:** resolved with an idempotent schema-4 migration that restores the one-shot page-load default while preserving later explicit user choices.
 
 ## Remaining limitations

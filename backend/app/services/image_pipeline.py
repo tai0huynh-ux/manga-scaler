@@ -13,6 +13,9 @@ from app.core.config import EncodingConfig, EnhancementConfig
 from app.core.tracing import duration_ms, emit_trace_event
 from app.services.model_manager import LoadedModel
 
+FAST_ENHANCE_LEVEL = 0.10
+MAX_NEURAL_INPUT_PIXELS = 500_000
+
 
 @dataclass(frozen=True)
 class EncodedImage:
@@ -44,9 +47,11 @@ class ImagePipeline:
         """Decode image bytes and convert to RGB."""
         return await asyncio.to_thread(self._decode_sync, image_bytes)
 
-    async def encode_webp(self, image: Image.Image, quality: int | None = None) -> bytes:
+    async def encode_webp(
+        self, image: Image.Image, quality: int | None = None, *, fast: bool = False
+    ) -> bytes:
         """Encode an RGB image to WebP bytes."""
-        return await asyncio.to_thread(self._encode_webp_sync, image, quality)
+        return await asyncio.to_thread(self._encode_webp_sync, image, quality, fast)
 
     async def encode_png(self, image: Image.Image) -> bytes:
         """Encode a lossless verification copy of the browser input."""
@@ -64,7 +69,7 @@ class ImagePipeline:
     async def blend_neural_result(
         self, baseline: Image.Image, neural: Image.Image, strength: float
     ) -> Image.Image:
-        """Blend geometry-preserving resize output with neural reconstruction."""
+        """Compose neural detail at the exact requested size, then finish by strength."""
         return await asyncio.to_thread(self._blend_neural_result_sync, baseline, neural, strength)
 
     def _blend_neural_result_sync(
@@ -72,12 +77,66 @@ class ImagePipeline:
     ) -> Image.Image:
         level = min(max(float(strength), 0.0), 1.0)
         if baseline.size != neural.size:
-            baseline = baseline.resize(neural.size, Image.Resampling.LANCZOS)
+            neural = neural.resize(baseline.size, Image.Resampling.LANCZOS)
         if level <= 0:
             return baseline
-        if level >= 1:
-            return neural
-        return Image.blend(baseline, neural, level)
+        neural_weight = self._neural_blend_weight(level)
+        composed = neural if neural_weight >= 1 else Image.blend(baseline, neural, neural_weight)
+        return self._enhance_sync(composed, level)
+
+    @staticmethod
+    def _neural_blend_weight(level: float) -> float:
+        """Give the useful part of the slider more visible response than a linear blend."""
+        if level <= FAST_ENHANCE_LEVEL:
+            return 0.0
+        progress = (level - FAST_ENHANCE_LEVEL) / (1.0 - FAST_ENHANCE_LEVEL)
+        return min(max(progress, 0.0), 1.0) ** 0.65
+
+    async def prepare_neural_input(
+        self,
+        image: Image.Image,
+        baseline: Image.Image,
+        model_scale: int,
+        strength: float,
+    ) -> Image.Image:
+        """Increase neural source detail with strength while bounding peak memory."""
+        return await asyncio.to_thread(
+            self._prepare_neural_input_sync, image, baseline, model_scale, strength
+        )
+
+    def _prepare_neural_input_sync(
+        self,
+        image: Image.Image,
+        baseline: Image.Image,
+        model_scale: int,
+        strength: float,
+    ) -> Image.Image:
+        scale = max(int(model_scale), 1)
+        level = min(max(float(strength), FAST_ENHANCE_LEVEL), 1.0)
+        minimum_ratio = min(
+            1.0,
+            max(1, baseline.width // scale) / image.width,
+            max(1, baseline.height // scale) / image.height,
+        )
+        safe_model_dimension = max(1, self.encoding.max_output_dimension // scale)
+        pixel_ratio = (MAX_NEURAL_INPUT_PIXELS / max(image.width * image.height, 1)) ** 0.5
+        maximum_ratio = min(
+            1.0,
+            safe_model_dimension / image.width,
+            safe_model_dimension / image.height,
+            pixel_ratio,
+        )
+        minimum_ratio = min(minimum_ratio, maximum_ratio)
+        progress = (level - FAST_ENHANCE_LEVEL) / (1.0 - FAST_ENHANCE_LEVEL)
+        compute_progress = min(max(progress, 0.0), 1.0) ** 1.8
+        target_ratio = minimum_ratio + ((maximum_ratio - minimum_ratio) * compute_progress)
+        target_size = (
+            max(1, min(image.width, int(image.width * target_ratio))),
+            max(1, min(image.height, int(image.height * target_ratio))),
+        )
+        if target_size == image.size:
+            return image
+        return image.resize(target_size, Image.Resampling.LANCZOS)
 
     async def fit_for_model_scale(
         self, image: Image.Image, scale: int, max_output_width: int | None = None, max_output_height: int | None = None
@@ -124,22 +183,29 @@ class ImagePipeline:
         return image.resize(target_size, Image.Resampling.LANCZOS)
 
     def _enhance_sync(self, image: Image.Image, level: float) -> Image.Image:
-        level = min(max(level, 0.0), 1.0)
+        level = min(max(float(level), 0.0), 1.0)
         if level == 0:
             return image
         result = image
-        sharpness = 1 + (self.enhancement.sharpness - 1) * level
-        contrast = 1 + (self.enhancement.contrast - 1) * level
+        high_strength = min(max((level - 0.55) / 0.45, 0.0), 1.0)
+        denoise_mix = self.enhancement.denoise * (level ** 2)
+        if denoise_mix >= 0.06:
+            result = Image.blend(result, result.filter(ImageFilter.MedianFilter(size=3)), denoise_mix)
+        sharpness = 1 + (self.enhancement.sharpness - 1) * level + (1.8 * high_strength ** 2)
+        contrast = 1 + (self.enhancement.contrast - 1) * level + (0.22 * high_strength ** 2)
         color = 1 + (self.enhancement.color - 1) * level
-        if abs(sharpness - 1) >= 0.01:
-            result = ImageEnhance.Sharpness(result).enhance(sharpness)
         if abs(contrast - 1) >= 0.01:
             result = ImageEnhance.Contrast(result).enhance(contrast)
         if abs(color - 1) >= 0.01:
             result = ImageEnhance.Color(result).enhance(color)
-        denoise_mix = self.enhancement.denoise * level
-        if denoise_mix >= 0.04:
-            result = Image.blend(result, result.filter(ImageFilter.MedianFilter(size=3)), denoise_mix)
+        if abs(sharpness - 1) >= 0.01:
+            result = ImageEnhance.Sharpness(result).enhance(sharpness)
+        if level > FAST_ENHANCE_LEVEL:
+            result = result.filter(ImageFilter.UnsharpMask(
+                radius=0.6 + (1.4 * level),
+                percent=round(20 + (180 * level ** 2) + (220 * high_strength ** 2)),
+                threshold=max(0, round(4 * (1 - level))),
+            ))
         return result
 
     async def infer_tiled(
@@ -174,7 +240,9 @@ class ImagePipeline:
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Browser-supplied data is not a supported image.") from exc
 
-    def _encode_webp_sync(self, image: Image.Image, quality: int | None = None) -> bytes:
+    def _encode_webp_sync(
+        self, image: Image.Image, quality: int | None = None, fast: bool = False
+    ) -> bytes:
         """Encode an image using configured WebP settings."""
         output = io.BytesIO()
         image.save(
@@ -182,7 +250,7 @@ class ImagePipeline:
             format=self.encoding.format,
             quality=quality if quality is not None else self.encoding.quality,
             lossless=self.encoding.lossless,
-            method=self.encoding.method,
+            method=0 if fast else self.encoding.method,
         )
         return output.getvalue()
 

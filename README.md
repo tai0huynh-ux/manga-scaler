@@ -89,7 +89,7 @@ Compatible models use float32 RGB NCHW input and output. Configured filenames ar
 
 `anime_x4` and `general_x4` are configured for automatic download on first use. Downloads are written atomically and accepted only when their SHA-256 matches `config.json`. `anime_x2` remains an optional local slot.
 
-Control overall AI contribution per request with `enhanceLevel` from `0.0` to `1.0`. For neural jobs, `0` keeps the geometry-preserving Lanczos baseline, `0.05` blends only 5% neural reconstruction, and `1` uses the full neural result. Resize-only HD/FHD/2K jobs remain text-safe and use only bounded post-processing:
+Control total enhancement work with `enhanceLevel` from `0.0` to `1.0`. Values from `0.0` through `0.10` use the model-free Lanczos path and fast WebP encoding. Values from `0.15` through `1.0` use neural reconstruction for every output preset; higher values increase neural input detail, blend weight, sharpening, and contrast. `1.0` is intentionally extreme and may introduce halos or visible distortion:
 
 ```json
 {
@@ -100,7 +100,7 @@ Control overall AI contribution per request with `enhanceLevel` from `0.0` to `1
 }
 ```
 
-For manga line art, start around `0.2–0.4`. Higher sharpness can make screentones and JPEG artifacts harsher; increase `denoise` cautiously when the source is compressed.
+For manga line art, start around `0.2-0.4`. Use `0.05` when scrolling speed matters most. Values near `1.0` deliberately favor a dramatic result over fidelity.
 
 ## Configuration
 
@@ -185,7 +185,7 @@ npm.cmd run fixture:reader
 npm.cmd run test:e2e:edge-fixture
 ```
 
-The E2E command requires the backend to be online at `127.0.0.1:8766` with pipeline version `3` and a compatible model. It launches an isolated temporary Edge/Chrome profile, loads the unpacked extension, upscales synthetic PNG images through the real backend, and verifies replacement plus queue settlement. It does not use copyrighted fixtures or live websites.
+The E2E command requires the backend to be online at `127.0.0.1:8766` with pipeline version `4` and a compatible model. It launches an isolated temporary Edge/Chrome profile, loads the unpacked extension, upscales synthetic PNG images through the real backend, and verifies replacement plus queue settlement. It does not use copyrighted fixtures or live websites.
 
 ## Automatic backend startup
 

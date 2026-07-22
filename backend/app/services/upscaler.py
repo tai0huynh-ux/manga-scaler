@@ -12,7 +12,12 @@ from app.models.schemas import UpscaleResponse
 from app.services.cache import ImageCache
 from app.services.downloader import ImageDownloader
 from app.services.image_classifier import ClassificationResult, ImageTypeClassifier
-from app.services.image_pipeline import EncodedImage, ImagePipeline, InferenceImage
+from app.services.image_pipeline import (
+    FAST_ENHANCE_LEVEL,
+    EncodedImage,
+    ImagePipeline,
+    InferenceImage,
+)
 from app.services.inference_queue import InferenceJob, InferenceQueue
 from app.services.model_manager import ModelManager
 from app.services.quality import QualityAnalyzer
@@ -21,17 +26,9 @@ from app.services.text_processor import TextProcessingOptions, TextProcessor
 from app.utils.hashing import sha256_bytes
 
 LOGGER = logging.getLogger(__name__)
-RESIZE_ONLY_MAX_SCALE = 1.5
-
-
-def is_resize_only_output(
-    pipeline: ImagePipeline,
-    image,
-    max_output_width: int | None,
-    max_output_height: int | None,
-) -> bool:
-    """Return whether output bounds are safer and faster with direct Lanczos resizing."""
-    return pipeline.output_scale_for_bounds(image, max_output_width, max_output_height) <= RESIZE_ONLY_MAX_SCALE
+def is_resize_only_output(enhance_level: float) -> bool:
+    """Keep 0-10% model-free; higher strengths deliberately use neural detail."""
+    return min(max(float(enhance_level), 0.0), 1.0) <= FAST_ENHANCE_LEVEL
 
 
 class UpscalerService:
@@ -192,12 +189,11 @@ class UpscalerService:
 
             classification = self._resolve_mode(job.mode, image)
             profile = self.settings.modes[classification.mode]
+            enhance_level = profile.enhance_level if job.enhance_level is None else job.enhance_level
             output_scale = self.pipeline.output_scale_for_bounds(
                 image, job.max_output_width, job.max_output_height
             )
-            resize_only = is_resize_only_output(
-                self.pipeline, image, job.max_output_width, job.max_output_height
-            )
+            resize_only = is_resize_only_output(enhance_level)
             model_started = time.perf_counter()
             model = (
                 SimpleNamespace(name="lanczos", provider="Pillow", scale=1, fixed_tile_size=None)
@@ -224,20 +220,16 @@ class UpscalerService:
                     "requested_output_scale": round(output_scale, 3),
                 },
             )
-            inference_image = await (
-                self.pipeline.resize_for_output(image, job.max_output_width, job.max_output_height)
-                if resize_only
-                else self.pipeline.fit_for_model_scale(
-                    image, model.scale, job.max_output_width, job.max_output_height
-                )
-            )
-            neural_baseline = None if resize_only else await self.pipeline.resize_for_output(
+            output_baseline = await self.pipeline.resize_for_output(
                 image, job.max_output_width, job.max_output_height
             )
+            inference_image = output_baseline if resize_only else await self.pipeline.prepare_neural_input(
+                image, output_baseline, model.scale, enhance_level
+            )
+            neural_baseline = None if resize_only else output_baseline
             requested_tile_size = None if resize_only else self._resolve_tile_size(job.tile_size)
             tile_size = None if resize_only else (model.fixed_tile_size or requested_tile_size)
             overlap = 0 if resize_only else min(self.settings.inference.tile_overlap, max(tile_size // 8, 1))
-            enhance_level = profile.enhance_level if job.enhance_level is None else job.enhance_level
             enhancement_key = round(enhance_level, 3)
             output_quality = job.output_quality or self.settings.encoding.quality
             output_width = job.max_output_width or self.settings.encoding.max_output_dimension
@@ -366,6 +358,8 @@ class UpscalerService:
                     "tile_size": tile_size,
                     "overlap": overlap,
                     "requested_output_scale": round(output_scale, 3),
+                    "neural_input_width": None if resize_only else inference_image.width,
+                    "neural_input_height": None if resize_only else inference_image.height,
                 },
             )
             if resize_only:
@@ -408,7 +402,9 @@ class UpscalerService:
             timings.set("enhance", enhance_started)
 
             encode_started = time.perf_counter()
-            encoded = await self.pipeline.encode_webp(enhanced_image, output_quality)
+            encoded = await self.pipeline.encode_webp(
+                enhanced_image, output_quality, fast=resize_only
+            )
             self._ensure_active(job)
             timings.set("encode", encode_started)
             emit_trace_event(

@@ -1570,7 +1570,7 @@ class QueueScheduler {
       const textVariant = job.textProcessing?.enabled
         ? `text:${job.textProcessing.cleanup ? "c1" : "c0"}:${job.textProcessing.translate ? "tr1" : "tr0"}:${job.textProcessing.sourceLanguage || "auto"}>${job.textProcessing.targetLanguage || "vi"}`
         : "text:off";
-      const cacheIdentity = `pipeline:v3-strength-blend|${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
+      const cacheIdentity = `pipeline:v4-strength-compute|${contentIdentity}${parentContentIdentity}|${cacheVariant}|${job.mode}|${Number(job.enhanceLevel).toFixed(3)}|${job.maxOutputWidth}x${job.maxOutputHeight}|q${job.outputQuality}|t${job.tileSize}|${textVariant}`;
       const cached = await this.cacheProvider.get(cacheIdentity);
       if (!this.isCurrentJob(job)) {
         return;

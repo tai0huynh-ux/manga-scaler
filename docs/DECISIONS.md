@@ -82,6 +82,8 @@ Dashboard polling uses keyed row reconciliation. Unchanged preview URLs retain t
 
 ## 2026-07-21 - Use deterministic resize below the neural-resolution threshold
 
+Status: Superseded for enhancement routing by the 2026-07-22 strength-compute decision. The source-geometry and bounded automatic-sizing protections remain in force.
+
 Context: Screen and automatic output limits could require an `x4` model to process a source first reduced to roughly one quarter of the requested result. A reproduced `800x1583` manga page became a `136x270` neural input for a `544x1080` result, corrupting dialogue even at 5% post-processing strength.
 
 Decision: When the requested target scale is at or below `1.5x` the decoded source, resize directly with Pillow Lanczos, then apply the configured bounded enhancement and encoding stages. Larger targets retain the configured ONNX model path.
@@ -91,6 +93,8 @@ Reason: Small upscales and downscales do not need neural super-resolution. Avoid
 Consequence: Resize-only responses truthfully report `model=lanczos`, `provider=Pillow`, `scale=1`, and no tile size. Screen auto-orientation follows source geometry, automatic DPR is capped at `1.5`, and the extension cache namespace is versioned to prevent old malformed AI outputs from surviving the fix.
 
 ## 2026-07-21 - Blend neural reconstruction by the user strength control
+
+Status: Superseded by the 2026-07-22 strength-compute decision because blending alone removed the former neural finishing stage and made maximum strength too weak.
 
 Context: A 5% setting previously changed only post-processing after the full neural model had already reconstructed the page, so HD/FHD/2K text could still merge or become malformed.
 
@@ -109,3 +113,13 @@ Decision: Run the active backend on `127.0.0.1:8766`, expose `pipelineVersion=3`
 Reason: HTTP reachability alone cannot prove that the process implements the current image and cache contracts.
 
 Consequence: Old processes are ignored, new cache artifacts cannot collide with pre-fix results, and startup failures become explicit instead of silently routing work to stale code.
+
+## 2026-07-22 - Make strength control compute, composition, and finishing
+
+Context: Pipeline v3 used only a linear Lanczos/neural blend. At `100%` it returned the raw neural image and skipped the sharpen/contrast finishing that previously made 4K visibly better. Targets at or below `1.5x` also never reached the model, so HD/FHD/2K barely responded to the slider.
+
+Decision: `0-10%` is a strict model-free fast path. Starting at `15%`, every preset may use neural inference. Neural input pixels grow monotonically with strength from the minimum required x4 input toward source detail, capped at `500,000` pixels and safe model dimensions. The model result is resized back to the exact Lanczos target, blended on a nonlinear curve, then receives progressively stronger finishing. The fast path uses WebP method `0`; neural paths retain the configured encoding method.
+
+Reason: One control now changes both latency and visible intensity. Five percent remains fast and geometry-safe, normal strengths remain bounded for whole-page use, and the user can deliberately choose a slow, extreme `100%` result.
+
+Consequence: Pipeline/cache compatibility advances to `4` / `pipeline:v4-strength-compute`. On reproduced `800x1741 -> 882x1920` slices, `5%` completed model-free in about `197 ms`, while `100%` used DirectML in about `2.60 s` and visibly produced the requested aggressive, potentially distorted result.

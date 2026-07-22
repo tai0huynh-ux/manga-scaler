@@ -741,7 +741,7 @@ test("enabling the extension performs only one backend health check", async () =
       if (String(url).endsWith("/health")) healthChecks += 1;
       return {
         ok: true,
-        json: async () => ({ status: "ok", pipelineVersion: "3" }),
+        json: async () => ({ status: "ok", pipelineVersion: "4" }),
         arrayBuffer: async () => new ArrayBuffer(0),
       };
     },
@@ -1406,6 +1406,23 @@ test("persisted settings migration is bounded, rejects legacy modes, and is idem
   assert.deepEqual(migratePersistedSettings(migrated), migrated);
 });
 
+test("REQ-NORM preserves exact 5% and 100% strength payloads", () => {
+  const { normalizeUpscaleRequest } = loadBackgroundClasses();
+  const base = {
+    imageUrl: "https://example.com/image.png",
+    imageData: "iVBORw0KGgo=",
+    mode: "manga",
+    outputQuality: 90,
+    maxOutputWidth: 2048,
+    maxOutputHeight: 8192,
+    tileSize: 256,
+    jobId: "strength-payload",
+  };
+
+  assert.equal(normalizeUpscaleRequest({ ...base, enhanceLevel: 0.05 }, {}).enhanceLevel, 0.05);
+  assert.equal(normalizeUpscaleRequest({ ...base, enhanceLevel: 1 }, {}).enhanceLevel, 1);
+});
+
 test("schema 4 migration restores whole-page ahead processing once without overriding later choices", () => {
   const { migratePersistedSettings } = loadBackgroundClasses();
   const upgraded = migratePersistedSettings({
@@ -1432,9 +1449,35 @@ test("schema 4 migration restores whole-page ahead processing once without overr
 test("backend health requires the current image pipeline version", () => {
   const { isCompatibleBackendHealth } = loadBackgroundClasses();
 
-  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "3" }), true);
+  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "4" }), true);
   assert.equal(isCompatibleBackendHealth({ status: "ok" }), false);
-  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "2" }), false);
+  assert.equal(isCompatibleBackendHealth({ status: "ok", pipelineVersion: "3" }), false);
+});
+
+test("enhancement slider settings persist exact normalized endpoints", async () => {
+  const writes = [];
+  const responses = [];
+  const { dispatch } = loadBackgroundMessageHarness({
+    storageSet: async (value) => writes.push(value),
+  });
+
+  assert.equal(dispatch(
+    { type: "SET_ENHANCEMENT", mode: "manga", enhanceLevel: 0.05 },
+    {},
+    (response) => responses.push(response),
+  ), true);
+  assert.equal(dispatch(
+    { type: "SET_ENHANCEMENT", mode: "artwork", enhanceLevel: 1 },
+    {},
+    (response) => responses.push(response),
+  ), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(JSON.stringify(writes), JSON.stringify([
+    { mode: "manga", enhanceLevel: 0.05 },
+    { mode: "artwork", enhanceLevel: 1 },
+  ]));
+  assert.equal(JSON.stringify(responses), JSON.stringify(writes));
 });
 
 test("background retry keeps trace id and increments attempt", async () => {
@@ -2511,7 +2554,7 @@ test("cache identity prefers source fingerprint for different bytes under same u
 
   assert.equal(keys.length, 2);
   assert.notEqual(keys[0], keys[1]);
-  assert.ok(keys[0].startsWith("pipeline:v3-strength-blend|"));
+  assert.ok(keys[0].startsWith("pipeline:v4-strength-compute|"));
   assert.ok(keys[0].includes("sha256-a"));
   assert.ok(keys[1].includes("sha256-b"));
 });

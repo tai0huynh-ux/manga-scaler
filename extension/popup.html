@@ -32,7 +32,7 @@
           <output id="enhanceLevelValue" for="enhanceLevel">35%</output>
         </div>
         <input id="enhanceLevel" type="range" min="0" max="100" step="5" value="35">
-        <small>0% keeps geometry-preserving resize; higher values blend in more AI reconstruction.</small>
+        <small>0-10% is the very fast resize path. From 15%, higher values use more AI detail and processing; 100% is intentionally extreme and may distort.</small>
         <label class="control-label" for="processingTimeout">Maximum seconds per image</label>
         <input id="processingTimeout" type="number" min="5" max="300" step="5" value="60">
         <label class="control-label" for="sizingMode">Output size mode</label>

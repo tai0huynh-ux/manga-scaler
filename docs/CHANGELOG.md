@@ -3,10 +3,11 @@
 ## Unreleased
 
 - Added an accessible `Hide details` / `Show details` control to Processing Monitor; collapsing the detail pane expands the jobs table while preserving the selected job and timeline for immediate restoration.
-- Added backend pipeline compatibility `3` and moved the active local service to `127.0.0.1:8766`; stale HTTP-healthy processes on the old port are no longer accepted by the extension or Native Messaging launcher.
-- Changed enhancement strength to control neural contribution: `0%` is geometry-preserving Lanczos, low values blend only a small AI contribution, and `100%` uses the full neural result. Browser-owned PNG originals are cached byte-for-byte, and the output cache namespace is `pipeline:v3-strength-blend`.
+- Added backend pipeline compatibility `4` on `127.0.0.1:8766`; the extension and Native Messaging launcher reject stale strength pipelines even when they return HTTP 200.
+- Fixed Enhancement Strength becoming nearly ineffective after neural blending: `0-10%` is now a model-free Lanczos path with minimum-effort WebP encoding, while `15-100%` progressively increases neural input compute, nonlinear contribution, and finishing strength. Neural output is resized to the exact requested geometry before composition, and `100%` is intentionally aggressive enough to distort.
+- Versioned extension output caching as `pipeline:v4-strength-compute`, so weak v3 results cannot replace current images.
 - Restored one whole-page `window.load` ahead snapshot for migrated settings, with safe defaults of three ahead owners and canonical duplicate suppression; later dynamic images still promote only through viewport/prefetch observers.
-- Fixed screen/automatic sizing corrupting manga text by avoiding neural inference when the requested target is at or below `1.5x` the source; these jobs now use a truthful Lanczos/Pillow resize path, keep aspect ratio, and report zero GPU time.
+- Fixed screen/automatic sizing corrupting manga text by reserving the model-free path for explicit `0-10%` strength and bounding strength-aware neural inputs instead of destructively reducing every source to one quarter of the result.
 - Changed screen-preset automatic orientation to follow source-image geometry instead of the desktop monitor, bounded automatic DPR at `1.5`, reduced the detail multiplier to `1.15`, and versioned the extension cache identity so malformed legacy results are not reused.
 - Fixed extreme manga pages becoming narrow or malformed by promoting source-verified tall/wide images into slicing and preserving responsive aspect ratio during Blob rendering.
 - Changed slice preprocessing to yield between segments and render percentage geometry in a contained wrapper; the original page stays visible until raw slices and all segment jobs register, then the wrapper activates once and enhanced results replace exact raw nodes progressively.

@@ -47,7 +47,7 @@ class UpscaleRequest(BaseModel):
         alias="enhanceLevel",
         ge=0.0,
         le=1.0,
-        description="Overall strength: neural contribution for AI output, or bounded post-processing for resize-only output.",
+        description="0-10% uses the fast resize path; 15-100% increases neural compute, contribution, and finishing intensity.",
     )
     max_output_width: int | None = Field(default=None, alias="maxOutputWidth", ge=256, le=16383)
     max_output_height: int | None = Field(default=None, alias="maxOutputHeight", ge=256, le=16383)

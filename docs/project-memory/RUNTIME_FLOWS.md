@@ -121,12 +121,12 @@ Removing only the hidden parent DOM node must preserve an already committed slic
   -> optional text processing
   -> auto/manual mode resolution
   -> requested output-scale calculation
-  -> target scale <= 1.5: Lanczos/Pillow resize without model loading
-  -> target scale > 1.5: model resolution/download/checksum/session
-  -> neural source fit to output bounds
+  -> strength <= 0.10: Lanczos/Pillow resize without model loading
+  -> strength >= 0.15: model resolution/download/checksum/session
+  -> strength-aware neural source detail bounded by 500,000 input pixels
   -> deterministic output cache key
   -> cache hit OR tiled inference
-  -> resize-only post-processing OR baseline/neural blend by enhanceLevel
+  -> fast bounded finishing OR exact-size nonlinear neural composition plus finishing
   -> grayscale policy
   -> WebP encode and atomic save
   -> quality metrics and response
@@ -134,7 +134,7 @@ Removing only the hidden parent DOM node must preserve an already committed slic
 
 DirectML device-loss signatures may trigger one model reload on the next provider. Other inference errors propagate unchanged.
 
-Resize-only jobs preserve the source aspect ratio and remain distinct in backend and extension cache identities. They still run configured post-processing, grayscale policy, WebP encoding, quality analysis, cancellation checks, and renderer commit. Screen-preset `auto` orientation follows source geometry; automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier to bound high-DPI work. Neural jobs create a same-size Lanczos baseline and blend the model result by `enhanceLevel`; `0` is baseline, low values are low AI contribution, and `1` is full neural output. Browser-owned PNG originals reuse submitted bytes without a second encode.
+Fast jobs preserve source aspect ratio, never resolve an ONNX model, use minimum-effort WebP encoding, and remain distinct in backend and extension cache identities. Screen-preset `auto` orientation follows source geometry; automatic sizing caps DPR at `1.5` and uses a `1.15` detail multiplier. Neural jobs increase input detail with strength, run tiled inference, resize the neural result to the exact Lanczos target, apply a nonlinear blend, and restore progressively stronger sharpening/contrast finishing. Browser-owned PNG originals reuse submitted bytes without a second encode.
 
 ## Trace flow
 

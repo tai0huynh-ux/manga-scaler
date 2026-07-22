@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import io
 import threading
 import time
 from concurrent.futures import CancelledError as FutureCancelledError
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from app.main import app
 from app.models.schemas import UpscaleResponse
 from fastapi.testclient import TestClient
+from PIL import Image
 
 
 def test_health_is_available_without_model_artifacts() -> None:
@@ -22,8 +24,40 @@ def test_health_is_available_without_model_artifacts() -> None:
     assert payload["status"] == "ok"
     assert payload["provider"] in payload["gpu"]["availableProviders"]
     assert payload["model"] == "anime_x4"
-    assert payload["pipelineVersion"] == "3"
+    assert payload["pipelineVersion"] == "4"
     assert {"queue", "cache", "uptime"} <= payload.keys()
+
+
+def test_five_percent_upscale_never_resolves_a_neural_model() -> None:
+    source = Image.new("RGB", (320, 480), color=(37, 91, 143))
+    buffer = io.BytesIO()
+    source.save(buffer, format="PNG")
+
+    with TestClient(app) as client:
+        service = client.app.state.upscaler_service
+        with patch.object(
+            service.model_manager,
+            "get_model",
+            side_effect=AssertionError("5% must not resolve or load an ONNX model"),
+        ):
+            response = client.post(
+                "/upscale",
+                json={
+                    "imageData": base64.b64encode(buffer.getvalue()).decode(),
+                    "mode": "manga",
+                    "enhanceLevel": 0.05,
+                    "maxOutputWidth": 384,
+                    "maxOutputHeight": 576,
+                    "jobId": "fast-five-percent-no-model",
+                },
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model"] == "lanczos"
+    assert payload["provider"] == "Pillow"
+    assert payload["enhanceLevel"] == 0.05
+    assert payload["timings"].get("gpu", 0) == 0
 
 
 def test_health_uses_cached_file_count_without_rescanning_the_cache_directory() -> None:

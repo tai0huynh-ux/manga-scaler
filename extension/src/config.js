@@ -1,7 +1,7 @@
 var AI_MANGA_UPSCALER_CONFIG = Object.freeze({
   backend: {
     baseUrl: "http://127.0.0.1:8766",
-    requiredPipelineVersion: "3",
+    requiredPipelineVersion: "4",
     requestTimeoutMs: 20000,
     defaultProcessingTimeoutSeconds: 60,
   },
